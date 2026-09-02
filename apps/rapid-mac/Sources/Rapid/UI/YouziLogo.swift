@@ -2,8 +2,9 @@ import SwiftUI
 
 /// Youzi's pomelo mark, shared by every prominent product-brand surface.
 ///
-/// The source artwork is copied from `youziold/assets/app-logo-youzi-v1.png`
-/// and bundled as a flat resource in release builds. Keeping one master avoids
+/// The source artwork comes from `youziold/assets/app-logo-youzi-v1.png`. Its
+/// warm canvas is deterministically removed for the bundled transparent PNG;
+/// the mark itself is not redrawn or recoloured. Keeping one master avoids
 /// visual drift between onboarding, chat, About, and snapshot fixtures.
 struct YouziLogo: View {
     var size: CGFloat
@@ -15,7 +16,6 @@ struct YouziLogo: View {
                 .interpolation(.high)
                 .scaledToFit()
                 .frame(width: size, height: size)
-                .clipShape(RoundedRectangle(cornerRadius: size * 0.2, style: .continuous))
                 .accessibilityHidden(true)
         } else {
             Image(systemName: "leaf.fill")

@@ -31,7 +31,7 @@ struct AppBrandingTests {
         #expect(plist["CFBundleIdentifier"] as? String == "com.rapidmlx.rapid")
     }
 
-    @Test("shared Youzi logo is a high-resolution square image")
+    @Test("shared Youzi logo is high-resolution with a transparent canvas")
     func logoAsset() throws {
         let logoURL = try Self.appRoot()
             .appendingPathComponent("Sources/Rapid/Resources/youzi-logo.png")
@@ -40,6 +40,42 @@ struct AppBrandingTests {
 
         #expect(bitmap.pixelsWide == bitmap.pixelsHigh)
         #expect(bitmap.pixelsWide >= 1024)
+        #expect(bitmap.hasAlpha)
+        #expect(bitmap.colorAt(x: 0, y: 0)?.alphaComponent == 0)
+        #expect(bitmap.colorAt(x: bitmap.pixelsWide - 1, y: 0)?.alphaComponent == 0)
+        #expect(bitmap.colorAt(x: 0, y: bitmap.pixelsHigh - 1)?.alphaComponent == 0)
+        #expect(
+            bitmap.colorAt(
+                x: bitmap.pixelsWide - 1,
+                y: bitmap.pixelsHigh - 1
+            )?.alphaComponent == 0
+        )
+        #expect(
+            bitmap.colorAt(
+                x: bitmap.pixelsWide / 2,
+                y: bitmap.pixelsHigh / 2
+            )?.alphaComponent == 1
+        )
+    }
+
+    @Test("responsive Youzi logo assets preserve transparency")
+    func responsiveLogoAssets() throws {
+        let imageSetURL = try Self.appRoot()
+            .appendingPathComponent(
+                "Sources/Rapid/Resources/Assets.xcassets/RapidLogo.imageset"
+            )
+
+        for filename in ["RapidLogo.png", "RapidLogo@2x.png", "RapidLogo@3x.png"] {
+            let image = try #require(
+                NSImage(contentsOf: imageSetURL.appendingPathComponent(filename))
+            )
+            let bitmap = try #require(image.representations.first as? NSBitmapImageRep)
+            #expect(bitmap.hasAlpha, "\(filename) lost its alpha channel")
+            #expect(
+                bitmap.colorAt(x: 0, y: 0)?.alphaComponent == 0,
+                "\(filename) regained an opaque canvas"
+            )
+        }
     }
 
     private enum BrandingTestError: Error {
