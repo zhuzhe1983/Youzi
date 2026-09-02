@@ -9,7 +9,8 @@
 > 原则：截图中直接可见的行为记为“观察”；由界面推测的能力记为“推断”，开发前必须验证。
 
 配套交互资料：[WorkBuddy 化产品架构图](youzi-workbuddy-architecture.html) ·
-[“知我”图谱方案](youzi-know-me-graph-variants.html)
+[“知我”图谱方案](youzi-know-me-graph-variants.html) ·
+[完整改造交付状态](youzi-delivery-status.md)
 
 ## 1. 产品结论
 
