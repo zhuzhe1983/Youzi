@@ -369,7 +369,7 @@ struct RapidApp: App {
     }
 
     var body: some Scene {
-        Window("Rapid-MLX", id: "main") {
+        Window("Youzi", id: "main") {
             ContentView()
                 // Lock the whole app to the Rapid brand amber — the ⚡ energy
                 // hue. Steel-blue (`brand`) is demoted to the info/tool/data
@@ -489,7 +489,7 @@ struct RapidApp: App {
         .commands {
             // Replace the system-default "About" item with our own.
             CommandGroup(replacing: .appInfo) {
-                Button("About Rapid-MLX") {
+                Button("About Youzi") {
                     AboutPanel.show(server: server)
                 }
             }
@@ -922,7 +922,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// un-hide because the SwiftUI ``Window`` scene was destroyed on
     /// close, and the user is left wondering whether the app is
     /// running at all. The only escape is the menu-bar tray's "Open
-    /// Rapid-MLX" item — which assumes the user knows about the tray
+    /// Youzi" item — which assumes the user knows about the tray
     /// icon, breaking the muscle-memory contract every other
     /// Mac app honours (Slack, Linear, Discord, Things all re-show
     /// their main window on Dock click, even when otherwise
@@ -955,7 +955,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Bridge between AppKit (``applicationShouldHandleReopen``, the
-    /// menu-bar tray's "Open Rapid-MLX" item, future URL handlers) and
+    /// menu-bar tray's "Open Youzi" item, future URL handlers) and
     /// SwiftUI's ``@Environment(\.openWindow)``. ``RapidApp`` captures
     /// its ``openWindow`` action on the main scene's first ``.task`` and
     /// writes it here; AppKit-side callers invoke it without owning an

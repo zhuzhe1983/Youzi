@@ -292,7 +292,7 @@ enum FailureDiagnoser {
             message = "DuckDuckGo is rate-limiting web searches from this Mac. Switch to Keenable (no key) or add a free Parallel or Tavily key in Settings → Tools."
             action = .openWebSearchSettings
         case .browsePageTooLarge:
-            message = "This page is too large for Rapid to read at once. Search it or open a smaller page instead."
+            message = "This page is too large for Youzi to read at once. Search it or open a smaller page instead."
             action = nil
         case .commandPermissionDenied:
             // No action, and no "allow that folder, then try again" — this app
@@ -311,7 +311,7 @@ enum FailureDiagnoser {
         case .filePermissionDenied:
             // Same reasoning as ``commandPermissionDenied``: no file tools ship
             // here, so there is no access to grant and nothing to open.
-            message = "Rapid doesn't have access to that file."
+            message = "Youzi doesn't have access to that file."
             action = nil
         case .toolFailed:
             message = "The tool couldn't finish. Check its input, then try again."
@@ -346,7 +346,7 @@ enum FailureDiagnoser {
             message = "The current download source couldn't be reached. Switch source and try again."
             action = .switchDownloadSource
         case .requestFailed:
-            message = "Rapid couldn't finish that request. Try again, or restart the model."
+            message = "Youzi couldn't finish that request. Try again, or restart the model."
             action = .retry
         }
         return FailureDiagnosis(kind: kind, message: message, action: action)

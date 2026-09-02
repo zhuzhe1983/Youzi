@@ -127,7 +127,7 @@ struct AssistantStreamAnnouncerTests {
         // Still empty → no cue.
         #expect(a.firstTokenCue(fullContent: "") == nil)
         // First non-empty content → start cue.
-        #expect(a.firstTokenCue(fullContent: "H") == "Rapid is responding")
+        #expect(a.firstTokenCue(fullContent: "H") == "Youzi is responding")
         // Already fired → silent thereafter.
         #expect(a.firstTokenCue(fullContent: "Hello") == nil)
     }

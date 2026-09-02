@@ -76,7 +76,7 @@ struct LocalizationTests {
             "Settings",
             "Appearance",
             "Privacy",
-            "About Rapid-MLX",
+            "About Youzi",
             "Ready",
             "Downloading",
             "Stopped"

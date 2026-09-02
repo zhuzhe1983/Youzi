@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Rapid-MLX</string>
+	<string>Youzi</string>
 	<key>CFBundleExecutable</key>
 	<string>Rapid</string>
 	<key>CFBundleIconFile</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Rapid-MLX</string>
+	<string>Youzi</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -34,11 +34,11 @@
 	is transcribed by the local sidecar and never leaves the machine.
 	-->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Rapid transcribes what you say into the app you're typing in. Recording happens only while the dictation indicator is visible, and audio is transcribed on this Mac.</string>
+	<string>Youzi transcribes what you say into the app you're typing in. Recording happens only while the dictation indicator is visible, and audio is transcribed on this Mac.</string>
 	<key>NSNetworkVolumesUsageDescription</key>
-	<string>Rapid needs access when you choose a network drive for model storage or approve a file tool there. Click Allow to continue.</string>
+	<string>Youzi needs access when you choose a network drive for model storage or approve a file tool there. Click Allow to continue.</string>
 	<key>NSRemovableVolumesUsageDescription</key>
-	<string>Rapid needs access when you choose a removable drive for model storage or approve a file tool there. Click Allow to continue.</string>
+	<string>Youzi needs access when you choose a removable drive for model storage or approve a file tool there. Click Allow to continue.</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
 	<!--
@@ -55,7 +55,7 @@
 			<key>UTTypeIdentifier</key>
 			<string>com.rapidmlx.rapid.conversation-row</string>
 			<key>UTTypeDescription</key>
-			<string>Rapid-MLX Conversation Row</string>
+			<string>Youzi Conversation Row</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>

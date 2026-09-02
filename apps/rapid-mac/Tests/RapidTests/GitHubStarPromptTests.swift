@@ -41,8 +41,8 @@ struct GitHubStarPromptTests {
         let content = try Self.source("ContentView.swift")
         let snapshot = try Self.source("../DevSnapshot.swift")
 
-        #expect(card.contains("Enjoying Rapid-MLX?"))
-        #expect(card.contains("Rapid-MLX is open source."))
+        #expect(card.contains("Enjoying Youzi?"))
+        #expect(card.contains("Youzi is powered by open-source Rapid-MLX."))
         #expect(card.contains("Text(\"Star on GitHub\")"))
         #expect(!card.contains("Text(\"Open GitHub\")"))
         #expect(card.contains(".frame(width: 360)"))

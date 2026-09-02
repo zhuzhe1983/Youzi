@@ -842,7 +842,7 @@ refresh_main_window_id() {
     MAIN_WINDOW_ID=""
     pb list windows --app "PID:$APP_PID" --json > "$OUT/windows-current.json" 2>/dev/null \
         || return 1
-    MAIN_WINDOW_ID="$(jq -r '(.data.windows // []) | map(select(.title == "Rapid-MLX"))[0].window_id // empty' "$OUT/windows-current.json" 2>/dev/null)"
+    MAIN_WINDOW_ID="$(jq -r '(.data.windows // []) | map(select(.title == "Youzi"))[0].window_id // empty' "$OUT/windows-current.json" 2>/dev/null)"
     [[ -n "$MAIN_WINDOW_ID" ]]
 }
 
@@ -852,7 +852,7 @@ wait_for_window() {
         kill -0 "$APP_PID" 2>/dev/null || die "app exited before opening a window"
         "$AX_DRIVER" dump "$APP_PID" > "$windows" 2>/dev/null || true
         if jq -e '.success == true and .data.windows.complete == true
-                  and any(.data.windows.titles[]?; . == "Rapid-MLX")' \
+                  and any(.data.windows.titles[]?; . == "Youzi")' \
             "$windows" >/dev/null 2>&1; then
             if flow_requires_screen_recording; then
                 if ! refresh_main_window_id; then
@@ -1976,13 +1976,13 @@ flow_fresh_install() {
             die "Direction D mounted production control $hidden behind onboarding"
         fi
     done
-    "$AX_DRIVER" set-window-size "$APP_PID" Rapid-MLX 1400x850 > "$OUT/wide-size.json"
+    "$AX_DRIVER" set-window-size "$APP_PID" Youzi 1400x850 > "$OUT/wide-size.json"
     see_main "$OUT/wide.json"
     baseline onboarding-direction-d.wide "$OUT/wide.json"
-    "$AX_DRIVER" set-window-size "$APP_PID" Rapid-MLX 1000x760 > "$OUT/medium-size.json"
+    "$AX_DRIVER" set-window-size "$APP_PID" Youzi 1000x760 > "$OUT/medium-size.json"
     see_main "$OUT/medium.json"
     baseline onboarding-direction-d.medium "$OUT/medium.json"
-    "$AX_DRIVER" set-window-size "$APP_PID" Rapid-MLX 720x700 > "$OUT/compact-size.json"
+    "$AX_DRIVER" set-window-size "$APP_PID" Youzi 720x700 > "$OUT/compact-size.json"
     see_main "$OUT/compact.json"
     baseline onboarding-direction-d.compact "$OUT/compact.json"
     press "$OUT/compact.json" Quickstart.GetStarted "$OUT/get-started.json"
@@ -2008,7 +2008,7 @@ flow_fresh_install() {
     # Exercise the scene/content contract, not only the constant. Before the
     # fix the declared floor was never applied and AppKit accepted ~616pt.
     # Asking for 500pt must be clamped by the live window to at least 720pt.
-    "$AX_DRIVER" set-window-size "$APP_PID" Rapid-MLX 500x500 \
+    "$AX_DRIVER" set-window-size "$APP_PID" Youzi 500x500 \
         > "$OUT/window-floor.json" \
         || die "the main window rejected a native resize request"
     jq -e '.actual.width >= 720 and .actual.height >= 560' \
@@ -3025,7 +3025,7 @@ flow_window_close_prompt() {
     # AXPress blocks while NSAlert.runModal is active, so issue the native
     # close in the background, observe/answer the sheet from a second driver,
     # then require the original close action to finish successfully.
-    "$AX_DRIVER" close-window "$APP_PID" Rapid-MLX > "$OUT/close-window.json" 2> "$OUT/close-window.err" &
+    "$AX_DRIVER" close-window "$APP_PID" Youzi > "$OUT/close-window.json" 2> "$OUT/close-window.err" &
     local close_pid=$!
     wait_identifier DockHidePrompt.NoButton "$OUT/dock-prompt.json"
     jq -e '.data.ui_elements[]? | select(.identifier == "DockHidePrompt.YesButton")' \
@@ -3040,7 +3040,7 @@ flow_window_close_prompt() {
     local probe=2
     for _ in {1..40}; do
         probe=0
-        ax_window_present Rapid-MLX "$OUT/after-close.json" || probe=$?
+        ax_window_present Youzi "$OUT/after-close.json" || probe=$?
         [[ "$probe" == 1 ]] && break
         sleep 0.25
     done

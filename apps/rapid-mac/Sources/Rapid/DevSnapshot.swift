@@ -431,7 +431,7 @@ enum DevSnapshot {
                      size: CGSize(width: 700, height: 640),
                      appearance: .darkAqua, to: "\(dir)/images-dark.png")
 
-        // Image-edit mode at regular and narrow widths. Use the bundled mascot
+        // Image-edit mode at regular and narrow widths. Use the bundled logo
         // as a deterministic source image; this exercises the stage actions,
         // source strip, edit-capable picker, and wrapped composer without weights.
         imageGen.imageModels = [
@@ -442,12 +442,12 @@ enum DevSnapshot {
             ),
         ]
         imageGen.selectedAlias = "flux2-klein-4b"
-        if let mascot = CheetahLogo.load(forSize: 120),
-           let tiff = mascot.tiffRepresentation,
+        if let logo = YouziLogo.load(),
+           let tiff = logo.tiffRepresentation,
            let rep = NSBitmapImageRep(data: tiff),
            let png = rep.representation(using: .png, properties: [:]) {
             imageGen.beginEdit(GeneratedImage(
-                pngData: png, prompt: "Cheetah", isEdit: false
+                pngData: png, prompt: "Pomelo logo", isEdit: false
             ))
             imageGen.prompt = "Change the background to a bright photo studio"
             renderHosted(imagesView(width: 700, height: 640),
@@ -998,7 +998,7 @@ enum DevSnapshot {
                 things. Here's a quick example:
 
                 ```swift
-                let greeting = "Hello from Rapid-MLX"
+                let greeting = "Hello from Youzi"
                 print(greeting)
                 ```
 
@@ -1530,8 +1530,8 @@ enum DevSnapshot {
 /// the menu bar will: black on a light bar, white on a dark bar, and
 /// white on the selection fill while the menu is open.
 private struct MenuBarMarkProofSheet: View {
-    private var mark: Image? {
-        RapidRMark.menuBarTemplateImage().map { Image(nsImage: $0) }
+    private var mark: Image {
+        Image(nsImage: MenuBarController.trayGlyph())
     }
 
     var body: some View {
@@ -1549,14 +1549,12 @@ private struct MenuBarMarkProofSheet: View {
                 .font(RapidFont.caption)
                 .foregroundStyle(ink.opacity(0.6))
             Spacer()
-            if let mark {
-                // `.template` + `foregroundStyle` is what AppKit does to a
-                // template image; rendering it any other way would be
-                // testing something the app never does.
-                mark
-                    .renderingMode(.template)
-                    .foregroundStyle(ink)
-            }
+            // `.template` + `foregroundStyle` is what AppKit does to a
+            // template image; rendering it any other way would be
+            // testing something the app never does.
+            mark
+                .renderingMode(.template)
+                .foregroundStyle(ink)
         }
         .padding(.horizontal, RapidTheme.Space.lg)
         .frame(height: 50)

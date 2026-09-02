@@ -474,7 +474,7 @@ enum ModelReadiness: Equatable {
     var detail: String? {
         switch self {
         case .engineMissing:
-            return "Rapid-MLX can't find its engine. Reopen the app to run setup again."
+            return "Youzi can't find its engine. Reopen the app to run setup again."
         case .noModel:
             // Points at the picker rather than duplicating it as a button.
             return "Choose a model in the box below to get started."
@@ -526,7 +526,7 @@ enum ModelReadiness: Equatable {
     var sendTooltip: String {
         switch self {
         case .engineMissing:
-            return "Rapid-MLX can't find its engine yet."
+            return "Youzi can't find its engine yet."
         case .noModel:
             return "Choose a model before sending."
         case .needsDownload(let a, _):

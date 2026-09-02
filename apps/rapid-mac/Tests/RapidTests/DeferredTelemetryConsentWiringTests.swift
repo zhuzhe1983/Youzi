@@ -100,7 +100,7 @@ struct DeferredTelemetryConsentWiringTests {
     func bannerInteractionContract() throws {
         let banner = try Self.source("Sources/Rapid/UI/TelemetryConsentView.swift")
 
-        #expect(banner.contains("Help improve Rapid by sharing anonymous usage data?"))
+        #expect(banner.contains("Help improve Youzi by sharing anonymous usage data?"))
         #expect(banner.contains("Change this anytime in Settings → Privacy."))
         for identifier in ["Banner", "Share", "Decline", "Close"] {
             #expect(banner.contains("TelemetryConsent.PostValue\(identifier == "Banner" ? "" : ".")\(identifier)"))

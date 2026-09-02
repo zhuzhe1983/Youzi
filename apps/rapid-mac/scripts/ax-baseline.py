@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Structural AX baselines for the Rapid-MLX Desktop golden flows.
+"""Structural AX baselines for the Youzi desktop golden flows.
 
 ``rapid-ax dump`` serialises the whole accessibility tree of the running app.
 The golden flows already collect those dumps; this tool turns one into a
@@ -506,7 +506,7 @@ def quote(text: str) -> str:
 # the pill exists, is a button, carries this identifier, is enabled. Its
 # three-state wording is covered by DesktopVersionPillTests.
 _UPDATE_VERDICT_IDS = frozenset({"Footer.DesktopVersionPill"})
-_UPDATE_VERDICT_TEXT = "Rapid-MLX <version> <update-state>"
+_UPDATE_VERDICT_TEXT = "Youzi <version> <update-state>"
 
 
 def render_node(node: Node, extra_tokens: tuple[str, ...]) -> str:

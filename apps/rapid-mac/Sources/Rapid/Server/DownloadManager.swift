@@ -978,7 +978,7 @@ final class DownloadManager {
             if let cached, cachedIsExecutable {
                 return .resolved(cached, changed: false)
             }
-            return .missing(message: "Rapid isn't fully set up. Please restart Rapid-MLX.")
+            return .missing(message: "Youzi isn't fully set up. Please restart Youzi.")
         }
 
         if let resolved = locate() {
@@ -986,9 +986,9 @@ final class DownloadManager {
         }
 
         if cached != nil && !cachedIsExecutable {
-            return .missing(message: "Rapid was updated. Please relaunch Rapid-MLX to finish.")
+            return .missing(message: "Youzi was updated. Please relaunch Youzi to finish.")
         }
-        return .missing(message: "Rapid isn't fully set up. Please restart Rapid-MLX.")
+        return .missing(message: "Youzi isn't fully set up. Please restart Youzi.")
     }
 
     // MARK: - Test seam

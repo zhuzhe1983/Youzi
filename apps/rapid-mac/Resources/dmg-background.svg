@@ -12,7 +12,7 @@
 
   <rect width="720" height="460" fill="url(#canvas)"/>
 
-  <!-- Quiet leopard-spot texture: enough brand character without competing
+  <!-- Quiet citrus-speck texture: enough brand character without competing
        with the two Finder icons that own the installation action. -->
   <g fill="#D8D1C3" opacity="0.22">
     <ellipse cx="44" cy="46" rx="18" ry="9" transform="rotate(-24 44 46)"/>
@@ -24,7 +24,7 @@
   <g font-family="-apple-system, BlinkMacSystemFont, Helvetica Neue, Helvetica, Arial, sans-serif"
      text-anchor="middle">
     <text x="360" y="55" fill="#282724" font-size="24" font-weight="650">
-      Install Rapid-MLX Desktop
+      Install Youzi
     </text>
     <text x="360" y="83" fill="#6F6A61" font-size="14" font-weight="400">
       Drag the app into Applications

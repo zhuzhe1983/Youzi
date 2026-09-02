@@ -1,6 +1,6 @@
 # rapid-mac AX structural baseline v1
-AXApplication title="Rapid-MLX"
-  AXWindow subrole=AXStandardWindow id="main" title="Rapid-MLX"
+AXApplication title="Youzi"
+  AXWindow subrole=AXStandardWindow id="main" title="Youzi"
     AXGroup subrole=AXHostingView
       AXUnknown id="Quickstart.Progress" desc="Setup progress, step 2 of 4" enabled=true
       AXStaticText id="Quickstart.Step2.Kicker" value=text enabled=true

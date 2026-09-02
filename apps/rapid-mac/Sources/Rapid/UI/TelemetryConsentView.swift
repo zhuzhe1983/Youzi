@@ -15,7 +15,7 @@ struct DeferredTelemetryConsentBanner: View {
                 .background(RapidTheme.brandTint, in: RoundedRectangle(cornerRadius: RapidTheme.Radius.row))
 
             VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
-                Text("Help improve Rapid by sharing anonymous usage data?")
+                Text("Help improve Youzi by sharing anonymous usage data?")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(RapidTheme.textPrimary)
                 Text("For each first successful text chat reply, dictation, or generated image, only the milestone name and “Desktop” are sent. This version does not send a vision-reply milestone. The collector derives a country code but never stores your IP. Prompts, responses, attachments, and API keys are never collected. Change this anytime in Settings → Privacy.")

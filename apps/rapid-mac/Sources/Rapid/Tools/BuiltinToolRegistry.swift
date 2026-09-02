@@ -25,7 +25,7 @@ final class BuiltinToolRegistry: ToolRegistry {
     /// Model-visible audit note for the one credential-recovery transition.
     /// It deliberately names the mode change without echoing any credential.
     static func rejectedKeyRecoveryNote(for provider: WebSearchProvider) -> String {
-        "Note: Rapid removed a rejected saved \(provider.displayName) key and retried this search using \(provider.displayName)'s keyless mode."
+        "Note: Youzi removed a rejected saved \(provider.displayName) key and retried this search using \(provider.displayName)'s keyless mode."
     }
 
     /// Per-invocation approval gate for ``browse``. Held on the shared registry

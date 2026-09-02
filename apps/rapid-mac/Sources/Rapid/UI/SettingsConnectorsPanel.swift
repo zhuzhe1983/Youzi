@@ -412,7 +412,7 @@ struct SettingsConnectorsPanel: View {
         @Bindable var approval = approval
         return SettingsSection(
             "Approvals",
-            subtitle: "The first time the model calls a connector tool, Rapid asks. Your answer is remembered per tool."
+            subtitle: "The first time the model calls a connector tool, Youzi asks. Your answer is remembered per tool."
         ) {
             Toggle(isOn: Binding(
                 get: { approval.mode == .autoApproveAll },
@@ -432,7 +432,7 @@ struct SettingsConnectorsPanel: View {
                 title: approval.grantedTools.isEmpty
                     ? "No tools are permanently allowed."
                     : "\(approval.grantedTools.count) tool\(approval.grantedTools.count == 1 ? "" : "s") permanently allowed.",
-                description: "Resetting makes Rapid ask again the next time each one is called."
+                description: "Resetting makes Youzi ask again the next time each one is called."
             ) {
                 Button("Reset") { approval.resetGrants() }
                     .buttonStyle(.rapidSecondaryCompact)

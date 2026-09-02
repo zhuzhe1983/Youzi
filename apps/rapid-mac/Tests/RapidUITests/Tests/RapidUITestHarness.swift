@@ -200,7 +200,7 @@ final class RapidUITestHarness {
 
     func launch() {
         app.launch()
-        XCTAssertTrue(app.windows["Rapid-MLX"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.windows["Youzi"].waitForExistence(timeout: 20))
         dismissFirstRunIfNeeded()
     }
 
@@ -217,7 +217,7 @@ final class RapidUITestHarness {
             return
         }
         app.launch()
-        XCTAssertTrue(app.windows["Rapid-MLX"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.windows["Youzi"].waitForExistence(timeout: 20))
         dismissFirstRunIfNeeded()
     }
 

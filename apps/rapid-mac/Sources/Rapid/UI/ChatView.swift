@@ -694,12 +694,8 @@ struct ChatView: View {
                 // spending a second amber moment on a surface whose whole
                 // budget is one (that one is the send disc).
                 //
-                // 116 is deliberately ≥ 64: ``CheetahLogo`` switches to the
-                // 440×390 master above that threshold, so the artwork is
-                // downsampled from a large source (crisp at @2x) rather than
-                // upscaled from the 56×50 crop. ``scaledToFit`` inside the
-                // square frame preserves the asset's own aspect ratio, which
-                // is why the mark renders ~116×103 rather than square.
+                // Render from the shared high-resolution Youzi master so the
+                // chat identity stays crisp at Retina scale.
                 markDiameter: 116,
                 marksOnBackplate: false,
                 // The chat surface at rest has nothing else in it. A 20pt
@@ -707,7 +703,7 @@ struct ChatView: View {
                 // its picture; at 34/40 the greeting is the object it should
                 // be.
                 titleEmphasis: .display,
-                mark: { CheetahLogo(size: 116) }
+                mark: { YouziLogo(size: 116) }
             )
             GitHubStarButton()
         }

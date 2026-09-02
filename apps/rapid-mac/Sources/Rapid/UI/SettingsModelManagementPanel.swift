@@ -271,7 +271,7 @@ struct SettingsModelManagementPanel: View {
 
                 if unavailable {
                     InlineNotice(
-                        message: "Your chosen models folder isn't available right now — the drive may be unplugged. Rapid is using its default location until it's back.",
+                        message: "Your chosen models folder isn't available right now — the drive may be unplugged. Youzi is using its default location until it's back.",
                         tone: .warning
                     )
                     .accessibilityIdentifier("Settings.ModelManagement.FolderUnavailable")
@@ -289,7 +289,7 @@ struct SettingsModelManagementPanel: View {
                     Spacer(minLength: 0)
                 }
 
-                Text("Point Rapid at a folder where it already keeps downloaded models — for example on an external drive. New models download here; ones you already have stay where they are. Models downloaded by other apps in other formats won't appear here. New location takes effect the next time a model loads or downloads.")
+                Text("Point Youzi at a folder where it already keeps downloaded models — for example on an external drive. New models download here; ones you already have stay where they are. Models downloaded by other apps in other formats won't appear here. New location takes effect the next time a model loads or downloads.")
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -329,12 +329,12 @@ struct SettingsModelManagementPanel: View {
                 Toggle(isOn: $autoStartOnLaunch) {
                     SettingsRowLabel(
                         title: "Auto-start model on launch",
-                        description: "On launch, Rapid-MLX loads your last-used model into memory so the chat is interactive immediately. Nothing loads while first-run setup is still open. Turn off if you sometimes open Rapid-MLX just to browse past conversations — you can still start a model manually by picking one in the message box and sending."
+                        description: "On launch, Youzi loads your last-used model into memory so the chat is interactive immediately. Nothing loads while first-run setup is still open. Turn off if you sometimes open Youzi just to browse past conversations — you can still start a model manually by picking one in the message box and sending."
                     )
                 }
                 .toggleStyle(TrailingSettingsToggleStyle())
                 .accessibilityLabel("Auto-start model on launch")
-                .accessibilityHint("When off, opening Rapid-MLX will not load a model until you start one manually from the picker.")
+                .accessibilityHint("When off, opening Youzi will not load a model until you start one manually from the picker.")
                 // Stable AX hook kept as `Settings.Models.*` across the move.
                 .accessibilityIdentifier("Settings.Models.AutoStartOnLaunchToggle")
 
@@ -433,7 +433,7 @@ struct SettingsModelManagementPanel: View {
     private func chooseModelsFolder() {
         let panel = NSOpenPanel()
         panel.title = "Choose a models folder"
-        panel.message = "Pick the folder where Rapid should keep downloaded models."
+        panel.message = "Pick the folder where Youzi should keep downloaded models."
         panel.prompt = "Use Folder"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -952,7 +952,7 @@ struct SettingsModelManagementPanel: View {
                         .help(
                             entry.isExternal
                                 ? "Measured size on disk. Downloaded by another app — "
-                                    + "Rapid can't delete it."
+                                    + "Youzi can't delete it."
                                 : "Measured size on disk. Deleting frees this much."
                         )
                         .accessibilityLabel("On disk, \(size)")
@@ -1120,7 +1120,7 @@ struct SettingsModelManagementPanel: View {
         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             switch filterMode {
             case .all:
-                return "No models found. Restart Rapid-MLX to try again."
+                return "No models found. Restart Youzi to try again."
             case .cached:
                 return "Nothing cached on disk yet. Pick a row from \"Not cached\" and hit Download."
             case .notCached:
@@ -1277,7 +1277,7 @@ struct SettingsModelManagementPanel: View {
                 Text("External")
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
-                    .help("Found outside Rapid's models folder. Rapid didn't download it, so it can't remove it.")
+                    .help("Found outside Youzi's models folder. Youzi didn't download it, so it can't remove it.")
                     .accessibilityIdentifier(
                         "Settings.ModelManagement.Recommended.External.\(entry.alias)"
                     )
@@ -1340,7 +1340,7 @@ struct SettingsModelManagementPanel: View {
 
     @ViewBuilder
     private var emptyState: some View {
-        Text("Couldn't load the model list. Restart Rapid-MLX to try again.")
+        Text("Couldn't load the model list. Restart Youzi to try again.")
             .font(RapidFont.body)
             .foregroundStyle(RapidTheme.textSecondary)
             .fixedSize(horizontal: false, vertical: true)

@@ -141,7 +141,7 @@ struct BenchScores: Equatable, Sendable {
 
 /// Lazy single-shot loader that decodes `benchmark-scores.json`
 /// from the SPM resource bundle (dev / test) or `Bundle.main`
-/// (shipped .app). Mirrors the `CheetahLogo` / `Localizable.xcstrings`
+/// (shipped .app). Mirrors the `YouziLogo` / `Localizable.xcstrings`
 /// dual-lookup pattern so a missing resource degrades to an empty
 /// dictionary (every alias renders the dashed-bar tooltip) rather
 /// than crashing the app on first picker hover.
@@ -151,7 +151,7 @@ enum BenchScoresCatalog {
     /// the tooltip shows five dashed bars — survivable, never a crash.
     private static let cache: [String: BenchScores] = loadAll()
 
-    /// Resource lookup for the JSON sidecar. Mirrors `CheetahLogo`:
+    /// Resource lookup for the JSON sidecar. Mirrors `YouziLogo`:
     ///   1. ``Bundle.main`` (production .app — build.sh flattens the
     ///      JSON into `Contents/Resources/`).
     ///   2. SPM resource bundle next to the test runner / `swift run`
@@ -256,7 +256,7 @@ enum BenchScoresCatalog {
     }
 }
 
-/// Bundle anchor — identical pattern to ``CheetahLogo`` so the
+/// Bundle anchor — identical pattern to ``YouziLogo`` so the
 /// resource lookup behaves the same way whether the caller is a
 /// SwiftPM CLI test or the production .app.
 private final class BenchScoresBundleFinder {}

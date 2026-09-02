@@ -91,22 +91,10 @@ final class MenuBarController: NSObject {
 
     /// Spoken/hover name for the status item. One constant so the
     /// tooltip and the accessibility title can never drift apart.
-    static let accessibilityTitle = "Rapid-MLX"
+    static let accessibilityTitle = "Youzi"
 
-    /// The tray mark: the official Rapid-MLX `R`, as a **template**.
-    ///
-    /// Replaces the full-colour cheetah, which carried far too much
-    /// detail for an 18pt slot — at menu-bar size the mascot resolved to
-    /// a muddy amber smudge, and being non-template it ignored the bar's
-    /// appearance entirely (a light-mode bar, a dark-mode bar and an
-    /// open menu all got the same coloured bitmap).
-    ///
-    /// ``RapidRMark`` draws the brand's own vector geometry and tags the
-    /// result ``isTemplate``, which hands colour back to macOS: black on
-    /// a light bar, white on a dark one, white again while the menu is
-    /// open or the bar sits on a tinted desktop. See ``RapidRMark`` for
-    /// why the menu-bar variant is the `R` alone rather than the full
-    /// lockup.
+    /// The tray uses a simple template leaf that echoes the leaf in Youzi's
+    /// full-colour pomelo artwork while remaining legible at menu-bar size.
     ///
     /// Deliberately carries NO status: no amber "update waiting" dot, no
     /// Ready/Starting/Failed tint. A template image cannot express those
@@ -114,21 +102,12 @@ final class MenuBarController: NSObject {
     /// menu — where ``MenuBarStatus/menuItems`` already puts it, as a
     /// status line plus an "Update available — vX.Y.Z" row.
     ///
-    /// The SF Symbol fallback covers a corrupted build whose geometry
-    /// fails to parse; it is also a template, so the two paths behave
-    /// identically as far as the bar is concerned.
     static func trayGlyph() -> NSImage {
-        if let mark = RapidRMark.menuBarTemplateImage() {
-            return mark
-        }
         let fallback = NSImage(
-            systemSymbolName: "bolt.fill",
+            systemSymbolName: "leaf.fill",
             accessibilityDescription: accessibilityTitle
         ) ?? NSImage(
-            size: NSSize(
-                width: RapidRMark.menuBarGlyphHeight,
-                height: RapidRMark.menuBarGlyphHeight
-            )
+            size: NSSize(width: 16, height: 16)
         )
         fallback.isTemplate = true
         return fallback

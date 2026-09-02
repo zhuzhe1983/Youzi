@@ -456,17 +456,17 @@ struct CoreWorkspaceVisualFoundationTests {
 
     // MARK: - Chat empty state
 
-    /// The mascot is the brand moment for Chat's empty state and for
+    /// The logo is the brand moment for Chat's empty state and for
     /// first run. Repeating it on every empty surface turned a greeting
     /// into wallpaper, so Images renders the aspect preview instead.
-    @Test("The cheetah appears on the Chat empty state and not on Images")
+    @Test("The Youzi logo appears on the Chat empty state and not on Images")
     func mascotIsReservedForChat() throws {
         let chat = try strippedSource("Sources/Rapid/UI/ChatView.swift")
         let images = try strippedSource("Sources/Rapid/UI/ImagesView.swift")
-        #expect(chat.contains("CheetahLogo("), "The Chat empty state lost the shipped cheetah asset.")
+        #expect(chat.contains("YouziLogo("), "The Chat empty state lost the shipped Youzi logo.")
         #expect(
-            !images.contains("CheetahLogo("),
-            "The cheetah is back on the Images surface, where §17 V2 removes it."
+            !images.contains("YouziLogo("),
+            "The product logo is back on the Images surface, where §17 V2 removes it."
         )
     }
 

@@ -102,7 +102,7 @@ enum MenuBarStatus {
         baseURL: String?
     ) -> [MenuBarItem] {
         var items: [MenuBarItem] = [
-            .button(.open, title: "Open Rapid-MLX", enabled: true, shortcut: nil),
+            .button(.open, title: "Open Youzi", enabled: true, shortcut: nil),
             .button(
                 .newChat,
                 title: "New Chat",
@@ -149,7 +149,7 @@ enum MenuBarStatus {
             .button(.checkForUpdates, title: "Check for updates…", enabled: !checking, shortcut: nil)
         )
         items.append(.separator)
-        items.append(.button(.about, title: "About Rapid-MLX…", enabled: true, shortcut: nil))
+        items.append(.button(.about, title: "About Youzi…", enabled: true, shortcut: nil))
         items.append(.separator)
         items.append(
             .button(

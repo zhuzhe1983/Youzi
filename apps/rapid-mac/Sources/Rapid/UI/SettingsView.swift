@@ -598,7 +598,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
                 "Privacy",
-                subtitle: "Rapid-MLX is local-first. Prompts, attachments, and model responses never leave your Mac. Anonymous usage data is sent only after you opt in.",
+                subtitle: "Youzi is local-first. Prompts, attachments, and model responses never leave your Mac. Anonymous usage data is sent only after you opt in.",
                 emphasis: .page
             )
 
@@ -717,7 +717,7 @@ struct SettingsView: View {
     /// users here to install a newer Rapid-MLX Desktop.
     ///
     /// State table:
-    ///   * ``availableUpdate`` non-nil → prominent "Update Rapid-MLX"
+    ///   * ``availableUpdate`` non-nil → prominent "Update Youzi"
     ///     CTA that hands off to Sparkle's update panel, mirroring the
     ///     MenuBarExtra menu entry. Disabled on unsigned builds where
     ///     Sparkle is not configured.
@@ -728,8 +728,8 @@ struct SettingsView: View {
     private var appPanel: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
-                "Rapid-MLX",
-                subtitle: "Self-update for Rapid-MLX. New releases bundle the latest models, performance improvements, and bug fixes.",
+                "Youzi",
+                subtitle: "Self-update for Youzi. New releases bundle the latest models, performance improvements, and bug fixes.",
                 emphasis: .page
             )
             SettingsSection("Version") {
@@ -767,7 +767,7 @@ struct SettingsView: View {
                 .accessibilityIdentifier("Settings.App.AutomaticUpdatesToggle")
                     .disabled(!sparkleUpdater.isEnabled)
                     .help(sparkleUpdater.isEnabled
-                          ? "Downloaded updates are installed when Rapid-MLX quits."
+                          ? "Downloaded updates are installed when Youzi quits."
                           : "Automatic updates are enabled in signed release builds.")
                 SettingsRowDivider()
                 appUpdateActionRow
@@ -861,17 +861,17 @@ struct SettingsView: View {
     private var dockVisibilitySection: some View {
         SettingsSection(
             "Window",
-            subtitle: "Choose what happens when you close the main window. Rapid-MLX keeps running in the menu bar either way — this only affects whether the Dock icon stays visible."
+            subtitle: "Choose what happens when you close the main window. Youzi keeps running in the menu bar either way — this only affects whether the Dock icon stays visible."
         ) {
             Toggle(isOn: hideDockOnCloseBinding) {
                 SettingsRowLabel(
                     title: "Hide Dock icon when closing window",
-                    description: "On close, Rapid-MLX stays available from the menu bar. Turn off to keep the Dock icon visible; disabling takes effect immediately."
+                    description: "On close, Youzi stays available from the menu bar. Turn off to keep the Dock icon visible; disabling takes effect immediately."
                 )
             }
             .toggleStyle(TrailingSettingsToggleStyle())
             .accessibilityLabel("Hide Dock icon when closing window")
-            .accessibilityHint("Rapid-MLX remains available from the menu bar.")
+            .accessibilityHint("Youzi remains available from the menu bar.")
             .accessibilityIdentifier("Settings.App.HideDockOnCloseToggle")
 
             SettingsRowDivider()
@@ -1037,7 +1037,7 @@ struct SettingsView: View {
                         Button {
                             sparkleUpdater.checkForUpdates()
                         } label: {
-                            Label("Update Rapid-MLX", systemImage: "arrow.down.circle.fill")
+                            Label("Update Youzi", systemImage: "arrow.down.circle.fill")
                         }
                         .buttonStyle(.rapidPrimary)
                         .help("Opens the updater to download and install this release.")
@@ -1050,7 +1050,7 @@ struct SettingsView: View {
                                 .font(RapidFont.bodyEmphasis)
                         }
                         .foregroundStyle(RapidTheme.textSecondary)
-                        .help("Rapid-MLX is checking or downloading the update in the background.")
+                        .help("Youzi is checking or downloading the update in the background.")
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("Settings.App.UpdateBusy")
                     }

@@ -95,7 +95,7 @@ struct ResidentReplacementProjection: Codable, Sendable, Equatable {
         let projectedGB = Double(projectedBytes) / gib
         let limitGB = Double(limitBytes) / gib
         let release = releasedGB > 0
-            ? "Rapid can release about \(max(1, Int(releasedGB.rounded()))) GB from the current model, but "
+            ? "Youzi can release about \(max(1, Int(releasedGB.rounded()))) GB from the current model, but "
             : ""
         return release
             + "\(alias) would still need about \(Int(projectedGB.rounded())) GB "

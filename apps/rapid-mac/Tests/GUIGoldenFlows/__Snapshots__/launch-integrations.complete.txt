@@ -1,6 +1,6 @@
 # rapid-mac AX structural baseline v1
-AXApplication title="Rapid-MLX"
-  AXWindow subrole=AXStandardWindow id="main" title="Rapid-MLX"
+AXApplication title="Youzi"
+  AXWindow subrole=AXStandardWindow id="main" title="Youzi"
     AXGroup subrole=AXHostingView
       AXSplitGroup id="main, SidebarNavigationSplitView"
         AXGroup subrole=AXHostingView
@@ -12,7 +12,7 @@ AXApplication title="Rapid-MLX"
         AXGroup subrole=AXHostingView
           AXHeading desc="Connect your agents, Connect any agent or editor that supports a local base URL. It's free and stays on your Mac." enabled=true
           AXScrollArea
-            AXHeading desc="Start here, Run a text model first. Rapid will then create a private local endpoint and ready-to-copy setup commands." enabled=true
+            AXHeading desc="Start here, Run a text model first. Youzi will then create a private local endpoint and ready-to-copy setup commands." enabled=true
             AXPopUpButton id="ModelPickerBar.ModelMenu" desc="Model" help="Choose which model to run" value=text enabled=true
             AXButton id="ModelPickerBar.ModelInfo" desc="Show model details" help="Show model details" enabled=true
             AXGroup desc="<model> isn't running, It's already downloaded — starting takes a few seconds." enabled=true
@@ -97,7 +97,7 @@ AXApplication title="Rapid-MLX"
       AXUnknown desc="CPU <percent>" enabled=true
       AXUnknown desc="GPU <gpu>" enabled=true
       AXUnknown desc="Memory <pressure>: <size> used out of <size>" enabled=true
-      AXButton id="Footer.DesktopVersionPill" desc="Rapid-MLX <version> <update-state>" help="Rapid-MLX <version> <update-state>" enabled=true
+      AXButton id="Footer.DesktopVersionPill" desc="Youzi <version> <update-state>" help="Youzi <version> <update-state>" enabled=true
     AXToolbar
       AXButton desc="Hide Sidebar" enabled=true
       AXButton id="Toolbar.SearchChats" desc="Search chats" enabled=true

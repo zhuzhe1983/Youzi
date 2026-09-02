@@ -151,7 +151,7 @@ struct DictationView: View {
         }
         if controller.phase == .off {
             return controller.lastError
-                ?? "Rapid will load \(controller.modelAlias) when you next use dictation."
+                ?? "Youzi will load \(controller.modelAlias) when you next use dictation."
         }
         var parts = [controller.modelAlias]
         if let latency = controller.lastLatency {
@@ -244,7 +244,7 @@ struct DictationView: View {
                 // allowing it while Rapid is running leaves the live process
                 // still seeing "denied". Saying so up front beats adding a
                 // second control for the one case it applies to.
-                Text("Needed to watch for the hotkey and to type into other apps. macOS applies it at launch — quit and reopen Rapid after allowing.")
+                Text("Needed to watch for the hotkey and to type into other apps. macOS applies it at launch — quit and reopen Youzi after allowing.")
             }
 
             Divider().overlay(RapidTheme.hairline)
@@ -508,7 +508,7 @@ struct DictationView: View {
 
             VStack(alignment: .leading, spacing: RapidTheme.Space.md) {
                 if controller.vocabulary.terms.isEmpty {
-                    Text("No terms yet. Add the names Rapid keeps getting wrong — project names, people, product names.")
+                    Text("No terms yet. Add the names Youzi keeps getting wrong — project names, people, product names.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {

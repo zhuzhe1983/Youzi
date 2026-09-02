@@ -2262,8 +2262,8 @@ final class ServerManager {
         // Names what was done and what was found, and stops. No retry
         // schedule, no diagnosis of WHY it is absent — nothing here knows.
         return recheck.attempt == 1
-            ? "Checked again — Rapid-MLX still can't find its engine."
-            : "Checked again (\(recheck.attempt) times) — Rapid-MLX still can't find its engine."
+            ? "Checked again — Youzi still can't find its engine."
+            : "Checked again (\(recheck.attempt) times) — Youzi still can't find its engine."
     }
 
     /// Transitions a ``.crashed`` or ``.stopped`` state back to
@@ -2740,7 +2740,7 @@ final class ServerManager {
             isOperating = false
             state = .crashed(
                 alias: trimmedAlias,
-                message: "Couldn't start the model — another app may already be using what Rapid needs to run. Quit other local AI apps (LM Studio, Ollama) or development servers, then click Restart."
+                message: "Couldn't start the model — another app may already be using what Youzi needs to run. Quit other local AI apps (LM Studio, Ollama) or development servers, then click Restart."
             )
             return
         }
@@ -2762,7 +2762,7 @@ final class ServerManager {
             isOperating = false
             state = .crashed(
                 alias: trimmedAlias,
-                message: "Couldn't start the model securely. Restart Rapid-MLX; if this keeps happening, please file a bug."
+                message: "Couldn't start the model securely. Restart Youzi; if this keeps happening, please file a bug."
             )
             return
         }
@@ -2858,7 +2858,7 @@ final class ServerManager {
         let modelsFolderOverride = ModelsFolderPreference.validatedOverrideURL()?.path
         if modelsFolderOverride == nil, ModelsFolderPreference.hasCustomFolder() {
             appendLogLines([
-                "Your chosen models folder isn't available right now — Rapid is using its default location until it's back."
+                "Your chosen models folder isn't available right now — Youzi is using its default location until it's back."
             ])
         }
         let unsupportedResidentFlags = Self.unsupportedResidentLaunchFlagNames(
@@ -2866,7 +2866,7 @@ final class ServerManager {
         )
         if !unsupportedResidentFlags.isEmpty {
             appendLogLines([
-                "Rapid could not confirm that this engine runtime supports \(unsupportedResidentFlags.joined(separator: ", ")); starting without those residency flags."
+                "Youzi could not confirm that this engine runtime supports \(unsupportedResidentFlags.joined(separator: ", ")); starting without those residency flags."
             ])
         }
         let stdoutPipe = Pipe()
@@ -2988,7 +2988,7 @@ final class ServerManager {
             // a path, POSIX wording, or an error domain — engine internals
             // (principle: error copy must be human + actionable).
             print("[server] failed to start the model: \(error.localizedDescription)")
-            state = .crashed(alias: trimmedAlias, message: "Couldn't start the model. Restart Rapid-MLX and try again.")
+            state = .crashed(alias: trimmedAlias, message: "Couldn't start the model. Restart Youzi and try again.")
             isOperating = false
             return
         }

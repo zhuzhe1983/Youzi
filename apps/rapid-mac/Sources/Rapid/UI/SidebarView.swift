@@ -399,7 +399,7 @@ struct SidebarView: View {
         }
     }
 
-    /// The product lockup at the top of the rail: the official Rapid `R`
+    /// The product lockup at the top of the rail: Youzi's pomelo mark
     /// beside the product name.
     ///
     /// Purely decorative, and marked so. The window already carries the
@@ -410,19 +410,12 @@ struct SidebarView: View {
     /// what keeps this addition free of any new accessibility identifier
     /// or AX node for the identifier inventory to account for.
     ///
-    /// The mark is ``RapidRMark``'s template image — the same geometry
-    /// the menu-bar status item renders, so the two brand surfaces cannot
-    /// drift apart. Template rendering means it tracks the label colour
-    /// in both appearances rather than needing a second asset for Dark.
+    /// The mark uses the same bundled artwork as the Dock icon and onboarding.
     private var brandLockup: some View {
         HStack(spacing: RapidTheme.Space.sm) {
-            if let mark = RapidRMark.menuBarTemplateImage(height: 15) {
-                Image(nsImage: mark)
-                    .renderingMode(.template)
-                    .foregroundStyle(RapidTheme.textPrimary)
-                    .frame(width: RapidTheme.Layout.iconSlot, alignment: .center)
-            }
-            Text("Rapid-MLX")
+            YouziLogo(size: 22)
+                .frame(width: RapidTheme.Layout.iconSlot, alignment: .center)
+            Text("Youzi")
                 .font(RapidFont.bodyEmphasis)
                 .foregroundStyle(RapidTheme.textPrimary)
         }

@@ -69,13 +69,13 @@ enum ReonboardingReset {
             message = "Nothing is selected, so nothing will be erased."
         } else {
             message = "This erases " + Self.sentenceList(losses)
-                + ". Rapid restarts immediately afterwards."
+                + ". Youzi restarts immediately afterwards."
         }
 
         return Confirmation(
             title: scope == .onboarding
                 ? "Run guided setup again?"
-                : "Erase this Mac's Rapid state and restart?",
+                : "Erase this Mac's Youzi state and restart?",
             message: message,
             confirmTitle: scope.contains(.conversations)
                 ? "Erase and restart"

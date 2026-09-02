@@ -57,7 +57,7 @@
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "%@ 已配置。Rapid-MLX 将在生成开始时确认运行状态。"
+            "value" : "%@ 已配置。Youzi 将在生成开始时确认运行状态。"
           }
         }
       }
@@ -432,22 +432,22 @@
         }
       }
     },
-    "About Rapid-MLX" : {
+    "About Youzi" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "关于 Rapid-MLX"
+            "value" : "关于 Youzi"
           }
         }
       }
     },
-    "About Rapid-MLX…" : {
+    "About Youzi…" : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "关于 Rapid-MLX…"
+            "value" : "关于 Youzi…"
           }
         }
       }

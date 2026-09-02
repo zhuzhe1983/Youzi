@@ -1246,8 +1246,8 @@ fi
 # aborts the build. Hosted package builders do not download multi-GB model
 # weights, so the release operator supplies the immutable local snapshot.
 if [[ -n "${SIDECAR_VISION_SMOKE_MODEL:-}" ]]; then
-    SIDECAR_VISION_SMOKE_IMAGE="${SIDECAR_VISION_SMOKE_IMAGE:-$REPO_ROOT/Sources/Rapid/Resources/cheetah.png}"
-    SIDECAR_VISION_SMOKE_NEGATIVE_IMAGE="${SIDECAR_VISION_SMOKE_NEGATIVE_IMAGE:-$REPO_ROOT/Sources/Rapid/Resources/Assets.xcassets/RapidLogo.imageset/RapidLogo.png}"
+    SIDECAR_VISION_SMOKE_IMAGE="${SIDECAR_VISION_SMOKE_IMAGE:-$REPO_ROOT/Sources/Rapid/Resources/youzi-logo.png}"
+    SIDECAR_VISION_SMOKE_NEGATIVE_IMAGE="${SIDECAR_VISION_SMOKE_NEGATIVE_IMAGE:-$REPO_ROOT/Sources/Rapid/Resources/cheetah.png}"
     SIDECAR_VISION_SMOKE_ARGS=(
         --sidecar-root "$STAGE"
         --model "$SIDECAR_VISION_SMOKE_MODEL"

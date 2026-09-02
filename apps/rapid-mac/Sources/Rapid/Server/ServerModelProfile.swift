@@ -106,7 +106,7 @@ struct SpeculativeDecodingAvailability: Equatable, Sendable {
             fallback = "%@ is configured, but tools require ordinary decoding. Turn off tools in Settings → Tools to use it."
         case .pending:
             key = "speculative_status.pending.help"
-            fallback = "%@ is configured. Rapid-MLX will confirm the runtime when generation starts."
+            fallback = "%@ is configured. Youzi will confirm the runtime when generation starts."
         case .unavailable:
             key = "speculative_status.unavailable.help"
             fallback = "%@ was requested, but its runtime hook could not be installed. This model is using ordinary decoding."

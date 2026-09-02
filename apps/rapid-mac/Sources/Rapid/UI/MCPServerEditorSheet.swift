@@ -98,7 +98,7 @@ struct MCPServerEditorSheet: View {
                 case .stdio:
                     TextField("Command", text: $command)
                         .accessibilityIdentifier("Settings.Connectors.Editor.Command")
-                    Text("For example `uvx` or `npx`. Rapid's engine only runs commands on its allowlist.")
+                    Text("For example `uvx` or `npx`. Youzi's engine only runs commands on its allowlist.")
                         .font(RapidFont.caption)
                         .foregroundStyle(RapidTheme.textSecondary)
 

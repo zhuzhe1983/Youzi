@@ -42,7 +42,7 @@ struct FailedReplaceBanner: View {
                         Text("An update attempt didn't take")
                             .scaledSystemFont(13, weight: .semibold)
                         Text(
-                            "Rapid-MLX is still running v\(installTracker.currentVersion). " +
+                            "Youzi is still running v\(installTracker.currentVersion). " +
                             "macOS Finder can't replace files inside a running .app, so a drag-to-/Applications " +
                             "Replace silently leaves the old build in place. Check for updates " +
                             "(the updater handles the quit + swap automatically), or quit and re-run the installer."
@@ -55,7 +55,7 @@ struct FailedReplaceBanner: View {
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel(
                         "An update attempt didn't take. " +
-                        "Rapid-MLX is still running v\(installTracker.currentVersion). " +
+                        "Youzi is still running v\(installTracker.currentVersion). " +
                         "macOS Finder can't replace files inside a running .app. " +
                         "Check for updates, or quit and re-run the installer."
                     )

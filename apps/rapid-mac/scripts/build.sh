@@ -114,27 +114,27 @@ fi
 # TOP level, sibling to ``Contents/``) — not anywhere inside
 # ``Contents/``. On miss it ``fatalError``s inside
 # ``dispatch_once``, which crashed the v0.5.9 DMG on first
-# render of ``CheetahLogo``. Putting the bundle at the .app
+# render of the product logo. Putting the bundle at the .app
 # top-level satisfies the accessor but trips
 # ``codesign --deep --strict`` (the SPM-emitted directory has
 # no ``Info.plist`` and Apple's .app structure expects nothing
 # at the top besides ``Contents/``).
 #
 # The correct fix:
-#   * ``CheetahLogo`` no longer uses ``Bundle.module``; it uses
+#   * ``YouziLogo`` does not use ``Bundle.module``; it uses
 #     ``Bundle.main.url(forResource:)``.
-#   * We copy the PNGs into ``Contents/Resources/`` as flat
+#   * We copy the PNG into ``Contents/Resources/`` as a flat
 #     files, so ``Bundle.main`` resolves them the way macOS
 #     resource lookup expects.
 # Source-of-truth for the assets stays under
 # ``Sources/Rapid/Resources/`` so SPM keeps them on the test
 # target's ``Bundle.module`` (used by the snapshot suite via
-# the ``BundleFinder`` walk in ``CheetahLogo``).
-for asset in cheetah.png cheetah-sm.png; do
+# the ``BundleFinder`` walk in ``YouziLogo``).
+for asset in youzi-logo.png; do
     if [[ -f "$ROOT/Sources/Rapid/Resources/$asset" ]]; then
         cp "$ROOT/Sources/Rapid/Resources/$asset" "$CONTENTS/Resources/$asset"
     else
-        echo "warning: Sources/Rapid/Resources/$asset missing — CheetahLogo will fall back to SF Symbol" >&2
+        echo "warning: Sources/Rapid/Resources/$asset missing — YouziLogo will fall back to SF Symbol" >&2
     fi
 done
 

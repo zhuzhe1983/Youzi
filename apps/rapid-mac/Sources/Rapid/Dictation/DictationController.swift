@@ -530,7 +530,7 @@ final class DictationController {
             // still sees no. A relaunch is the fix, not another grant.
             accessibilityNeedsRelaunch = DictationHotkey.hasAccessibilityPermission
             lastError = accessibilityNeedsRelaunch
-                ? "Accessibility is granted, but this running copy hasn't picked it up. Relaunch Rapid to finish."
+                ? "Accessibility is granted, but this running copy hasn't picked it up. Relaunch Youzi to finish."
                 : "The dictation hotkey couldn't be registered."
             phase = .off
             return false
@@ -962,7 +962,7 @@ final class DictationController {
               modelAlias == requestedAlias
         else { return }
         guard modelOnDisk else {
-            lastError = "\(requestedAlias) isn't on disk anymore. Open Rapid → Audio to download it."
+            lastError = "\(requestedAlias) isn't on disk anymore. Open Youzi → Audio to download it."
             hud.update(.failed(message: "Model not downloaded"))
             Task {
                 try? await Task.sleep(nanoseconds: 1_600_000_000)
@@ -1070,7 +1070,7 @@ final class DictationController {
             if facts == nil {
                 lastError = "\(alias) isn't in the audio model catalog. Pick another model."
             } else if facts?.cached != true {
-                lastError = "\(alias) isn't downloaded. Open Rapid → Audio to download it."
+                lastError = "\(alias) isn't downloaded. Open Youzi → Audio to download it."
             } else {
                 lastError = "\(alias) couldn't finish preparing for dictation. Try again."
             }
