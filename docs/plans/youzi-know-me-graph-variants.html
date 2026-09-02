@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Youzi · 知我图谱设计方向</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --yellow: #f6bd31;
+      --pink: #f58d78;
+      --green: #4f9a57;
+      --ink: #191919;
+      --muted: #73716c;
+      --line: rgba(38, 34, 27, .11);
+      --paper: #f7f5ef;
+      --panel: #fffefa;
+      --radius: 14px;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body { background: #cbc9c3; color: var(--ink); }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    .screen { position: absolute; inset: 0; display: none; overflow: hidden; }
+    .screen.active { display: grid; }
+
+    .traffic { position: absolute; top: 18px; left: 20px; z-index: 20; display: flex; gap: 9px; }
+    .traffic i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+    .traffic i:nth-child(1) { background: #ff5f57; }
+    .traffic i:nth-child(2) { background: #febc2e; }
+    .traffic i:nth-child(3) { background: #28c840; }
+
+    .brand { display: flex; align-items: center; gap: 10px; min-height: 56px; }
+    .brand img { width: 43px; height: 43px; object-fit: cover; border-radius: 12px; }
+    .brand strong { font-size: 20px; letter-spacing: -.3px; }
+    .brand.compact strong { display: none; }
+    .brand.compact img { width: 36px; height: 36px; }
+
+    .ico { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+    .ico.s16 { width: 16px; height: 16px; }
+    .ico.s18 { width: 18px; height: 18px; }
+    .ico.s22 { width: 22px; height: 22px; }
+
+    .nav { display: grid; gap: 6px; margin-top: 22px; }
+    .nav-item { height: 44px; padding: 0 12px; border-radius: 10px; display: flex; align-items: center; gap: 11px; color: #57544e; font-size: 14px; }
+    .nav-item.active { background: rgba(246, 189, 49, .15); color: #1e1d19; font-weight: 600; box-shadow: inset 0 0 0 1px rgba(246, 189, 49, .24); }
+
+    .topbar { height: 72px; display: flex; align-items: center; gap: 18px; padding: 0 22px; border-bottom: 1px solid var(--line); }
+    .title { display: flex; align-items: baseline; gap: 10px; white-space: nowrap; }
+    .title h1 { margin: 0; font-size: 23px; letter-spacing: -.5px; }
+    .title small { color: var(--muted); font-size: 12px; }
+    .search { flex: 1; height: 38px; max-width: 480px; border: 1px solid var(--line); border-radius: 10px; display: flex; align-items: center; gap: 8px; padding: 0 12px; color: #8a8781; background: rgba(255,255,255,.52); font-size: 13px; }
+    .top-actions { margin-left: auto; display: flex; gap: 9px; }
+    .btn { height: 38px; border: 1px solid var(--line); background: rgba(255,255,255,.72); border-radius: 9px; padding: 0 13px; display: flex; align-items: center; gap: 7px; font-size: 13px; box-shadow: 0 1px 0 rgba(255,255,255,.8) inset; }
+    .btn.primary { background: var(--ink); color: white; border-color: var(--ink); }
+
+    .filters { min-height: 54px; border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 8px 20px; gap: 8px; }
+    .filter { height: 32px; border: 1px solid var(--line); background: rgba(255,255,255,.56); border-radius: 999px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; color: #66635e; font-size: 12px; }
+    .filter.active { background: #292823; color: white; border-color: #292823; }
+    .filter .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .filter-reset { margin-left: auto; color: #89857d; font-size: 12px; }
+
+    .graph { position: relative; overflow: hidden; isolation: isolate; }
+    .graph::before { content: ""; position: absolute; inset: 0; pointer-events: none; background-image: linear-gradient(rgba(47,43,36,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(47,43,36,.035) 1px, transparent 1px); background-size: 28px 28px; mask-image: radial-gradient(circle at 50% 50%, #000 24%, transparent 82%); }
+    .graph-label { position: absolute; top: 18px; left: 20px; z-index: 8; }
+    .graph-label strong { font-size: 14px; }
+    .graph-label span { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
+    .graph-stage { position: absolute; inset: 0; perspective: 1100px; transform-style: preserve-3d; }
+    .edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+    .edges path { fill: none; stroke: rgba(82, 78, 70, .22); stroke-width: 1.2; }
+    .edges path.hot { stroke: rgba(236, 149, 50, .78); stroke-width: 2.2; filter: drop-shadow(0 0 3px rgba(246,189,49,.28)); }
+    .edges text { fill: #8a857b; font-size: 11px; paint-order: stroke; stroke: rgba(250,249,245,.9); stroke-width: 4px; }
+    .graph-node { position: absolute; left: var(--x); top: var(--y); transform: translate(-50%, -50%) translateZ(var(--z, 0px)) scale(var(--s, 1)); height: 34px; padding: 0 13px; border-radius: 10px; border: 1px solid rgba(38,34,27,.13); background: rgba(255,255,252,.94); box-shadow: 0 8px 24px rgba(57,49,36,.09), 0 1px 0 white inset; display: flex; align-items: center; gap: 7px; font-size: 12px; white-space: nowrap; z-index: var(--layer, 3); }
+    .graph-node::before { content: ""; width: 7px; height: 7px; border-radius: 3px; background: var(--node-color, #9a9790); box-shadow: 0 0 0 3px color-mix(in srgb, var(--node-color, #9a9790) 16%, transparent); }
+    .graph-node.muted { opacity: .46; filter: saturate(.65); }
+    .graph-node.selected { height: 43px; font-size: 14px; font-weight: 650; border-color: rgba(246,189,49,.86); box-shadow: 0 15px 40px rgba(231,160,44,.22), 0 0 0 4px rgba(246,189,49,.13); z-index: 12; }
+    .graph-node.neighbor { border-color: color-mix(in srgb, var(--node-color) 58%, transparent); box-shadow: 0 10px 24px rgba(57,49,36,.12); }
+    .relation { position: absolute; font-size: 10px; color: #8c887f; background: rgba(248,247,242,.9); padding: 2px 5px; border-radius: 5px; z-index: 2; }
+    .canvas-tools { position: absolute; left: 18px; bottom: 18px; z-index: 15; display: flex; gap: 6px; }
+    .tool { height: 34px; min-width: 34px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.88); display: grid; place-items: center; color: #5d5a54; font-size: 12px; box-shadow: 0 6px 18px rgba(40,37,31,.08); }
+    .mode { display: flex; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: rgba(255,255,255,.8); }
+    .mode span { min-width: 38px; height: 26px; border-radius: 6px; display: grid; place-items: center; font-size: 11px; }
+    .mode span.active { background: #292823; color: white; }
+
+    .inspector { background: rgba(255,254,250,.92); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; }
+    .inspector-head { padding: 21px 20px 17px; border-bottom: 1px solid var(--line); }
+    .meta-line { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; margin-bottom: 9px; }
+    .meta-line .confidence { margin-left: auto; color: #32713b; background: rgba(79,154,87,.11); border-radius: 999px; padding: 4px 8px; }
+    .inspector h2 { margin: 0 0 8px; font-size: 22px; letter-spacing: -.4px; }
+    .summary { margin: 0; color: #56534d; font-size: 13px; line-height: 1.65; }
+    .section { padding: 16px 20px; border-bottom: 1px solid var(--line); }
+    .section-title { display: flex; align-items: center; margin-bottom: 11px; font-size: 12px; font-weight: 650; }
+    .section-title span { margin-left: auto; color: var(--muted); font-weight: 400; }
+    .tag-row { display: flex; flex-wrap: wrap; gap: 7px; }
+    .mini-tag { border: 1px solid var(--line); background: rgba(255,255,255,.7); border-radius: 8px; padding: 6px 8px; font-size: 11px; color: #5d5952; }
+    .source { padding: 10px 0; border-top: 1px solid rgba(38,34,27,.075); }
+    .source:first-of-type { border-top: 0; padding-top: 0; }
+    .source-top { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #57544e; }
+    .source-top b { font-size: 12px; color: #262521; }
+    .source-top time { margin-left: auto; color: #8a8780; }
+    .source p { margin: 6px 0 5px 23px; font-size: 11px; color: #6f6b64; line-height: 1.45; }
+    .open-source { margin-left: 23px; color: #9b6718; font-size: 11px; }
+    .inspector-actions { margin-top: auto; display: flex; gap: 8px; padding: 14px 20px; }
+    .inspector-actions .btn { flex: 1; justify-content: center; }
+
+    /* Variant A */
+    #a { grid-template-columns: 196px 1fr; background: var(--paper); }
+    #a .sidebar { position: relative; padding: 60px 14px 18px; border-right: 1px solid var(--line); background: rgba(245,243,236,.95); }
+    #a .main { min-width: 0; display: grid; grid-template-rows: 72px 54px 1fr; }
+    #a .workspace { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 350px; }
+    #a .graph { background: #f9f8f4; }
+
+    /* Variant B */
+    #b { --ink: #f4f2eb; --muted: #918e86; --line: rgba(255,255,255,.1); grid-template-columns: 172px 1fr; background: #11120f; color: var(--ink); }
+    #b .sidebar { position: relative; padding: 60px 12px 16px; border-right: 1px solid var(--line); background: #161713; }
+    #b .brand img { box-shadow: 0 0 0 1px rgba(255,255,255,.08); }
+    #b .nav-item { color: #9c9a91; }
+    #b .nav-item.active { background: rgba(246,189,49,.1); color: #f2d27d; box-shadow: inset 2px 0 #f6bd31; }
+    #b .main { min-width: 0; display: grid; grid-template-rows: 72px 54px 1fr; }
+    #b .topbar, #b .filters { background: #141511; }
+    #b .search, #b .btn, #b .filter { background: #1b1c18; border-color: rgba(255,255,255,.11); color: #aaa79e; box-shadow: none; }
+    #b .btn.primary, #b .filter.active { background: #f1eee5; color: #1a1b17; border-color: #f1eee5; }
+    #b .workspace { min-height: 0; position: relative; }
+    #b .graph { position: absolute; inset: 0; background: radial-gradient(circle at 47% 46%, #23251d 0%, #161713 42%, #11120f 83%); }
+    #b .graph::before { background-image: radial-gradient(circle, rgba(255,255,255,.07) 1px, transparent 1px); background-size: 26px 26px; mask-image: radial-gradient(circle at 48% 50%, #000 15%, transparent 78%); }
+    #b .edges path { stroke: rgba(211,206,190,.17); }
+    #b .edges path.hot { stroke: rgba(246,189,49,.75); }
+    #b .edges text { fill: #858278; stroke: #171813; }
+    #b .graph-node { color: #e9e6dd; background: linear-gradient(145deg, rgba(49,51,43,.94), rgba(29,30,25,.98)); border-color: rgba(255,255,255,.13); box-shadow: 0 18px 42px rgba(0,0,0,.42), 0 1px 0 rgba(255,255,255,.08) inset; }
+    #b .graph-node.selected { color: white; border-color: #f6bd31; box-shadow: 0 18px 48px rgba(0,0,0,.5), 0 0 0 4px rgba(246,189,49,.12), 0 0 24px rgba(246,189,49,.16); }
+    #b .relation { color: #8e8a80; background: rgba(18,19,16,.88); }
+    #b .inspector { position: absolute; right: 18px; top: 18px; bottom: 18px; width: 370px; z-index: 30; background: #1b1c18; border: 1px solid rgba(255,255,255,.11); border-radius: 14px; box-shadow: 0 24px 70px rgba(0,0,0,.38); overflow: hidden; }
+    #b .summary, #b .section, #b .source-top, #b .source-top b, #b .source p { color: #b4b0a7; }
+    #b .source-top b { color: #ece9e0; }
+    #b .mini-tag, #b .tool, #b .mode { color: #b9b5ab; background: #22231e; border-color: rgba(255,255,255,.11); }
+    #b .mode span.active { background: #f1eee5; color: #181914; }
+    #b .canvas-tools { left: 22px; }
+    #b .graph-label { left: 22px; }
+    #b .pathbar { position: absolute; left: 22px; right: 410px; bottom: 18px; height: 38px; z-index: 20; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid rgba(255,255,255,.1); border-radius: 9px; background: rgba(24,25,21,.92); color: #8e8b82; font-size: 11px; }
+    #b .pathbar b { color: #eeeae0; }
+
+    /* Variant C */
+    #c { grid-template-columns: 82px 250px minmax(0, 1fr) 358px; grid-template-rows: 72px 1fr; background: #f5f4ef; }
+    #c .rail { grid-row: 1 / -1; position: relative; padding: 62px 12px 16px; border-right: 1px solid var(--line); background: #eceae3; display: flex; flex-direction: column; align-items: center; }
+    #c .rail .nav { gap: 11px; }
+    #c .rail .nav-item { width: 48px; height: 48px; justify-content: center; padding: 0; }
+    #c .rail .nav-item span { display: none; }
+    #c .topbar { grid-column: 2 / -1; background: #fbfaf6; }
+    #c .facets { grid-column: 2; padding: 18px 16px; border-right: 1px solid var(--line); overflow: hidden; background: #f3f1eb; }
+    #c .facet-title { font-size: 12px; font-weight: 700; margin: 0 0 10px; }
+    #c .facet-group { padding: 14px 0; border-top: 1px solid var(--line); }
+    #c .facet-group:first-of-type { border-top: 0; }
+    #c .check { height: 31px; display: flex; align-items: center; gap: 8px; color: #5c5952; font-size: 12px; }
+    #c .check i { width: 14px; height: 14px; border-radius: 4px; border: 1px solid #bbb7ae; background: #fffdfa; display: grid; place-items: center; font-style: normal; font-size: 10px; }
+    #c .check.on i { background: #292823; color: white; border-color: #292823; }
+    #c .check em { margin-left: auto; color: #99958c; font-style: normal; font-size: 10px; }
+    #c .saved-view { margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fffdfa; padding: 11px; font-size: 11px; line-height: 1.5; }
+    #c .saved-view b { display: block; margin-bottom: 4px; }
+    #c .graph { grid-column: 3; min-width: 0; background: #faf9f5; }
+    #c .inspector { grid-column: 4; min-width: 0; }
+    #c .view-tabs { display: flex; gap: 2px; padding: 3px; background: #eeece6; border-radius: 9px; }
+    #c .view-tabs span { padding: 7px 10px; border-radius: 7px; font-size: 11px; color: #77736b; }
+    #c .view-tabs span.active { background: white; color: #25241f; box-shadow: 0 1px 4px rgba(35,31,24,.08); }
+
+    .tab-hint { display: none; }
+    #b.active ~ .tab-hint { color: rgba(255,255,255,.27); }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute">
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5h7l2 2h9v9.5H3z"/><path d="M3 7.5V5h7l2 2"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c.6-4 3-6 7-6s6.4 2 7 6"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M20.5 8.7c0 5.5-8.5 10.3-8.5 10.3S3.5 14.2 3.5 8.7A4.2 4.2 0 0 1 12 7.8a4.2 4.2 0 0 1 8.5.9z"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10h4v10M10 20V4h4v16M16 20v-7h4v7M3 20h18"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v5h16v-5"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.7-1L14.5 3h-5l-.4 3.1a8 8 0 0 0-1.7 1l-2.4-1-2 3.4L5 11a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.7 1l.4 3.1h5l.4-3.1a8 8 0 0 0 1.7-1l2.4 1 2-3.4L19 13a7 7 0 0 0 0-1z"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v5h5"/></symbol>
+    <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></symbol>
+  </svg>
+
+  <section class="screen" id="a" aria-label="版本 A 空间图谱">
+    <div class="traffic"><i></i><i></i><i></i></div>
+    <aside class="sidebar">
+      <div class="brand"><img src="../../../Youzi-youzi-brand/apps/rapid-mac/Sources/Rapid/Resources/Assets.xcassets/RapidLogo.imageset/RapidLogo@3x.png" alt="Youzi"/><strong>Youzi</strong></div>
+      <nav class="nav">
+        <div class="nav-item"><svg class="ico"><use href="#i-plus"/></svg><span>新任务</span></div>
+        <div class="nav-item"><svg class="ico"><use href="#i-folder"/></svg><span>工作空间</span></div>
+        <div class="nav-item"><svg class="ico"><use href="#i-user"/></svg><span>帮手</span></div>
+        <div class="nav-item active"><svg class="ico"><use href="#i-heart"/></svg><span>知我</span></div>
+        <div class="nav-item"><svg class="ico"><use href="#i-chart"/></svg><span>成果</span></div>
+      </nav>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="title"><h1>知我</h1><small>个人知识图谱</small></div>
+        <div class="search"><svg class="ico s16"><use href="#i-search"/></svg>搜索人物、主题或记忆</div>
+        <div class="top-actions"><button class="btn"><svg class="ico s16"><use href="#i-upload"/></svg>添加资料</button><button class="btn"><svg class="ico s16"><use href="#i-settings"/></svg>管理记忆</button></div>
+      </header>
+      <div class="filters"><span class="filter active">全部</span><span class="filter">工作</span><span class="filter">家庭</span><span class="filter">个人</span><span class="filter">知识领域⌄</span><span class="filter">来源⌄</span><span class="filter">时间⌄</span><span class="filter-reset">重置</span></div>
+      <div class="workspace">
+        <div class="graph">
+          <div class="graph-label"><strong>全貌</strong><span>34 个主题 · 71 条关系 · 更新于 09:20</span></div>
+          <div class="graph-stage">
+            <svg class="edges" viewBox="0 0 1000 720" preserveAspectRatio="none">
+              <path class="hot" d="M510 340 C600 300 680 250 760 216"/><path class="hot" d="M510 340 C430 275 360 230 285 210"/><path class="hot" d="M510 340 C580 410 650 456 735 488"/><path class="hot" d="M510 340 C480 435 430 490 360 536"/>
+              <path d="M285 210 C235 160 185 152 142 178"/><path d="M285 210 C335 150 388 135 430 162"/><path d="M760 216 C815 160 855 150 900 180"/><path d="M760 216 C820 252 860 286 905 320"/><path d="M735 488 C810 460 860 445 915 460"/><path d="M360 536 C300 578 248 602 188 590"/><path d="M360 536 C418 595 470 620 522 592"/><path d="M510 340 C425 350 352 350 280 364"/><path d="M510 340 C600 338 670 350 742 368"/>
+              <text x="622" y="278">属于</text><text x="388" y="270">影响</text><text x="621" y="434">偏好</text><text x="426" y="456">来源于</text>
+            </svg>
+            <div class="graph-node selected" style="--x:51%;--y:47%;--s:1.08;--z:54px;--node-color:var(--yellow)">秋季旅行</div>
+            <div class="graph-node neighbor" style="--x:76%;--y:30%;--s:1;--z:34px;--node-color:var(--yellow)">家人</div>
+            <div class="graph-node neighbor" style="--x:29%;--y:29%;--s:1;--z:30px;--node-color:var(--green)">旅行规划</div>
+            <div class="graph-node neighbor" style="--x:74%;--y:67%;--s:.98;--z:22px;--node-color:var(--pink)">酒店偏好</div>
+            <div class="graph-node neighbor" style="--x:36%;--y:74%;--s:.96;--z:18px;--node-color:var(--green)">重要日期</div>
+            <div class="graph-node" style="--x:14%;--y:24%;--s:.84;--z:-12px;--node-color:var(--green)">自然风景</div>
+            <div class="graph-node" style="--x:43%;--y:21%;--s:.82;--z:-8px;--node-color:var(--pink)">步行友好</div>
+            <div class="graph-node" style="--x:90%;--y:24%;--s:.8;--z:-18px;--node-color:var(--yellow)">父母</div>
+            <div class="graph-node" style="--x:91%;--y:44%;--s:.82;--z:-12px;--node-color:var(--yellow)">家庭旅行</div>
+            <div class="graph-node" style="--x:91%;--y:64%;--s:.8;--z:-18px;--node-color:var(--pink)">安静环境</div>
+            <div class="graph-node" style="--x:18%;--y:82%;--s:.78;--z:-22px;--node-color:var(--green)">规律睡眠</div>
+            <div class="graph-node" style="--x:53%;--y:82%;--s:.8;--z:-18px;--node-color:var(--green)">晚间散步</div>
+            <div class="graph-node muted" style="--x:16%;--y:48%;--s:.75;--z:-35px;--node-color:var(--pink)">阅读</div>
+            <div class="graph-node muted" style="--x:28%;--y:51%;--s:.76;--z:-30px;--node-color:var(--pink)">个人成长</div>
+            <div class="graph-node muted" style="--x:75%;--y:50%;--s:.72;--z:-38px;--node-color:var(--yellow)">住宿预算</div>
+            <div class="graph-node muted" style="--x:62%;--y:20%;--s:.74;--z:-32px;--node-color:var(--pink)">长期目标</div>
+            <div class="graph-node muted" style="--x:60%;--y:63%;--s:.72;--z:-34px;--node-color:var(--green)">健康</div>
+            <div class="graph-node muted" style="--x:40%;--y:43%;--s:.7;--z:-42px;--node-color:var(--pink)">专注时间</div>
+          </div>
+          <div class="canvas-tools"><span class="tool">−</span><span class="tool">＋</span><span class="tool">适合</span><span class="mode"><span class="active">3D</span><span>2D</span></span></div>
+        </div>
+        <aside class="inspector">
+          <div class="inspector-head"><div class="meta-line"><span>目标 · 家庭</span><span class="confidence">可信度 92%</span></div><h2>秋季旅行</h2><p class="summary">计划一次安静、自然、步行友好的秋季家庭旅行。</p></div>
+          <div class="section"><div class="section-title">关联节点<span>4</span></div><div class="tag-row"><span class="mini-tag">家人</span><span class="mini-tag">旅行规划</span><span class="mini-tag">酒店偏好</span><span class="mini-tag">重要日期</span></div></div>
+          <div class="section"><div class="section-title">引用<span>3 个来源</span></div>
+            <div class="source"><div class="source-top"><svg class="ico s16"><use href="#i-chat"/></svg><b>聊天 · 家庭旅行计划</b><time>8 月 26 日 20:14</time></div><p>“更喜欢安静、有自然风景的地方。”</p><span class="open-source">打开原文 →</span></div>
+            <div class="source"><div class="source-top"><svg class="ico s16"><use href="#i-folder"/></svg><b>家庭规划 / 旅行计划.md</b></div><p>第 4 节 · 住宿偏好</p><span class="open-source">打开原文 →</span></div>
+            <div class="source"><div class="source-top"><svg class="ico s16"><use href="#i-file"/></svg><b>上传文件 · 酒店清单.pdf</b></div><p>第 3 页 · 筛选条件</p><span class="open-source">打开原文 →</span></div>
+          </div>
+          <div class="inspector-actions"><button class="btn">查看关系</button><button class="btn primary">编辑记忆</button></div>
+        </aside>
+      </div>
+    </main>
+  </section>
+
+  <section class="screen" id="b" aria-label="版本 B 深度聚焦">
+    <div class="traffic"><i></i><i></i><i></i></div>
+    <aside class="sidebar">
+      <div class="brand"><img src="../../../Youzi-youzi-brand/apps/rapid-mac/Sources/Rapid/Resources/Assets.xcassets/RapidLogo.imageset/RapidLogo@3x.png" alt="Youzi"/><strong>Youzi</strong></div>
+      <nav class="nav">
+        <div class="nav-item"><svg class="ico"><use href="#i-plus"/></svg><span>新任务</span></div><div class="nav-item"><svg class="ico"><use href="#i-folder"/></svg><span>空间</span></div><div class="nav-item"><svg class="ico"><use href="#i-user"/></svg><span>帮手</span></div><div class="nav-item active"><svg class="ico"><use href="#i-heart"/></svg><span>知我</span></div><div class="nav-item"><svg class="ico"><use href="#i-chart"/></svg><span>成果</span></div>
+      </nav>
+    </aside>
+    <main class="main">
+      <header class="topbar"><div class="title"><h1>知我</h1><small>语义空间</small></div><div class="search"><svg class="ico s16"><use href="#i-search"/></svg>搜索或直接问：我为什么偏爱安静的旅行？</div><div class="top-actions"><button class="btn"><svg class="ico s16"><use href="#i-upload"/></svg>添加资料</button><button class="btn primary">询问图谱</button></div></header>
+      <div class="filters"><span class="filter active">全部</span><span class="filter">工作</span><span class="filter">家庭</span><span class="filter">知识领域⌄</span><span class="filter">来源⌄</span><span class="filter">过去 1 年⌄</span><span class="filter-reset">显示 34 个主题</span></div>
+      <div class="workspace">
+        <div class="graph">
+          <div class="graph-label"><strong>聚焦路径 · 秋季旅行</strong><span>拖动旋转 · 双击展开 · ⌘K 搜索</span></div>
+          <div class="graph-stage">
+            <svg class="edges" viewBox="0 0 1200 760" preserveAspectRatio="none"><path class="hot" d="M500 355 C610 300 698 250 786 215"/><path class="hot" d="M500 355 C405 300 330 250 255 220"/><path class="hot" d="M500 355 C600 422 674 470 760 515"/><path class="hot" d="M500 355 C410 420 345 480 286 540"/><path d="M255 220 C190 170 145 160 100 178"/><path d="M786 215 C850 172 912 155 960 182"/><path d="M760 515 C835 492 905 470 970 500"/><path d="M286 540 C220 600 170 626 115 610"/><text x="640" y="274">家庭目标</text><text x="372" y="282">规划依据</text><text x="634" y="455">住宿偏好</text><text x="360" y="474">日期约束</text></svg>
+            <div class="graph-node selected" style="--x:42%;--y:47%;--s:1.14;--z:95px;--node-color:var(--yellow)">秋季旅行</div>
+            <div class="graph-node neighbor" style="--x:66%;--y:28%;--s:1.02;--z:62px;--node-color:var(--yellow)">家人</div><div class="graph-node neighbor" style="--x:22%;--y:29%;--s:1;--z:50px;--node-color:var(--green)">旅行规划</div><div class="graph-node neighbor" style="--x:64%;--y:68%;--s:1;--z:42px;--node-color:var(--pink)">酒店偏好</div><div class="graph-node neighbor" style="--x:25%;--y:71%;--s:.98;--z:38px;--node-color:var(--green)">重要日期</div>
+            <div class="graph-node" style="--x:9%;--y:23%;--s:.82;--z:-18px;--node-color:var(--green)">自然风景</div><div class="graph-node" style="--x:79%;--y:22%;--s:.8;--z:-24px;--node-color:var(--yellow)">父母</div><div class="graph-node" style="--x:82%;--y:65%;--s:.8;--z:-26px;--node-color:var(--pink)">步行友好</div><div class="graph-node" style="--x:10%;--y:82%;--s:.78;--z:-30px;--node-color:var(--green)">规律睡眠</div>
+            <div class="graph-node muted" style="--x:32%;--y:17%;--s:.74;--z:-48px;--node-color:var(--pink)">专注时间</div><div class="graph-node muted" style="--x:48%;--y:20%;--s:.7;--z:-54px;--node-color:var(--pink)">长期目标</div><div class="graph-node muted" style="--x:17%;--y:48%;--s:.76;--z:-45px;--node-color:var(--green)">阅读</div><div class="graph-node muted" style="--x:48%;--y:78%;--s:.72;--z:-52px;--node-color:var(--green)">晚间散步</div>
+          </div>
+          <div class="canvas-tools"><span class="tool">−</span><span class="tool">＋</span><span class="tool">聚焦</span><span class="mode"><span class="active">3D</span><span>2D</span></span></div>
+          <div class="pathbar">当前路径：<span>家庭</span>›<span>旅行</span>›<b>秋季旅行</b><span style="margin-left:auto">4 个邻居 · 3 个来源</span></div>
+        </div>
+        <aside class="inspector">
+          <div class="inspector-head"><div class="meta-line"><span>目标 · 家庭</span><span class="confidence">可信度 92%</span></div><h2>秋季旅行</h2><p class="summary">计划一次安静、自然、步行友好的秋季家庭旅行。</p></div>
+          <div class="section"><div class="section-title">当前关系路径<span>4</span></div><div class="tag-row"><span class="mini-tag">家人</span><span class="mini-tag">旅行规划</span><span class="mini-tag">酒店偏好</span><span class="mini-tag">重要日期</span></div></div>
+          <div class="section"><div class="section-title">证据链<span>3 个来源</span></div><div class="source"><div class="source-top"><svg class="ico s16"><use href="#i-chat"/></svg><b>家庭旅行计划</b><time>8 月 26 日</time></div><p>20:14 · “更喜欢安静、有自然风景的地方。”</p><span class="open-source">在聊天中定位 →</span></div><div class="source"><div class="source-top"><svg class="ico s16"><use href="#i-folder"/></svg><b>家庭规划 / 旅行计划.md</b></div><p>第 4 节 · 住宿偏好</p><span class="open-source">在空间中定位 →</span></div><div class="source"><div class="source-top"><svg class="ico s16"><use href="#i-file"/></svg><b>酒店清单.pdf</b></div><p>上传文件 · 第 3 页</p><span class="open-source">打开第 3 页 →</span></div></div>
+          <div class="inspector-actions"><button class="btn">纠正</button><button class="btn primary">继续询问</button></div>
+        </aside>
+      </div>
+    </main>
+  </section>
+
+  <section class="screen" id="c" aria-label="版本 C 图谱工作台">
+    <div class="traffic"><i></i><i></i><i></i></div>
+    <aside class="rail"><div class="brand compact"><img src="../../../Youzi-youzi-brand/apps/rapid-mac/Sources/Rapid/Resources/Assets.xcassets/RapidLogo.imageset/RapidLogo@3x.png" alt="Youzi"/><strong>Youzi</strong></div><nav class="nav"><div class="nav-item"><svg class="ico"><use href="#i-plus"/></svg><span>新任务</span></div><div class="nav-item"><svg class="ico"><use href="#i-folder"/></svg><span>空间</span></div><div class="nav-item"><svg class="ico"><use href="#i-user"/></svg><span>帮手</span></div><div class="nav-item active"><svg class="ico"><use href="#i-heart"/></svg><span>知我</span></div><div class="nav-item"><svg class="ico"><use href="#i-chart"/></svg><span>成果</span></div></nav></aside>
+    <header class="topbar"><div class="title"><h1>知我</h1><small>图谱工作台</small></div><div class="view-tabs"><span class="active">图谱</span><span>列表</span><span>时间线</span><span>来源</span></div><div class="search"><svg class="ico s16"><use href="#i-search"/></svg>搜索节点、关系或原文</div><div class="top-actions"><button class="btn"><svg class="ico s16"><use href="#i-upload"/></svg>添加资料</button><button class="btn"><svg class="ico s16"><use href="#i-settings"/></svg>管理</button></div></header>
+    <aside class="facets">
+      <p class="facet-title">筛选维度</p>
+      <div class="facet-group"><p class="facet-title">生活范围</p><div class="check on"><i>✓</i>全部<em>34</em></div><div class="check"><i></i>工作<em>9</em></div><div class="check"><i></i>家庭<em>12</em></div><div class="check"><i></i>个人<em>13</em></div></div>
+      <div class="facet-group"><p class="facet-title">知识领域</p><div class="check on"><i>✓</i>旅行与生活<em>8</em></div><div class="check"><i></i>健康与习惯<em>7</em></div><div class="check"><i></i>产品与设计<em>6</em></div><div class="check"><i></i>人物与关系<em>11</em></div></div>
+      <div class="facet-group"><p class="facet-title">来源</p><div class="check on"><i>✓</i>聊天<em>28</em></div><div class="check on"><i>✓</i>工作空间<em>12</em></div><div class="check on"><i>✓</i>上传文件<em>7</em></div><div class="check"><i></i>连接器<em>5</em></div></div>
+      <div class="facet-group"><p class="facet-title">时间</p><div class="check on"><i>✓</i>过去一年</div><div class="check"><i></i>过去 90 天</div><div class="check"><i></i>自定义范围</div></div>
+      <div class="saved-view"><b>已保存视图</b>家庭 · 旅行与生活<br/>聊天 + 空间 + 上传文件</div>
+    </aside>
+    <div class="graph">
+      <div class="graph-label"><strong>家庭 · 旅行与生活</strong><span>16 个节点 · 29 条关系 · 已按关联度聚类</span></div>
+      <div class="graph-stage"><svg class="edges" viewBox="0 0 850 720" preserveAspectRatio="none"><path class="hot" d="M415 350 C510 300 580 250 650 215"/><path class="hot" d="M415 350 C330 290 265 250 200 220"/><path class="hot" d="M415 350 C495 420 560 475 630 520"/><path class="hot" d="M415 350 C350 430 300 490 250 545"/><path d="M200 220 C150 170 110 155 70 180"/><path d="M650 215 C710 170 750 160 792 190"/><path d="M630 520 C700 490 750 480 800 510"/><path d="M250 545 C190 590 135 610 80 590"/><text x="526" y="277">属于</text><text x="300" y="285">依据</text><text x="526" y="454">偏好</text><text x="305" y="468">约束</text></svg>
+        <div class="graph-node selected" style="--x:49%;--y:48%;--s:1.08;--z:55px;--node-color:var(--yellow)">秋季旅行</div><div class="graph-node neighbor" style="--x:76%;--y:29%;--s:1;--z:35px;--node-color:var(--yellow)">家人</div><div class="graph-node neighbor" style="--x:24%;--y:30%;--s:1;--z:28px;--node-color:var(--green)">旅行规划</div><div class="graph-node neighbor" style="--x:74%;--y:70%;--s:.98;--z:24px;--node-color:var(--pink)">酒店偏好</div><div class="graph-node neighbor" style="--x:29%;--y:74%;--s:.96;--z:18px;--node-color:var(--green)">重要日期</div><div class="graph-node" style="--x:8%;--y:24%;--s:.78;--z:-20px;--node-color:var(--green)">自然风景</div><div class="graph-node" style="--x:91%;--y:24%;--s:.78;--z:-22px;--node-color:var(--yellow)">父母</div><div class="graph-node" style="--x:91%;--y:68%;--s:.78;--z:-20px;--node-color:var(--pink)">步行友好</div><div class="graph-node" style="--x:10%;--y:82%;--s:.76;--z:-24px;--node-color:var(--green)">规律睡眠</div><div class="graph-node muted" style="--x:45%;--y:20%;--s:.72;--z:-44px;--node-color:var(--pink)">长期目标</div><div class="graph-node muted" style="--x:53%;--y:80%;--s:.7;--z:-46px;--node-color:var(--green)">晚间散步</div><div class="graph-node muted" style="--x:18%;--y:49%;--s:.7;--z:-48px;--node-color:var(--pink)">阅读</div>
+      </div>
+      <div class="canvas-tools"><span class="tool">−</span><span class="tool">＋</span><span class="tool">聚焦邻居</span><span class="tool">重置布局</span><span class="mode"><span class="active">3D</span><span>2D</span></span></div>
+    </div>
+    <aside class="inspector">
+      <div class="inspector-head"><div class="meta-line"><span>目标 · 家庭</span><span class="confidence">可信度 92%</span></div><h2>秋季旅行</h2><p class="summary">计划一次安静、自然、步行友好的秋季家庭旅行。</p></div>
+      <div class="section"><div class="section-title">关系路径<span>一跳邻居</span></div><div class="tag-row"><span class="mini-tag">家人 · 属于</span><span class="mini-tag">旅行规划 · 依据</span><span class="mini-tag">酒店偏好 · 偏好</span><span class="mini-tag">重要日期 · 约束</span></div></div>
+      <div class="section"><div class="section-title">引用与定位<span>3</span></div><div class="source"><div class="source-top"><svg class="ico s16"><use href="#i-chat"/></svg><b>家庭旅行计划</b><time>8 月 26 日</time></div><p>消息 18 · 20:14<br/>“更喜欢安静、有自然风景的地方。”</p><span class="open-source">在聊天中打开 →</span></div><div class="source"><div class="source-top"><svg class="ico s16"><use href="#i-folder"/></svg><b>家庭规划 / 旅行计划.md</b></div><p>第 4 节 · 住宿偏好 · 第 2 段</p><span class="open-source">在空间中打开 →</span></div><div class="source"><div class="source-top"><svg class="ico s16"><use href="#i-file"/></svg><b>酒店清单.pdf</b></div><p>上传于 8 月 20 日 · 第 3 页</p><span class="open-source">打开第 3 页 →</span></div></div>
+      <div class="inspector-actions"><button class="btn">纠正记忆</button><button class="btn primary">查看完整证据</button></div>
+    </aside>
+  </section>
+
+  <div class="tab-hint">预览参数：?v=A / ?v=B / ?v=C</div>
+  <script>
+    const key = (new URLSearchParams(location.search).get('v') || 'A').toLowerCase();
+    const active = document.getElementById(['a','b','c'].includes(key) ? key : 'a');
+    active.classList.add('active');
+    addEventListener('keydown', (event) => {
+      const next = ({'1':'A','2':'B','3':'C'})[event.key];
+      if (next) location.search = '?v=' + next;
+    });
+  </script>
+</body>
+</html>
