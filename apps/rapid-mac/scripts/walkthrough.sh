@@ -18,7 +18,7 @@
 # Screencaps land under /tmp/rapid-walkthrough-<UTC>/.
 set -euo pipefail
 
-APP="Rapid-MLX"
+APP="Youzi"
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 OUT="/tmp/rapid-walkthrough-${STAMP}"
 mkdir -p "$OUT"
@@ -42,7 +42,7 @@ screencapture -x "$OUT/F1_launch.png"
 echo "==> F5 ModelPickerBar.PrimaryButton click"
 osascript <<'OSA' 2>&1 | tee "$OUT/F5_click.log"
 tell application "System Events"
-    tell process "Rapid-MLX"
+    tell process "Youzi"
         try
             -- Use the AXIdentifier attribute to find the primary
             -- start/stop button regardless of which state-label it
@@ -63,7 +63,7 @@ screencapture -x "$OUT/F5_after_click.png"
 echo "==> F2 Sidebar.NewChat click"
 osascript <<'OSA' 2>&1 | tee "$OUT/F2_newchat.log"
 tell application "System Events"
-    tell process "Rapid-MLX"
+    tell process "Youzi"
         try
             set newChat to (first button of window 1 whose value of attribute "AXIdentifier" is "Sidebar.NewChat")
             click newChat
@@ -80,7 +80,7 @@ screencapture -x "$OUT/F2_after_newchat.png"
 # --- F3: type + send via SendOrStopButton ---
 echo "==> F3 type message + click ChatView.SendOrStopButton"
 osascript <<'OSA'
-tell application "Rapid-MLX" to activate
+tell application "Youzi" to activate
 delay 0.5
 tell application "System Events"
     keystroke "What is 7 plus 5? Answer in one word."
@@ -89,7 +89,7 @@ OSA
 sleep 1
 osascript <<'OSA' 2>&1 | tee "$OUT/F3_send.log"
 tell application "System Events"
-    tell process "Rapid-MLX"
+    tell process "Youzi"
         try
             set sendBtn to (first button of window 1 whose value of attribute "AXIdentifier" is "ChatView.SendOrStopButton")
             click sendBtn

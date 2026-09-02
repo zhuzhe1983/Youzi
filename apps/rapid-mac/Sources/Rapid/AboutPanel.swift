@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// A clean, branded About window for Rapid-MLX.
+/// A clean, branded About window for Youzi.
 ///
 /// Replaces the bare system ``orderFrontStandardAboutPanel`` (which
 /// surfaced the internal ``rapid-mlx`` binary path + an out-of-date
@@ -63,7 +63,7 @@ enum AboutPanel {
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isMovableByWindowBackground = true
-        win.title = "About Rapid-MLX"
+        win.title = "About Youzi"
         win.setContentSize(NSSize(width: 360, height: 340))
         win.center()
         win.isReleasedWhenClosed = false
@@ -163,17 +163,10 @@ private struct AboutView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(RapidTheme.brandAmberTint)
-                    .frame(width: 64, height: 64)
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 30, weight: .semibold))
-                    .foregroundStyle(RapidTheme.brandAmber)
-            }
+            YouziLogo(size: 72)
             .padding(.top, 8)
 
-            Text("Rapid-MLX")
+            Text("Youzi")
                 .font(.title2.weight(.bold))
 
             Text(versionLine)
@@ -196,7 +189,7 @@ private struct AboutView: View {
                 .textSelection(.enabled)
             }
 
-            Text("Fast, private AI that runs on your Mac.")
+            Text("A private AI platform made for Youzi.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

@@ -75,7 +75,7 @@ final class ImageGenerationPixelTests: XCTestCase {
             app.terminate()
             terminateFakeSidecars(recordedIn: eventLog, alias: "fake-image-alias")
         }
-        XCTAssertTrue(app.windows["Rapid-MLX"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.windows["Youzi"].waitForExistence(timeout: 20))
         dismissFirstRunIfNeeded(in: app)
         let images = element("Sidebar.Images", in: app)
         XCTAssertTrue(images.waitForExistence(timeout: 10))

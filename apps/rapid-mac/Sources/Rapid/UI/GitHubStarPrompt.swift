@@ -41,7 +41,7 @@ struct GitHubStarButton: View {
         )
         .contentShape(Capsule(style: .continuous))
         .accessibilityIdentifier(accessibilityIdentifier)
-        .accessibilityHint("Opens the Rapid-MLX repository in your browser")
+        .accessibilityHint("Opens the Rapid-MLX engine repository in your browser")
     }
 }
 
@@ -61,11 +61,11 @@ struct GitHubStarPromptCard: View {
 
             VStack(alignment: .leading, spacing: RapidTheme.Space.sm) {
                 VStack(alignment: .leading, spacing: RapidTheme.Space.xs) {
-                    Text("Enjoying Rapid-MLX?")
+                    Text("Enjoying Youzi?")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(RapidTheme.textPrimary)
 
-                    Text("Rapid-MLX is open source. If it helped today, a GitHub star helps other developers find it.")
+                    Text("Youzi is powered by open-source Rapid-MLX. If it helped today, a GitHub star helps other developers find the engine.")
                         .font(.system(size: 14))
                         .foregroundStyle(RapidTheme.textSecondary)
                         .lineSpacing(2)
@@ -110,7 +110,7 @@ struct GitHubStarPromptCard: View {
                     .frame(maxWidth: .infinity, minHeight: RapidTheme.ControlHeight.medium)
                     .disabled(prompt.isStarring)
                     .accessibilityHint(
-                        "Stars the Rapid-MLX repository using GitHub CLI, or opens GitHub if unavailable"
+                        "Stars the Rapid-MLX engine repository using GitHub CLI, or opens GitHub if unavailable"
                     )
                     .accessibilityIdentifier("GitHub.Star.ValueMoment.Open")
 

@@ -131,7 +131,7 @@ struct ChatScrollRuntimeCheck {
         let capture = ScrollCapture()
         let host = NSHostingView(
             rootView: NavigationSplitView {
-                Text("Rapid-MLX")
+                Text("Youzi")
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .navigationSplitViewColumnWidth(180)
             } detail: {
@@ -146,7 +146,7 @@ struct ChatScrollRuntimeCheck {
             backing: .buffered,
             defer: false
         )
-        window.title = "Rapid-MLX"
+        window.title = "Youzi"
         window.titlebarAppearsTransparent = true
         window.toolbar = NSToolbar(identifier: "Rapid.ChatScrollCheck")
         window.contentView = host

@@ -27,7 +27,7 @@ enum DiagnosticsBundle {
         var out = ""
         func line(_ s: String) { out += s + "\n" }
 
-        line("Rapid-MLX diagnostics")
+        line("Youzi diagnostics")
         line("=====================")
         line("Generated: \(ISO8601DateFormatter().string(from: Date()))")
         line("")
@@ -66,7 +66,7 @@ enum DiagnosticsBundle {
     static func exportViaSavePanel(server: ServerManager) {
         let report = makeReport(server: server)
         let panel = NSSavePanel()
-        panel.title = "Export Rapid-MLX Diagnostics"
+        panel.title = "Export Youzi Diagnostics"
         panel.nameFieldStringValue = defaultFilename()
         panel.allowedContentTypes = [.plainText]
         panel.isExtensionHidden = false

@@ -1329,8 +1329,8 @@ struct ContentView: View {
                 tone: .error,
                 kicker: "SETUP COULDN'T RUN",
                 title: "Setup didn't finish",
-                message: "Rapid-MLX isn't fully set up yet. "
-                    + "Reopen Rapid-MLX to run the one-time setup again."
+                message: "Youzi isn't fully set up yet. "
+                    + "Reopen Youzi to run the one-time setup again."
             ) {
                 VStack(alignment: .leading, spacing: RapidTheme.Space.lg) {
                     // Same two branches, same actions, same ordering as
@@ -1350,7 +1350,7 @@ struct ContentView: View {
                             Button("Recheck") { recheckEngine() }
                                 .buttonStyle(.onboardingOutline)
                                 .accessibilityIdentifier("MissingRuntime.Recheck")
-                            Button("Quit Rapid-MLX") { NSApp.terminate(nil) }
+                            Button("Quit Youzi") { NSApp.terminate(nil) }
                                 .buttonStyle(.onboardingQuiet)
                                 .accessibilityIdentifier("MissingRuntime.Quit")
                         }
@@ -1359,7 +1359,7 @@ struct ContentView: View {
                             Button("Recheck") { recheckEngine() }
                                 .buttonStyle(.onboardingPrimary)
                                 .accessibilityIdentifier("MissingRuntime.Recheck")
-                            Button("Quit Rapid-MLX") { NSApp.terminate(nil) }
+                            Button("Quit Youzi") { NSApp.terminate(nil) }
                                 .buttonStyle(.onboardingOutline)
                                 .accessibilityIdentifier("MissingRuntime.Quit")
                         }
@@ -1377,7 +1377,7 @@ struct ContentView: View {
                             .accessibilityIdentifier("MissingRuntime.RecheckStatus")
                     }
 
-                    Text("Rapid-MLX runs AI models on your Mac. Your chats stay on "
+                    Text("Youzi runs AI models on your Mac. Your chats stay on "
                          + "this computer — no messages are sent to the cloud.")
                         .scaledSystemFont(13)
                         .foregroundStyle(RapidTheme.textTertiary)
@@ -2000,7 +2000,7 @@ struct SettingsGearButton: View {
 ///     build ahead of the manifest is not a fault either.
 ///
 /// Clicks deep-link to Settings → App, which is the canonical home
-/// for "update Rapid-MLX Desktop". GitHub is deliberately NOT a
+/// for "update Youzi". GitHub is deliberately NOT a
 /// click target: the source repo is private, so a github.com nav
 /// would 404 for end users.
 struct DesktopVersionPill: View {
@@ -2112,12 +2112,12 @@ struct DesktopVersionPill: View {
     private var label: some View {
         switch state {
         case .upToDate(let version):
-            Text("Rapid-MLX \(version) · up to date")
+            Text("Youzi \(version) · up to date")
         case .updateAvailable(let current, let latest):
-            Text("Rapid-MLX \(current) · update \(latest) available")
+            Text("Youzi \(current) · update \(latest) available")
                 .fontWeight(.medium)
         case .unknown(let version):
-            Text("Rapid-MLX \(version)")
+            Text("Youzi \(version)")
         }
     }
 
@@ -2142,11 +2142,11 @@ struct DesktopVersionPill: View {
     private var tooltip: String {
         switch state {
         case .upToDate(let version):
-            return "Rapid-MLX \(version) is the latest release. Click to open Settings → App."
+            return "Youzi \(version) is the latest release. Click to open Settings → App."
         case .updateAvailable(let current, let latest):
-            return "Rapid-MLX \(latest) is available (you're on \(current)). Click to install."
+            return "Youzi \(latest) is available (you're on \(current)). Click to install."
         case .unknown(let version):
-            return "Rapid-MLX \(version). Click to open Settings → App."
+            return "Youzi \(version). Click to open Settings → App."
         }
     }
 }

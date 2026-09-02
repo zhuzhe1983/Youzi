@@ -3414,7 +3414,7 @@ Your previous draft refused the question by claiming you lack real-time access o
                 // crashing mid-reply. Give a plain recovery path; the
                 // raw engine detail stays in the logs (principle: error
                 // copy must be human + actionable).
-                return "Rapid lost the model mid-reply — it may have crashed. Restart it from the model bar at the top and try again."
+                return "Youzi lost the model mid-reply — it may have crashed. Restart it from the model bar at the top and try again."
             case .httpStatus(_, let body):
                 // #471: a genuine capacity rejection (out-of-memory
                 // admission cap, or the server busy finishing another
@@ -3426,7 +3426,7 @@ Your previous draft refused the question by claiming you lack real-time access o
                 case .outOfMemory: return outOfMemoryMessage
                 case .serverBusy: return serverBusyMessage
                 case .none:
-                    return "Rapid couldn't complete that request. Try again, or restart the model from the bar at the top."
+                    return "Youzi couldn't complete that request. Try again, or restart the model from the bar at the top."
                 }
             case .transport(let message):
                 // #471: a memory cap that trips mid-generation surfaces
@@ -3437,7 +3437,7 @@ Your previous draft refused the question by claiming you lack real-time access o
                 case .outOfMemory: return outOfMemoryMessage
                 case .serverBusy: return serverBusyMessage
                 case .none:
-                    return "Rapid lost its connection to the model. Restart it from the bar at the top and try again."
+                    return "Youzi lost its connection to the model. Restart it from the bar at the top and try again."
                 }
             }
         }
@@ -3451,7 +3451,7 @@ Your previous draft refused the question by claiming you lack real-time access o
             case NSURLErrorNetworkConnectionLost:
                 return "The model disconnected mid-reply. Restart it from the model bar at the top and try again."
             case NSURLErrorNotConnectedToInternet:
-                return "macOS says the network is off, but Rapid runs entirely on your Mac, so this usually doesn't matter. Restart the model from the model bar at the top; if that fails, restart your Mac."
+                return "macOS says the network is off, but Youzi runs entirely on your Mac, so this usually doesn't matter. Restart the model from the model bar at the top; if that fails, restart your Mac."
             default:
                 // Don't surface the raw NSURLError code/body (e.g.
                 // "NSURLErrorDomain error -1004") — the diagnostic is
@@ -3463,7 +3463,7 @@ Your previous draft refused the question by claiming you lack real-time access o
         // a cancelled task) is NOT one of our authored user-facing errors;
         // its localizedDescription is a raw diagnostic. The caller already
         // logged the raw error, so the user gets a plain, actionable path.
-        return "Rapid couldn't complete that request. Try again, or restart the model from the bar at the top."
+        return "Youzi couldn't complete that request. Try again, or restart the model from the bar at the top."
     }
 
     /// #471: the capacity failure modes that deserve a *specific* recovery
@@ -3511,5 +3511,5 @@ Your previous draft refused the question by claiming you lack real-time access o
     /// #471: concurrency backpressure is transient — distinct from OOM so
     /// the user waits instead of needlessly downsizing their model.
     nonisolated static let serverBusyMessage =
-        "Rapid is busy finishing another reply. Give it a moment, then try again."
+        "Youzi is busy finishing another reply. Give it a moment, then try again."
 }

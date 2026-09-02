@@ -39,7 +39,7 @@ struct ReonboardingResetTests {
         #expect(ReonboardingReset.confirmation(for: .onboarding).title
             == "Run guided setup again?")
         #expect(ReonboardingReset.confirmation(for: [.onboarding, .telemetry]).title
-            == "Erase this Mac's Rapid state and restart?")
+            == "Erase this Mac's Youzi state and restart?")
         #expect(ReonboardingReset.confirmation(for: .onboarding).confirmTitle
             == "Restart into onboarding")
         #expect(ReonboardingReset.confirmation(for: [.onboarding, .conversations]).confirmTitle

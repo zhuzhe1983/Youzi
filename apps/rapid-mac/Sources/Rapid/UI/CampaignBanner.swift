@@ -61,7 +61,7 @@ struct Campaign: Equatable, Sendable {
         id: "model-qwen35-35b-202608",
         kind: .newModel,
         title: "Qwen3.5 35B is ready",
-        body: "A smarter agentic model, tuned for Rapid-MLX. Download it now and keep working locally.",
+        body: "A smarter agentic model, tuned for Youzi. Download it now and keep working locally.",
         actionLabel: "Download model",
         action: .pullModel(.qwen35_35B4Bit)
     )

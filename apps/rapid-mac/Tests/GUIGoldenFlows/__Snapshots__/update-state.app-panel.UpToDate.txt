@@ -1,6 +1,6 @@
 # rapid-mac AX structural baseline v1
-AXApplication title="Rapid-MLX"
-  AXWindow subrole=AXStandardWindow id="main" title="Rapid-MLX"
+AXApplication title="Youzi"
+  AXWindow subrole=AXStandardWindow id="main" title="Youzi"
     AXGroup subrole=AXHostingView
       AXSplitGroup id="main, SidebarNavigationSplitView"
         AXGroup subrole=AXHostingView
@@ -12,7 +12,7 @@ AXApplication title="Rapid-MLX"
         AXGroup subrole=AXHostingView
           AXStaticText value=text enabled=true
           AXStaticText value=text enabled=true
-          AXButton id="GitHub.Star.EmptyState" desc="Star on GitHub" help="Opens the Rapid-MLX repository in your browser" enabled=true
+          AXButton id="GitHub.Star.EmptyState" desc="Star on GitHub" help="Opens the Rapid-MLX engine repository in your browser" enabled=true
           AXGroup desc="<model> isn't running, It's already downloaded — starting takes a few seconds." enabled=true
             AXStaticText value=text enabled=true
             AXStaticText value=text enabled=true
@@ -32,7 +32,7 @@ AXApplication title="Rapid-MLX"
       AXUnknown desc="CPU <percent>" enabled=true
       AXUnknown desc="GPU <gpu>" enabled=true
       AXUnknown desc="Memory <pressure>: <size> used out of <size>" enabled=true
-      AXButton id="Footer.DesktopVersionPill" desc="Rapid-MLX <version> <update-state>" help="Rapid-MLX <version> <update-state>" enabled=true
+      AXButton id="Footer.DesktopVersionPill" desc="Youzi <version> <update-state>" help="Youzi <version> <update-state>" enabled=true
     AXToolbar
       AXButton desc="Hide Sidebar" enabled=true
       AXButton id="Toolbar.SearchChats" desc="Search chats" enabled=true
@@ -76,7 +76,7 @@ AXApplication title="Rapid-MLX"
               AXButton id="Settings.Category.app" desc="App" enabled=true
           AXColumn id="ListColumn"
       AXScrollArea
-        AXHeading desc="Rapid-MLX, Self-update for Rapid-MLX. New releases bundle the latest models, performance improvements, and bug fixes." enabled=true
+        AXHeading desc="Youzi, Self-update for Youzi. New releases bundle the latest models, performance improvements, and bug fixes." enabled=true
         AXHeading desc="Version" enabled=true
         AXStaticText value=text enabled=true
         AXStaticText value=text enabled=true
@@ -90,8 +90,8 @@ AXApplication title="Rapid-MLX"
         AXButton id="Settings.App.ExportDiagnostics" desc="Export diagnostics…" enabled=true
         AXHeading desc="Setup, Run the guided model setup again. Your settings, conversations, downloaded models, and telemetry choice stay untouched." enabled=true
         AXButton id="Settings.App.RunSetupAgain" desc="Run setup again…" enabled=true
-        AXHeading desc="Window, Choose what happens when you close the main window. Rapid-MLX keeps running in the menu bar either way — this only affects whether the Dock icon stays visible." enabled=true
-        AXCheckBox subrole=AXToggle id="Settings.App.HideDockOnCloseToggle" desc="Hide Dock icon when closing window" help="Rapid-MLX remains available from the menu bar." value=bool:false enabled=true
+        AXHeading desc="Window, Choose what happens when you close the main window. Youzi keeps running in the menu bar either way — this only affects whether the Dock icon stays visible." enabled=true
+        AXCheckBox subrole=AXToggle id="Settings.App.HideDockOnCloseToggle" desc="Hide Dock icon when closing window" help="Youzi remains available from the menu bar." value=bool:false enabled=true
         AXButton id="Settings.App.ResetDockOnboardingCTA" desc="Reset onboarding alerts" enabled=true
     AXButton subrole=AXCloseButton enabled=true
     AXButton subrole=AXZoomButton enabled=true

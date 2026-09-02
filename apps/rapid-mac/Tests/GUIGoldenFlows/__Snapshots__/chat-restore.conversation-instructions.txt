@@ -1,6 +1,6 @@
 # rapid-mac AX structural baseline v1
-AXApplication title="Rapid-MLX"
-  AXWindow subrole=AXStandardWindow id="main" title="Rapid-MLX"
+AXApplication title="Youzi"
+  AXWindow subrole=AXStandardWindow id="main" title="Youzi"
     AXGroup subrole=AXHostingView
       AXSplitGroup id="main, SidebarNavigationSplitView"
         AXGroup subrole=AXHostingView
@@ -61,7 +61,7 @@ AXApplication title="Rapid-MLX"
       AXUnknown desc="CPU <percent>" enabled=true
       AXUnknown desc="GPU <gpu>" enabled=true
       AXUnknown desc="Memory <pressure>: <size> used out of <size>" enabled=true
-      AXButton id="Footer.DesktopVersionPill" desc="Rapid-MLX <version> <update-state>" help="Rapid-MLX <version> <update-state>" enabled=true
+      AXButton id="Footer.DesktopVersionPill" desc="Youzi <version> <update-state>" help="Youzi <version> <update-state>" enabled=true
     AXToolbar
       AXButton desc="Hide Sidebar" enabled=true
       AXButton id="Toolbar.SearchChats" desc="Search chats" enabled=true

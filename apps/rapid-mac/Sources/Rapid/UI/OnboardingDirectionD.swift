@@ -190,7 +190,7 @@ struct OnboardingSetupRail: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 9) {
                     OnboardingRailMark()
-                    Text("Rapid-MLX")
+                    Text("Youzi")
                         .scaledSystemFont(13, weight: .semibold)
                         .foregroundStyle(RapidTheme.textPrimary)
                 }
@@ -266,18 +266,10 @@ struct OnboardingSetupRail: View {
     }
 }
 
-/// The brand mark in the rail head: an ink tile with an amber R.
+/// The compact Youzi mark in the rail head.
 private struct OnboardingRailMark: View {
     var body: some View {
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
-            .fill(RapidTheme.textPrimary)
-            .frame(width: 22, height: 22)
-            .overlay {
-                Text("R")
-                    .scaledSystemFont(13, relativeTo: .caption, weight: .bold)
-                    .foregroundStyle(RapidTheme.brandPrimary)
-            }
-            .accessibilityHidden(true)
+        YouziLogo(size: 22)
     }
 }
 

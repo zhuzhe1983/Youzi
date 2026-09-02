@@ -48,7 +48,7 @@ enum ModelDeletion {
         }
         guard let tool = binaryPath,
               FileManager.default.isExecutableFile(atPath: tool.path) else {
-            return .failed(message: "Rapid isn't fully set up. Please restart Rapid-MLX.")
+            return .failed(message: "Youzi isn't fully set up. Please restart Youzi.")
         }
 
         let repo: String?

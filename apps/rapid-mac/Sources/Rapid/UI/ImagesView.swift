@@ -176,7 +176,7 @@ struct ImagesView: View {
                 : "Create images locally, then keep generating offline.",
             hint: readiness.isReady
                 ? nil
-                : "Pick a starter below while Rapid gets the model ready.",
+                : "Pick a starter below while Youzi gets the model ready.",
             markDiameter: aspectPreviewSize.height,
             marksOnBackplate: false,
             mark: { aspectPreview },

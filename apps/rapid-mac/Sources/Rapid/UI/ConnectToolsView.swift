@@ -291,7 +291,7 @@ struct ConnectToolsView: View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.md) {
             SectionHeader(
                 "Start here",
-                subtitle: "Run a text model first. Rapid will then create a private local endpoint and ready-to-copy setup commands."
+                subtitle: "Run a text model first. Youzi will then create a private local endpoint and ready-to-copy setup commands."
             )
             // The inline picker lets the user choose a different compatible
             // downloaded model before starting, without leaving the page.
@@ -486,7 +486,7 @@ struct ConnectToolsView: View {
                     id: target.id,
                     name: target.name,
                     symbol: "slider.horizontal.3",
-                    blurb: "Configure this client to use Rapid-MLX.\(destination)\(cursorCaveat)",
+                    blurb: "Configure this client to use Youzi's Rapid-MLX engine.\(destination)\(cursorCaveat)",
                     snippet: IntegrationLaunchCommand.configWriter(
                         id: target.id, serverURL: serverOrigin, key: snippetKey, model: snippetModel, cli: cliCommand
                     ),
@@ -505,7 +505,7 @@ struct ConnectToolsView: View {
                 id: target.id,
                 name: target.name,
                 symbol: "point.3.connected.trianglepath.dotted",
-                blurb: "Print this adapter's setup guide for the local endpoint — Rapid can't launch this client for you.",
+                blurb: "Print this adapter's setup guide for the local endpoint — Youzi can't launch this client for you.",
                 snippet: command,
                 displaySnippet: command,
                 action: .guide
@@ -532,7 +532,7 @@ struct ConnectToolsView: View {
                 id: "codex",
                 name: "Codex",
                 symbol: "chevron.left.forwardslash.chevron.right",
-                blurb: "Launch with an isolated Rapid provider for one session. Your existing Codex provider and shell environment stay unchanged.",
+                blurb: "Launch with an isolated Youzi provider for one session. Your existing Codex provider and shell environment stay unchanged.",
                 snippet: AgentLaunchCommand.codex(
                     baseURL: openAIBaseURL, key: snippetKey, model: snippetModel
                 ),

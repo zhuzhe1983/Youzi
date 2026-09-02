@@ -13,7 +13,7 @@ if [[ "${RAPID_HOST_PRECHECK_HELD:-0}" != "1" && "${CI:-}" != "true" ]]; then
     exec "$SCRIPT_DIR/dogfood-host-precheck.sh" -- "$0" "$@"
 fi
 
-APP="${RAPID_GUI_APP:-Rapid-MLX}"
+APP="${RAPID_GUI_APP:-Youzi}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="${RAPID_GUI_OUT:-/tmp/rapid-gui-ax-${STAMP}}"
 BRIDGE="${PEEKABOO_BRIDGE_SOCKET:-$HOME/Library/Application Support/Peekaboo/daemon.sock}"

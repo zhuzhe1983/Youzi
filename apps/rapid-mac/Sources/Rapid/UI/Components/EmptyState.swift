@@ -13,7 +13,7 @@ import SwiftUI
 ///
 /// The mark is generic over its content rather than type-erased through
 /// ``AnyView``: the empty state's brand moment is a real bundled image
-/// (``CheetahLogo``) on the chat surface but a plain SF Symbol
+/// (``YouziLogo``) on the chat surface but a plain SF Symbol
 /// elsewhere, and both should stay statically typed so SwiftUI can
 /// diff them properly.
 ///

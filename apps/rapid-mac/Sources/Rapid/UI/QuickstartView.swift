@@ -1870,7 +1870,7 @@ struct QuickstartView: View {
     private var welcomeStep: some View {
         OnboardingCenteredCanvas {
             VStack(alignment: .leading, spacing: 0) {
-                CheetahLogo(size: 156)
+                YouziLogo(size: 156)
                     .padding(.bottom, 30)
 
                 OnboardingDisplayTitle(text: "Nothing you type\nleaves this Mac.", size: 52)
@@ -2085,7 +2085,7 @@ struct QuickstartView: View {
         transientStep(
             kicker: "CHECKING THIS MAC",
             title: "Reading this Mac…",
-            subtitle: "Rapid-MLX checks the chip, the unified memory and the free "
+            subtitle: "Youzi checks the chip, the unified memory and the free "
                 + "space on the volume that holds your Hugging Face cache. "
                 + "Nothing is uploaded — the read is local.",
             identifier: "Quickstart.Step2.CheckingHardware"
@@ -2127,7 +2127,7 @@ struct QuickstartView: View {
         transientStep(
             kicker: "FINDING THE BEST FIT",
             title: "Matching models to \(Self.wholeGB(hardware.physicalRAMGB))…",
-            subtitle: "Rapid-MLX is reading the model catalogue to see which models "
+            subtitle: "Youzi is reading the model catalogue to see which models "
                 + "are already on this Mac and how much each one would download. "
                 + "The short list below is fixed; only the “already downloaded” "
                 + "part depends on this read.",
@@ -3241,7 +3241,7 @@ struct QuickstartView: View {
         let ceiling = ModelSizing.largestFittingGB(on: hardware)
         return "macOS keeps about a fifth of unified memory for itself, so a "
             + "\(wholeGB(hardware.physicalRAMGB)) Mac has roughly "
-            + "\(preciseGB(hardware.usableRAMGB)) to give a model. Rapid keeps "
+            + "\(preciseGB(hardware.usableRAMGB)) to give a model. Youzi keeps "
             + "some of that free for your conversation, so it offers models "
             + "needing up to about \(preciseGB(ceiling))."
     }
@@ -3800,7 +3800,7 @@ struct QuickstartView: View {
                 )
                 downloadFact(
                     "QUITTING",
-                    "Quitting Rapid-MLX stops the transfer. Setup is not marked "
+                    "Quitting Youzi stops the transfer. Setup is not marked "
                         + "finished, so it runs again on the next launch."
                 )
                 // Paper's third row said "NO CANCEL — cancelling a download

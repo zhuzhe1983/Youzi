@@ -1,7 +1,7 @@
 // swift-tools-version:6.0
 import PackageDescription
 
-// Minimal menu-bar app ("Rapid-MLX" v1.0). Source-level target is
+// Minimal menu-bar app ("Youzi" v1.0). Source-level target is
 // macOS 14 (the MLX floor). Two SPM dependencies remain — block-level
 // markdown rendering and LaTeX — both on the chat streaming path.
 let package = Package(
@@ -68,13 +68,18 @@ let package = Package(
             // The release assembler compiles the app icon catalog with
             // actool. SwiftPM does not consume it, so exclude it from target
             // discovery while leaving it available to scripts/build.sh.
-            exclude: ["Resources/Assets.xcassets"],
-            // Brand cheetah PNGs + the per-alias benchmark scores + the
+            exclude: [
+                "Resources/Assets.xcassets",
+                // Kept only as a negative fixture for the optional sidecar
+                // vision smoke test; no longer shipped as product branding.
+                "Resources/cheetah.png",
+                "Resources/cheetah-sm.png",
+            ],
+            // Youzi logo PNG + the per-alias benchmark scores + the
             // localizable strings table. Loaded at runtime via
             // ``Bundle.main`` (flat files in the production .app).
             resources: [
-                .process("Resources/cheetah.png"),
-                .process("Resources/cheetah-sm.png"),
+                .process("Resources/youzi-logo.png"),
                 .process("Resources/Localizable.xcstrings"),
                 .process("Resources/benchmark-scores.json")
             ]

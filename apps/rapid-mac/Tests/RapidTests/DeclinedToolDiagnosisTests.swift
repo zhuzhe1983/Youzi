@@ -302,7 +302,7 @@ final class DeclinedToolDiagnosisTests {
         #expect(kind == .browsePageTooLarge)
         let diagnosis = FailureDiagnoser.diagnosis(for: try #require(kind))
         #expect(diagnosis.message ==
-                "This page is too large for Rapid to read at once. Search it or open a smaller page instead.")
+                "This page is too large for Youzi to read at once. Search it or open a smaller page instead.")
         #expect(diagnosis.action == nil)
     }
 

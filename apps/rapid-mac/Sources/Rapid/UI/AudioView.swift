@@ -211,7 +211,7 @@ struct AudioView: View {
             symbol: "waveform",
             title: "Audio unavailable",
             message: server.binaryPath == nil
-                ? "The bundled engine could not be found. The rest of Rapid-MLX remains available."
+                ? "The bundled engine could not be found. The rest of Youzi remains available."
                 : "No model in this build supports \(operation). Audio models can be managed in Settings."
         ) {
             Button("Open Model Management", systemImage: "square.stack.3d.up") {
@@ -618,7 +618,7 @@ struct AudioView: View {
             // usable. Never turn the audio server's lazy health response into
             // a false Ready state when that proof is absent.
             guard viewModel.audioModels.first(where: { $0.alias == alias })?.cached == true else {
-                viewModel.errorMessage = "The download finished, but Rapid couldn't find the model on disk. Try downloading it again."
+                viewModel.errorMessage = "The download finished, but Youzi couldn't find the model on disk. Try downloading it again."
                 return
             }
         }

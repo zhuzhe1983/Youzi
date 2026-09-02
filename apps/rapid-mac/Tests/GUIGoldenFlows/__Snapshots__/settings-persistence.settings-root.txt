@@ -1,6 +1,6 @@
 # rapid-mac AX structural baseline v1
-AXApplication title="Rapid-MLX"
-  AXWindow subrole=AXStandardWindow id="main" title="Rapid-MLX"
+AXApplication title="Youzi"
+  AXWindow subrole=AXStandardWindow id="main" title="Youzi"
     AXGroup subrole=AXHostingView
       AXSplitGroup id="main, SidebarNavigationSplitView"
         AXGroup subrole=AXHostingView
@@ -12,7 +12,7 @@ AXApplication title="Rapid-MLX"
         AXGroup subrole=AXHostingView
           AXStaticText value=text enabled=true
           AXStaticText value=text enabled=true
-          AXButton id="GitHub.Star.EmptyState" desc="Star on GitHub" help="Opens the Rapid-MLX repository in your browser" enabled=true
+          AXButton id="GitHub.Star.EmptyState" desc="Star on GitHub" help="Opens the Rapid-MLX engine repository in your browser" enabled=true
           AXGroup desc="<model> isn't running, It's already downloaded — starting takes a few seconds." enabled=true
             AXStaticText value=text enabled=true
             AXStaticText value=text enabled=true
@@ -32,7 +32,7 @@ AXApplication title="Rapid-MLX"
       AXUnknown desc="CPU <percent>" enabled=true
       AXUnknown desc="GPU <gpu>" enabled=true
       AXUnknown desc="Memory <pressure>: <size> used out of <size>" enabled=true
-      AXButton id="Footer.DesktopVersionPill" desc="Rapid-MLX <version> <update-state>" help="Rapid-MLX <version> <update-state>" enabled=true
+      AXButton id="Footer.DesktopVersionPill" desc="Youzi <version> <update-state>" help="Youzi <version> <update-state>" enabled=true
     AXToolbar
       AXButton desc="Hide Sidebar" enabled=true
       AXButton id="Toolbar.SearchChats" desc="Search chats" enabled=true
@@ -88,7 +88,7 @@ AXApplication title="Rapid-MLX"
         AXStaticText id="Settings.ModelManagement.LargestModel" value=text enabled=true
         AXHeading desc="Preferences" enabled=true
         AXCheckBox subrole=AXToggle id="Settings.Models.ShowAllModelsToggle" desc="Show small models in the picker" help="Sub-1B models are hidden by default — they hallucinate within 1-2 turns and are intended for unit tests, not chat." value=bool:false enabled=true
-        AXCheckBox subrole=AXToggle id="Settings.Models.AutoStartOnLaunchToggle" desc="Auto-start model on launch" help="When off, opening Rapid-MLX will not load a model until you start one manually from the picker." value=bool:true enabled=true
+        AXCheckBox subrole=AXToggle id="Settings.Models.AutoStartOnLaunchToggle" desc="Auto-start model on launch" help="When off, opening Youzi will not load a model until you start one manually from the picker." value=bool:true enabled=true
         AXCheckBox subrole=AXToggle id="Settings.Models.ConfirmActiveRequestSwitchToggle" desc="Confirm before interrupting active requests" help="When off, model switches may interrupt active API or streaming requests without asking." value=bool:true enabled=true
         AXGroup id="Settings.ModelManagement.CapabilityTabs" desc="Model type" enabled=true
           AXButton desc="Chat models" enabled=true
@@ -130,7 +130,7 @@ AXApplication title="Rapid-MLX"
           AXStaticText value=text enabled=true
           AXUnknown desc="Accuracy: untested" enabled=true
           AXUnknown desc="Speed: untested" enabled=true
-          AXStaticText help="Measured size on disk. Downloaded by another app — Rapid can't delete it." value=text enabled=true
+          AXStaticText help="Measured size on disk. Downloaded by another app — Youzi can't delete it." value=text enabled=true
         AXStaticText id="Settings.ModelManagement.Footer" value=text enabled=true
     AXButton subrole=AXCloseButton enabled=true
     AXButton subrole=AXZoomButton enabled=true

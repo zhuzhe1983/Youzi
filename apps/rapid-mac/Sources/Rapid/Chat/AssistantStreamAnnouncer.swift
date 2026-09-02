@@ -59,7 +59,7 @@ struct AssistantStreamAnnouncer {
     mutating func firstTokenCue(fullContent: String) -> String? {
         guard !firstTokenAnnounced, !fullContent.isEmpty else { return nil }
         firstTokenAnnounced = true
-        return "Rapid is responding"
+        return "Youzi is responding"
     }
 
     /// Emit the trailing un-announced sentence(s) when a terminator has
