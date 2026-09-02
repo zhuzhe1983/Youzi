@@ -1305,7 +1305,8 @@ enum ModelCatalog {
     private static func runRapidMlxResult(
         binary: URL,
         args: [String],
-        hubCacheOverride: URL? = nil
+        hubCacheOverride: URL? = nil,
+        exactModelLinks: String? = ExternalModelRegistry.encodedEnvironmentValue()
     ) async -> RapidMlxResult {
         let processBox = CatalogProcessBox()
         return await withTaskCancellationHandler {
@@ -1320,7 +1321,8 @@ enum ModelCatalog {
             // paths and the #1415 telemetry opt-out for internal probes.
             task.environment = probeEnvironment(
                 ambient: ProcessInfo.processInfo.environment,
-                hubCacheOverride: hubCacheOverride
+                hubCacheOverride: hubCacheOverride,
+                exactModelLinks: exactModelLinks
             )
             let stdout = Pipe()
             let stderr = Pipe()
@@ -1448,10 +1450,16 @@ enum ModelCatalog {
     /// child has its own environment path and keeps telemetry enabled.
     nonisolated static func probeEnvironment(
         ambient: [String: String],
-        hubCacheOverride: URL?
+        hubCacheOverride: URL?,
+        exactModelLinks: String? = ExternalModelRegistry.encodedEnvironmentValue()
     ) -> [String: String] {
         var env = ambient
         env["DO_NOT_TRACK"] = "1"
+        // Exact model links are app-owned Layer-2 state. Never inherit a
+        // caller's ambient value: a shell export must not make an arbitrary
+        // local directory appear in Youzi's catalog. Assigning nil removes an
+        // ambient key when the managed registry is empty.
+        env[ExternalModelRegistry.environmentKey] = exactModelLinks
         if let hubCacheOverride {
             env["HF_HUB_CACHE"] = hubCacheOverride.path
             // Issue #1718: scan both Hugging Face and external-runtime layouts.

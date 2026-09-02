@@ -12,6 +12,7 @@ struct YouziDomainDocument: Codable, Equatable, Sendable {
     var skills: [YouziSkill]
     var connectors: [YouziConnector]
     var connectionAccounts: [YouziConnectionAccount]
+    var files: [YouziFile]
     var artifacts: [YouziArtifact]
     var templates: [YouziTemplate]
     var automations: [YouziAutomation]
@@ -30,6 +31,7 @@ struct YouziDomainDocument: Codable, Equatable, Sendable {
         skills: [YouziSkill] = [],
         connectors: [YouziConnector] = [],
         connectionAccounts: [YouziConnectionAccount] = [],
+        files: [YouziFile] = [],
         artifacts: [YouziArtifact] = [],
         templates: [YouziTemplate] = [],
         automations: [YouziAutomation] = [],
@@ -47,6 +49,7 @@ struct YouziDomainDocument: Codable, Equatable, Sendable {
         self.skills = skills
         self.connectors = connectors
         self.connectionAccounts = connectionAccounts
+        self.files = files
         self.artifacts = artifacts
         self.templates = templates
         self.automations = automations
@@ -67,6 +70,7 @@ struct YouziDomainDocument: Codable, Equatable, Sendable {
     mutating func upsert(_ record: YouziSkill) { Self.upsert(record, in: &skills) }
     mutating func upsert(_ record: YouziConnector) { Self.upsert(record, in: &connectors) }
     mutating func upsert(_ record: YouziConnectionAccount) { Self.upsert(record, in: &connectionAccounts) }
+    mutating func upsert(_ record: YouziFile) { Self.upsert(record, in: &files) }
     mutating func upsert(_ record: YouziArtifact) { Self.upsert(record, in: &artifacts) }
     mutating func upsert(_ record: YouziTemplate) { Self.upsert(record, in: &templates) }
     mutating func upsert(_ record: YouziAutomation) { Self.upsert(record, in: &automations) }

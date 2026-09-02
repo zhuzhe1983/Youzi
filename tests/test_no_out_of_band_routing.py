@@ -1129,6 +1129,16 @@ def _check_env_constant(
                 "external-model discovery/resolution boundary."
             )
         return
+    if value == "RAPID_MLX_EXACT_MODEL_LINKS":
+        # Narrow Desktop exact-link exception. The one approved consumer owns
+        # both strict JSON discovery and matching launch resolution; adding a
+        # second reader would create an unaudited model-routing surface.
+        if rel != "model_aliases.py":
+            offenders.append(
+                f"{rel}:{lineno} references `{value}` outside its approved "
+                "exact-model discovery/resolution boundary."
+            )
+        return
     if value == "RAPID_MLX_USER_ALIASES_FILE":
         # Narrow test-isolation/config-location exception for user aliases.
         # The file's CONTENT can affect alias resolution, so this is not a

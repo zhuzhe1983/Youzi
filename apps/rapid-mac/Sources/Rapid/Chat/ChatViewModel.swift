@@ -295,6 +295,12 @@ final class ChatViewModel {
     /// Kept as a callback so chat has no dependency on telemetry policy.
     private let onProductValueDelivered: @MainActor (ProductValueKind) -> Void
 
+    /// Additive metadata observer. Chat remains the canonical transcript owner;
+    /// the observer cannot mutate history and is weak to avoid an app graph
+    /// retain cycle.
+    @ObservationIgnored
+    private weak var conversationLifecycleObserver: (any ChatConversationLifecycleObserver)?
+
     init(
         client: ChatStreamClient = ChatStreamClient(),
         tools: any ToolRegistry = EmptyToolRegistry(),
@@ -335,6 +341,13 @@ final class ChatViewModel {
         self.folders = persistsConversations
             ? ConversationFolderStore.load(from: Self.folderStoreURL(for: conversationStoreURL))
             : []
+    }
+
+    func setConversationLifecycleObserver(
+        _ observer: (any ChatConversationLifecycleObserver)?
+    ) {
+        conversationLifecycleObserver = observer
+        observer?.conversationHistoryDidLoad(conversations)
     }
 
     /// The folder file that sits beside whichever conversation store is in
@@ -446,7 +459,7 @@ final class ChatViewModel {
                 at: 0
             )
         }
-        saveConversations()
+        saveConversations(reconciling: activeConversationID)
     }
 
     // MARK: - Background assist (titles, follow-ups)
@@ -740,7 +753,7 @@ final class ChatViewModel {
         guard let title = ConversationTitleSuggestion.parse(raw) else { return }
         conversations[index].title = title
         conversations[index].hasGeneratedTitle = true
-        saveConversations()
+        saveConversations(reconciling: id)
     }
 
     // MARK: - Conversation row actions (rename / pin / archive)
@@ -763,7 +776,7 @@ final class ChatViewModel {
         guard let index = conversations.firstIndex(where: { $0.id == id }) else { return false }
         conversations[index].title = trimmed
         conversations[index].hasCustomTitle = true
-        saveConversations()
+        saveConversations(reconciling: id)
         return true
     }
 
@@ -776,7 +789,7 @@ final class ChatViewModel {
         // Pinning something archived is contradictory — the row would be
         // pinned to a list it isn't in. Surfacing it is the intent.
         if pinned { conversations[index].isArchived = false }
-        saveConversations()
+        saveConversations(reconciling: id)
     }
 
     /// Archive / unarchive a conversation. Archiving is deliberately NOT a
@@ -792,7 +805,7 @@ final class ChatViewModel {
         guard conversations[index].isArchived != archived else { return }
         conversations[index].isArchived = archived
         if archived { conversations[index].isPinned = false }
-        saveConversations()
+        saveConversations(reconciling: id)
     }
 
     /// Update the instruction layer for the open conversation. Existing saved
@@ -805,12 +818,17 @@ final class ChatViewModel {
             return
         }
         conversations[index].customInstructions = Self.normalizedInstruction(value)
-        saveConversations()
+        saveConversations(reconciling: activeConversationID)
     }
 
-    private func saveConversations() {
-        guard persistsConversations else { return }
-        ConversationStore.save(conversations, to: conversationStoreURL)
+    private func saveConversations(reconciling changedID: UUID? = nil) {
+        if persistsConversations {
+            ConversationStore.save(conversations, to: conversationStoreURL)
+        }
+        if let changedID,
+           let conversation = conversations.first(where: { $0.id == changedID }) {
+            conversationLifecycleObserver?.conversationDidPersist(conversation)
+        }
     }
 
     // MARK: - Folders
@@ -884,7 +902,7 @@ final class ChatViewModel {
         guard conversations[index].folderID != folderID || needsSurfacing else { return }
         conversations[index].folderID = folderID
         if needsSurfacing { conversations[index].isArchived = false }
-        saveConversations()
+        saveConversations(reconciling: needsSurfacing ? id : nil)
     }
 
     private func saveFolders() {
@@ -949,6 +967,7 @@ final class ChatViewModel {
         }
         conversations.removeAll { $0.id == id }
         saveConversations()
+        conversationLifecycleObserver?.conversationWasDeleted(id: id)
     }
 
     // MARK: - In-memory message storage

@@ -390,6 +390,45 @@ struct ExternalModelLinkerTests {
         #expect(itemType(missing) == nil)
     }
 
+    @Test("Managed link enumeration includes valid and dangling links only")
+    func managedLinkEnumerationIsDirectAndNonResolving() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.makeValidModel()
+        let valid = try linkedURL(from: ExternalModelLinker.linkModel(
+            at: fixture.source,
+            into: fixture.links
+        ))
+        let dangling = fixture.links.appendingPathComponent(
+            ExternalModelLinker.managedLinkPrefix + "missing-0123456789abcdef"
+        )
+        try FileManager.default.createSymbolicLink(
+            at: dangling,
+            withDestinationURL: fixture.root.appendingPathComponent("gone")
+        )
+        let ordinary = fixture.links.appendingPathComponent("ordinary-link")
+        try FileManager.default.createSymbolicLink(at: ordinary, withDestinationURL: fixture.source)
+        let collision = fixture.links.appendingPathComponent(
+            ExternalModelLinker.managedLinkPrefix + "file-fedcba9876543210"
+        )
+        try Data("not a link".utf8).write(to: collision)
+
+        let links = try ExternalModelLinker.managedLinkURLs(in: fixture.links)
+
+        #expect(
+            Set(links.map(\.lastPathComponent))
+                == Set([valid, dangling].map(\.lastPathComponent))
+        )
+    }
+
+    @Test("A missing managed links directory enumerates as empty")
+    func missingManagedLinksDirectoryIsEmpty() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+
+        #expect(try ExternalModelLinker.managedLinkURLs(in: fixture.links).isEmpty)
+    }
+
     private func linkedURL(
         from outcome: ExternalModelLinker.LinkOutcome
     ) throws -> URL {

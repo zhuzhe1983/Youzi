@@ -1,24 +1,32 @@
+import AppKit
 import SwiftUI
 
-/// The first task-first Simple Mode shell. All live data comes from the same
-/// environment objects Professional Mode uses; these pages only reorganize and
-/// rename that state for a lower-cognitive-load presentation.
+/// The task-first Simple Mode presentation of the app-owned product graph.
+/// Professional Mode and Simple Mode share the same runtime and persistence;
+/// this shell only changes information architecture and language.
 struct YouziSimpleShell: View {
     @Environment(YouziExperienceModeConfig.self) private var experienceMode
     @Environment(ChatViewModel.self) private var chat
-    @Environment(MemoryStore.self) private var memoryStore
+    @Environment(YouziProductModel.self) private var productModel
 
     let assistantAlias: String
     let onPrepareAssistant: () -> Void
     let onOpenSettings: () -> Void
 
     @State private var selection: YouziSimpleDestination = .newTask
+    @State private var selectedTaskID: UUID?
+    @State private var selectedProjectID: UUID?
+    @State private var selectedArtifactID: UUID?
+    @State private var showingTemplates = false
+    @State private var fileActionError: String?
+
+    private static let bundledTemplates = try? YouziBundledTemplateCatalog.loadBundled()
 
     var body: some View {
         NavigationSplitView {
             sidebar
                 .background(RapidTheme.surfaceSidebar)
-                .navigationSplitViewColumnWidth(min: 196, ideal: 224, max: 260)
+                .navigationSplitViewColumnWidth(min: 210, ideal: 240, max: 280)
         } detail: {
             destination
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -26,21 +34,25 @@ struct YouziSimpleShell: View {
         }
         .navigationSplitViewStyle(.balanced)
         .accessibilityIdentifier("YouziSimple.Shell")
+        .sheet(isPresented: $showingTemplates) {
+            templateSheet
+                .frame(minWidth: 680, minHeight: 620)
+        }
+        .sheet(item: selectedArtifactBinding) { artifact in
+            artifactPreview(artifact)
+                .frame(minWidth: 560, minHeight: 420)
+        }
+        .alert("文件操作没有完成", isPresented: fileActionAlertBinding) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text(fileActionError ?? "请重试。")
+        }
+        .onAppear(perform: seedBundledTemplates)
     }
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: RapidTheme.Space.sm) {
-                YouziLogo(size: 28)
-                Text("柚子")
-                    .font(RapidFont.windowTitle)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, RapidTheme.Space.lg)
-            .padding(.top, RapidTheme.Space.lg)
-            .padding(.bottom, RapidTheme.Space.md)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("柚子，简约模式")
+            brand
 
             VStack(spacing: RapidTheme.Space.xxs) {
                 ForEach(YouziSimpleDestination.allCases) { destination in
@@ -53,98 +65,220 @@ struct YouziSimpleShell: View {
                 .padding(.vertical, RapidTheme.Space.md)
                 .padding(.horizontal, RapidTheme.Space.lg)
 
-            Text("最近任务")
-                .font(RapidFont.groupLabel)
-                .foregroundStyle(RapidTheme.textSecondary)
-                .padding(.horizontal, RapidTheme.Space.lg)
-                .padding(.bottom, RapidTheme.Space.sm)
-
             ScrollView {
-                LazyVStack(spacing: RapidTheme.Space.xxs) {
-                    if recentTasks.isEmpty {
-                        Text("最近任务会显示在这里。")
-                            .font(RapidFont.caption)
-                            .foregroundStyle(RapidTheme.textSecondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, RapidTheme.Space.lg)
-                            .padding(.vertical, RapidTheme.Space.sm)
-                    } else {
-                        ForEach(recentTasks) { conversation in
-                            Button {
-                                chat.selectConversation(conversation.id)
-                                selection = .newTask
-                            } label: {
-                                HStack(spacing: RapidTheme.Space.sm) {
-                                    Image(systemName: "text.bubble")
-                                        .foregroundStyle(RapidTheme.textSecondary)
-                                    Text(conversation.title)
-                                        .font(RapidFont.secondary)
-                                        .foregroundStyle(RapidTheme.textPrimary)
-                                        .lineLimit(1)
-                                    Spacer(minLength: 0)
-                                }
-                                .padding(.horizontal, RapidTheme.Space.md)
-                                .frame(minHeight: 36)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier(
-                                "YouziSimple.RecentTask.\(conversation.id.uuidString)"
-                            )
-                        }
-                    }
+                LazyVStack(alignment: .leading, spacing: RapidTheme.Space.md) {
+                    recentTaskSection
+                    workspaceTree
+                    conversationFolderTree
                 }
                 .padding(.horizontal, RapidTheme.Space.sm)
+                .padding(.bottom, RapidTheme.Space.md)
             }
             .scrollIndicators(.never)
 
             Divider()
                 .padding(.horizontal, RapidTheme.Space.lg)
+            accountMenu
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
 
-            Menu {
-                Button("设置…", action: onOpenSettings)
-                    .accessibilityIdentifier("YouziSimple.Account.Settings")
-                Divider()
-                Button {
-                    experienceMode.mode = .professional
-                } label: {
-                    Label("专业模式", systemImage: "slider.horizontal.3")
+    private var brand: some View {
+        HStack(spacing: RapidTheme.Space.sm) {
+            YouziLogo(size: 28)
+            Text("柚子")
+                .font(RapidFont.windowTitle)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, RapidTheme.Space.lg)
+        .padding(.top, RapidTheme.Space.lg)
+        .padding(.bottom, RapidTheme.Space.md)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("柚子，简约模式")
+    }
+
+    private var recentTaskSection: some View {
+        VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
+            sidebarLabel("最近任务")
+            if recentTasks.isEmpty {
+                Text("最近任务会显示在这里。")
+                    .font(RapidFont.caption)
+                    .foregroundStyle(RapidTheme.textSecondary)
+                    .padding(.horizontal, RapidTheme.Space.md)
+                    .padding(.vertical, RapidTheme.Space.sm)
+            } else {
+                ForEach(recentTasks.prefix(6)) { task in
+                    taskRow(task, prefix: "YouziSimple.RecentTask")
                 }
-                .accessibilityIdentifier(YouziExperienceMode.professional.accessibilityIdentifier)
-            } label: {
-                HStack(spacing: RapidTheme.Space.sm) {
-                    Image(systemName: "person.crop.circle")
-                        .font(.system(size: 18))
-                    VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
-                        Text("柚子")
-                            .font(RapidFont.bodyEmphasis)
-                        Text("简约模式")
-                            .font(RapidFont.caption)
-                            .foregroundStyle(RapidTheme.textSecondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var workspaceTree: some View {
+        if !activeWorkspaces.isEmpty || !unplacedProjects.isEmpty {
+            VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
+                sidebarLabel("工作空间与项目")
+                ForEach(activeWorkspaces) { workspace in
+                    DisclosureGroup {
+                        let directTasks = productModel.tasks.filter {
+                            $0.workspaceID == workspace.id && $0.projectID == nil
+                                && $0.status != .archived
+                        }
+                        ForEach(directTasks.prefix(5)) { task in
+                            taskRow(task, prefix: "YouziSimple.WorkspaceTask")
+                                .padding(.leading, RapidTheme.Space.sm)
+                        }
+                        ForEach(projects(in: workspace)) { project in
+                            projectRow(project)
+                                .padding(.leading, RapidTheme.Space.sm)
+                        }
+                    } label: {
+                        Label(workspace.name, systemImage: "folder")
+                            .font(RapidFont.secondary)
+                            .lineLimit(1)
                     }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.up.chevron.down")
+                    .padding(.horizontal, RapidTheme.Space.md)
+                    .padding(.vertical, RapidTheme.Space.xs)
+                    .accessibilityIdentifier(
+                        "YouziSimple.Sidebar.Workspace.\(workspace.id.uuidString)"
+                    )
+                }
+                ForEach(unplacedProjects) { project in
+                    projectRow(project)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var conversationFolderTree: some View {
+        if !chat.folders.isEmpty {
+            VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
+                sidebarLabel("对话文件夹")
+                ForEach(chat.folders) { folder in
+                    DisclosureGroup {
+                        ForEach(conversations(in: folder)) { conversation in
+                            Button { openConversation(conversation.id) } label: {
+                                Label(conversation.title, systemImage: "text.bubble")
+                                    .font(RapidFont.caption)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.leading, RapidTheme.Space.sm)
+                            .accessibilityIdentifier(
+                                "YouziSimple.Conversation.\(conversation.id.uuidString)"
+                            )
+                        }
+                    } label: {
+                        Label(folder.name, systemImage: "folder")
+                            .font(RapidFont.secondary)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, RapidTheme.Space.md)
+                    .padding(.vertical, RapidTheme.Space.xs)
+                    .accessibilityIdentifier(
+                        "YouziSimple.ConversationFolder.\(folder.id.uuidString)"
+                    )
+                }
+            }
+        }
+    }
+
+    private func sidebarLabel(_ text: String) -> some View {
+        Text(text)
+            .font(RapidFont.groupLabel)
+            .foregroundStyle(RapidTheme.textSecondary)
+            .padding(.horizontal, RapidTheme.Space.md)
+            .padding(.bottom, RapidTheme.Space.xs)
+    }
+
+    private func taskRow(_ task: YouziTask, prefix: String) -> some View {
+        Button { openTask(task) } label: {
+            HStack(spacing: RapidTheme.Space.sm) {
+                Image(systemName: task.status.systemImage)
+                    .foregroundStyle(RapidTheme.textSecondary)
+                    .frame(width: 16)
+                Text(task.title.isEmpty ? "未命名任务" : task.title)
+                    .font(RapidFont.secondary)
+                    .foregroundStyle(RapidTheme.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, RapidTheme.Space.md)
+            .frame(minHeight: 32)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("\(prefix).\(task.id.uuidString)")
+    }
+
+    private func projectRow(_ project: YouziProject) -> some View {
+        DisclosureGroup {
+            ForEach(tasks(in: project).prefix(5)) { task in
+                taskRow(task, prefix: "YouziSimple.ProjectTask")
+                    .padding(.leading, RapidTheme.Space.sm)
+            }
+            Button("打开项目工作台") { openProject(project) }
+                .buttonStyle(.plain)
+                .font(RapidFont.caption)
+                .foregroundStyle(RapidTheme.brandPrimary)
+                .padding(.leading, RapidTheme.Space.lg)
+        } label: {
+            Label(project.name, systemImage: "square.stack.3d.up")
+                .font(RapidFont.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, RapidTheme.Space.md)
+        .padding(.vertical, RapidTheme.Space.xs)
+        .accessibilityIdentifier("YouziSimple.Sidebar.Project.\(project.id.uuidString)")
+    }
+
+    private var accountMenu: some View {
+        Menu {
+            Button("设置…", action: onOpenSettings)
+                .accessibilityIdentifier("YouziSimple.Account.Settings")
+            Divider()
+            Button {
+                experienceMode.mode = .professional
+            } label: {
+                Label("专业模式", systemImage: "slider.horizontal.3")
+            }
+            .accessibilityIdentifier(YouziExperienceMode.professional.accessibilityIdentifier)
+        } label: {
+            HStack(spacing: RapidTheme.Space.sm) {
+                Image(systemName: "person.crop.circle")
+                    .font(.system(size: 18))
+                VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
+                    Text("柚子")
+                        .font(RapidFont.bodyEmphasis)
+                    Text("简约模式")
                         .font(RapidFont.caption)
                         .foregroundStyle(RapidTheme.textSecondary)
                 }
-                .padding(.horizontal, RapidTheme.Space.md)
-                .frame(minHeight: 48)
-                .contentShape(Rectangle())
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(RapidFont.caption)
+                    .foregroundStyle(RapidTheme.textSecondary)
             }
-            .menuStyle(.borderlessButton)
-            .padding(RapidTheme.Space.sm)
-            .accessibilityIdentifier("YouziSimple.AccountMenu")
+            .padding(.horizontal, RapidTheme.Space.md)
+            .frame(minHeight: 48)
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .menuStyle(.borderlessButton)
+        .padding(RapidTheme.Space.sm)
+        .accessibilityIdentifier("YouziSimple.AccountMenu")
     }
 
     private func navigationRow(_ destination: YouziSimpleDestination) -> some View {
         let isSelected = selection == destination
         return Button {
             if destination == .newTask {
-                chat.newConversation()
+                startNewTask()
+            } else {
+                selection = destination
             }
-            selection = destination
         } label: {
             HStack(spacing: RapidTheme.Space.sm) {
                 RoundedRectangle(cornerRadius: 1)
@@ -176,276 +310,293 @@ struct YouziSimpleShell: View {
         switch selection {
         case .newTask:
             YouziSimpleTaskView(
+                taskID: selectedTaskID,
+                projectID: selectedProjectID,
                 assistantAlias: assistantAlias,
                 onPrepareAssistant: onPrepareAssistant,
                 onOpenProfessional: { experienceMode.mode = .professional },
+                onShowTemplates: { showingTemplates = true },
+                onTaskPersisted: { selectedTaskID = $0 },
                 onNavigate: { selection = $0 }
             )
         case .workspaces:
-            YouziSimpleEmptyPage(
-                destination: .workspaces,
-                title: "让工作各得其所",
-                message: "工作空间是柚子在任务中可以使用的文件夹。需要处理本地文件时，你可以选择一个工作空间。",
-                actionTitle: "新建任务",
-                action: startNewTask
+            YouziSimpleWorkspacesPage(
+                workspaces: productModel.workspaces,
+                projects: productModel.projects,
+                tasks: productModel.tasks,
+                files: productModel.files,
+                onOpenTask: openTask,
+                onOpenProject: openProject,
+                onCreateManagedWorkspace: createManagedWorkspace,
+                onChooseWorkspaceFolder: chooseWorkspaceFolder,
+                onCreateProject: createProject
             )
         case .helpers:
-            YouziHelpersPage(onStartTask: startNewTask)
+            YouziSimpleHelpersPage(
+                helpers: productModel.document.helpers,
+                onStartTask: startTask(with:)
+            )
         case .knowMe:
-            YouziKnowMePage(memoryStore: memoryStore)
+            YouziSimpleKnowMePage(nodes: productModel.document.memoryNodes)
         case .results:
-            YouziResultsPage(
-                conversations: chat.conversations.filter { !$0.isArchived },
-                onOpen: openTask,
-                onStartTask: startNewTask
+            YouziSimpleResultsPage(
+                artifacts: productModel.artifacts,
+                fileForArtifact: productModel.file(for:),
+                onPreview: previewArtifact,
+                onRevealInFinder: revealArtifact,
+                onExport: exportArtifact
             )
         }
     }
 
-    private var recentTasks: [ChatConversation] {
-        Array(chat.conversations.lazy.filter { !$0.isArchived }.prefix(6))
+    @ViewBuilder
+    private var templateSheet: some View {
+        if let catalog = Self.bundledTemplates {
+            YouziSimpleTemplateGallery(catalog: catalog, onCreateDraft: createDraft(from:))
+        } else {
+            ContentUnavailableView(
+                "模板暂时不可用",
+                systemImage: "doc.badge.ellipsis",
+                description: Text("请关闭此窗口后重试。")
+            )
+        }
+    }
+
+    private func artifactPreview(_ artifact: YouziArtifact) -> some View {
+        VStack(alignment: .leading, spacing: RapidTheme.Space.lg) {
+            HStack {
+                Text(artifact.title)
+                    .font(RapidFont.pageTitle)
+                Spacer(minLength: 0)
+                Button("关闭") { selectedArtifactID = nil }
+                    .buttonStyle(.bordered)
+            }
+            Divider()
+            if let preview = artifact.previewText, !preview.isEmpty {
+                ScrollView {
+                    Text(preview)
+                        .font(RapidFont.body)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                ContentUnavailableView(
+                    "没有文本预览",
+                    systemImage: "doc.text.magnifyingglass",
+                    description: Text("可在成果列表中导出，或在 Finder 中查看。")
+                )
+            }
+        }
+        .padding(RapidTheme.Space.xl)
+        .accessibilityIdentifier("YouziSimple.ArtifactPreview")
+    }
+
+    private var recentTasks: [YouziTask] {
+        productModel.tasks
+            .filter { $0.status != .archived }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private var activeWorkspaces: [YouziWorkspace] {
+        productModel.workspaces.filter { $0.state == .active }
+    }
+
+    private var unplacedProjects: [YouziProject] {
+        let placedIDs = Set(activeWorkspaces.flatMap { projects(in: $0).map(\.id) })
+        return productModel.projects.filter { $0.state == .active && !placedIDs.contains($0.id) }
+    }
+
+    private func projects(in workspace: YouziWorkspace) -> [YouziProject] {
+        let IDs = Set(
+            productModel.tasks.lazy
+                .filter { $0.workspaceID == workspace.id }
+                .compactMap(\.projectID)
+        )
+        return productModel.projects.filter { $0.state == .active && IDs.contains($0.id) }
+    }
+
+    private func tasks(in project: YouziProject) -> [YouziTask] {
+        productModel.tasks
+            .filter { $0.projectID == project.id && $0.status != .archived }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private func conversations(in folder: ChatFolder) -> [ChatConversation] {
+        chat.conversations.filter { $0.folderID == folder.id && !$0.isArchived }
     }
 
     private func startNewTask() {
         chat.newConversation()
+        selectedTaskID = nil
+        selectedProjectID = nil
         selection = .newTask
     }
 
-    private func openTask(_ id: UUID) {
+    private func openTask(_ task: YouziTask) {
+        selectedTaskID = task.id
+        selectedProjectID = task.projectID
+        if let conversationID = task.conversationID,
+           chat.conversations.contains(where: { $0.id == conversationID }) {
+            chat.selectConversation(conversationID)
+        } else {
+            chat.newConversation()
+        }
+        selection = .newTask
+    }
+
+    private func openConversation(_ id: UUID) {
         chat.selectConversation(id)
+        let task = productModel.tasks.first { $0.conversationID == id }
+        selectedTaskID = task?.id
+        selectedProjectID = task?.projectID
         selection = .newTask
     }
-}
 
-private struct YouziSimpleEmptyPage: View {
-    let destination: YouziSimpleDestination
-    let title: String
-    let message: String
-    let actionTitle: String
-    let action: () -> Void
-
-    var body: some View {
-        VStack(spacing: RapidTheme.Space.lg) {
-            Image(systemName: destination.systemImage)
-                .font(.system(size: 34, weight: .medium))
-                .foregroundStyle(RapidTheme.brandPrimary)
-                .frame(width: 72, height: 72)
-                .background(Circle().fill(RapidTheme.brandPrimaryTint))
-            Text(title)
-                .font(RapidFont.pageTitle)
-            Text(message)
-                .font(RapidFont.body)
-                .foregroundStyle(RapidTheme.textSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 460)
-            Button(actionTitle, action: action)
-                .buttonStyle(.borderedProminent)
+    private func openProject(_ project: YouziProject) {
+        selectedProjectID = project.id
+        if let task = tasks(in: project).first {
+            openTask(task)
+        } else {
+            chat.newConversation()
+            selectedTaskID = nil
+            selection = .newTask
         }
-        .padding(RapidTheme.Space.xl)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityIdentifier("YouziSimple.Surface.\(destination.rawValue)")
     }
-}
 
-private struct YouziHelpersPage: View {
-    let onStartTask: () -> Void
+    private func createProject(_ name: String) {
+        _ = productModel.createProject(name: name)
+    }
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
-                YouziSimplePageHeader(
-                    title: "帮手",
-                    subtitle: "选择熟悉的工作方式，或让柚子自动匹配合适的能力。"
-                )
+    private func createManagedWorkspace(_ name: String) {
+        _ = productModel.createManagedWorkspace(name: name)
+    }
 
-                VStack(alignment: .leading, spacing: RapidTheme.Space.md) {
-                    HStack(alignment: .top, spacing: RapidTheme.Space.lg) {
-                        YouziLogo(size: 44)
-                        VStack(alignment: .leading, spacing: RapidTheme.Space.xs) {
-                            Text("柚子助手")
-                                .font(RapidFont.sectionTitle)
-                            Text("适合写作、规划、研究和日常问题的贴心通用帮手。")
-                                .font(RapidFont.secondary)
-                                .foregroundStyle(RapidTheme.textSecondary)
-                        }
-                        Spacer(minLength: 0)
-                        Label("可用", systemImage: "checkmark.circle.fill")
-                            .font(RapidFont.caption)
-                            .foregroundStyle(RapidTheme.green)
-                    }
-                    Divider()
-                    HStack {
-                        Label("默认在本地运行", systemImage: "lock.shield")
-                            .font(RapidFont.caption)
-                            .foregroundStyle(RapidTheme.textSecondary)
-                        Spacer(minLength: 0)
-                        Button("新建任务", action: onStartTask)
-                            .buttonStyle(.borderedProminent)
-                    }
-                }
-                .padding(RapidTheme.Space.lg)
-                .background(
-                    RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                        .fill(RapidTheme.surfaceRaised)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                        .strokeBorder(RapidTheme.hairline, lineWidth: 1)
-                )
-            }
-            .frame(maxWidth: 760)
-            .frame(maxWidth: .infinity, alignment: .top)
-            .padding(RapidTheme.Space.xl)
+    private func chooseWorkspaceFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "选择文件夹"
+        guard panel.runModal() == .OK, let URL = panel.url else { return }
+        _ = productModel.createBookmarkedWorkspace(
+            name: URL.lastPathComponent,
+            directoryURL: URL
+        )
+    }
+
+    private func startTask(with helper: YouziHelper) {
+        chat.newConversation()
+        let task = productModel.createTaskDraft(
+            title: "与\(helper.name)一起开始",
+            request: "",
+            helperID: helper.id
+        )
+        selectedTaskID = task?.id
+        selectedProjectID = nil
+        selection = .newTask
+    }
+
+    private func seedBundledTemplates() {
+        guard let catalog = Self.bundledTemplates else { return }
+        let templates = catalog.templates.map { entry in
+            YouziTemplate(
+                id: entry.id,
+                name: entry.name,
+                category: entry.category,
+                summary: entry.summary,
+                samplePreview: entry.samplePreview,
+                prefilledRequest: entry.prefilledRequest,
+                requiredInputs: entry.requiredInputs,
+                source: YouziManifestSource(
+                    kind: .builtIn,
+                    identifier: "youzi-templates-v1",
+                    version: catalog.catalogVersion
+                ),
+                createdAt: Date(timeIntervalSince1970: 0),
+                updatedAt: Date(timeIntervalSince1970: 0)
+            )
         }
-        .accessibilityIdentifier("YouziSimple.Surface.helpers")
+        let isCurrent = templates.allSatisfy { bundled in
+            productModel.template(id: bundled.id) == bundled
+        }
+        if !isCurrent { productModel.seedTemplates(templates) }
     }
-}
 
-private struct YouziKnowMePage: View {
-    let memoryStore: MemoryStore
+    private func createDraft(from entry: YouziBundledTemplateCatalog.Entry) {
+        chat.newConversation()
+        if let task = productModel.instantiateTemplate(id: entry.id) {
+            selectedTaskID = task.id
+            selectedProjectID = task.projectID
+            selection = .newTask
+        }
+        showingTemplates = false
+    }
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
-                YouziSimplePageHeader(
-                    title: "知我",
-                    subtitle: "查看柚子可以使用的事实和偏好，让之后的帮助更懂你。"
-                )
-
-                if memoryStore.entries.isEmpty {
-                    VStack(spacing: RapidTheme.Space.lg) {
-                        Image(systemName: "point.3.connected.trianglepath.dotted")
-                            .font(.system(size: 34))
-                            .foregroundStyle(RapidTheme.brandPrimary)
-                        Text("还没有保存内容")
-                            .font(RapidFont.sectionTitle)
-                        Text("当你选择保存有用的偏好或事实后，它们会显示在这里，并始终由你掌控。")
-                            .font(RapidFont.body)
-                            .foregroundStyle(RapidTheme.textSecondary)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: 460)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, RapidTheme.Space.huge)
-                } else {
-                    LazyVStack(spacing: RapidTheme.Space.md) {
-                        ForEach(memoryStore.entries) { entry in
-                            HStack(alignment: .top, spacing: RapidTheme.Space.md) {
-                                Image(systemName: "circle.hexagongrid")
-                                    .foregroundStyle(RapidTheme.brandPrimary)
-                                VStack(alignment: .leading, spacing: RapidTheme.Space.xs) {
-                                    Text(entry.content)
-                                        .font(RapidFont.body)
-                                        .textSelection(.enabled)
-                                    Text(entry.evidenceCount == 1 ? "1 条依据" : "\(entry.evidenceCount) 条依据")
-                                        .font(RapidFont.caption)
-                                        .foregroundStyle(RapidTheme.textSecondary)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(RapidTheme.Space.lg)
-                            .background(
-                                RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                                    .fill(RapidTheme.surfaceRaised)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                                    .strokeBorder(RapidTheme.hairline, lineWidth: 1)
-                            )
-                        }
-                    }
+    private func previewArtifact(_ artifact: YouziArtifact) {
+        if artifact.previewText?.isEmpty == false {
+            selectedArtifactID = artifact.id
+            return
+        }
+        do {
+            try productModel.withFileURL(id: artifact.fileID) { URL in
+                guard NSWorkspace.shared.open(URL) else {
+                    throw CocoaError(.fileReadUnknown)
                 }
             }
-            .frame(maxWidth: 760)
-            .frame(maxWidth: .infinity, alignment: .top)
-            .padding(RapidTheme.Space.xl)
+        } catch {
+            fileActionError = "无法打开这份成果。"
         }
-        .accessibilityIdentifier("YouziSimple.Surface.knowMe")
     }
-}
 
-private struct YouziResultsPage: View {
-    let conversations: [ChatConversation]
-    let onOpen: (UUID) -> Void
-    let onStartTask: () -> Void
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
-                YouziSimplePageHeader(
-                    title: "成果",
-                    subtitle: "回到柚子帮你完成的工作。"
-                )
-
-                if conversations.isEmpty {
-                    YouziSimpleEmptyPage(
-                        destination: .results,
-                        title: "成果会汇集在这里",
-                        message: "完成任务后，你可以随时回到对话和任务成果。",
-                        actionTitle: "新建任务",
-                        action: onStartTask
-                    )
-                    .frame(minHeight: 360)
-                } else {
-                    LazyVStack(spacing: RapidTheme.Space.sm) {
-                        ForEach(conversations) { conversation in
-                            Button { onOpen(conversation.id) } label: {
-                                HStack(spacing: RapidTheme.Space.md) {
-                                    Image(systemName: "doc.text")
-                                        .foregroundStyle(RapidTheme.brandPrimary)
-                                        .frame(width: 28, height: 28)
-                                        .background(Circle().fill(RapidTheme.brandPrimaryTint))
-                                    VStack(alignment: .leading, spacing: RapidTheme.Space.xs) {
-                                        Text(conversation.title)
-                                            .font(RapidFont.bodyEmphasis)
-                                            .foregroundStyle(RapidTheme.textPrimary)
-                                            .lineLimit(1)
-                                        Text(conversation.updatedAt, style: .relative)
-                                            .font(RapidFont.caption)
-                                            .foregroundStyle(RapidTheme.textSecondary)
-                                    }
-                                    Spacer(minLength: 0)
-                                    Image(systemName: "chevron.right")
-                                        .foregroundStyle(RapidTheme.textSecondary)
-                                }
-                                .padding(RapidTheme.Space.lg)
-                                .background(
-                                    RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                                        .fill(RapidTheme.surfaceRaised)
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                                        .strokeBorder(RapidTheme.hairline, lineWidth: 1)
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier(
-                                "YouziSimple.Results.\(conversation.id.uuidString)"
-                            )
-                        }
-                    }
-                }
+    private func revealArtifact(_ artifact: YouziArtifact) {
+        do {
+            try productModel.withFileURL(id: artifact.fileID) { URL in
+                NSWorkspace.shared.activateFileViewerSelecting([URL])
             }
-            .frame(maxWidth: 760)
-            .frame(maxWidth: .infinity, alignment: .top)
-            .padding(RapidTheme.Space.xl)
+        } catch {
+            fileActionError = "无法在 Finder 中定位这份成果。"
         }
-        .accessibilityIdentifier("YouziSimple.Surface.results")
+    }
+
+    private func exportArtifact(_ artifact: YouziArtifact) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = productModel.file(for: artifact)?.displayName ?? artifact.title
+        panel.prompt = "导出"
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do {
+            try productModel.exportFile(id: artifact.fileID, to: destination)
+        } catch {
+            fileActionError = "无法导出这份成果。"
+        }
+    }
+
+    private var selectedArtifactBinding: Binding<YouziArtifact?> {
+        Binding(
+            get: {
+                guard let selectedArtifactID else { return nil }
+                return productModel.artifact(id: selectedArtifactID)
+            },
+            set: { selectedArtifactID = $0?.id }
+        )
+    }
+
+    private var fileActionAlertBinding: Binding<Bool> {
+        Binding(
+            get: { fileActionError != nil },
+            set: { if !$0 { fileActionError = nil } }
+        )
     }
 }
 
-private struct YouziSimplePageHeader: View {
-    let title: String
-    let subtitle: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: RapidTheme.Space.sm) {
-            Text(title)
-                .font(RapidFont.pageTitle)
-            Text(subtitle)
-                .font(RapidFont.body)
-                .foregroundStyle(RapidTheme.textSecondary)
+private extension YouziTaskStatus {
+    var systemImage: String {
+        switch self {
+        case .draft: "square.and.pencil"
+        case .inProgress: "circle.dotted"
+        case .awaitingConfirmation: "person.crop.circle.badge.questionmark"
+        case .completed: "checkmark.circle"
+        case .failed: "exclamationmark.circle"
+        case .archived: "archivebox"
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

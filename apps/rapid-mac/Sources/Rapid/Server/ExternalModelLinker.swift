@@ -188,6 +188,49 @@ enum ExternalModelLinker {
         return .removed
     }
 
+    /// Direct app-managed symlinks currently present in `linksDirectory`.
+    ///
+    /// Enumeration deliberately does not resolve the destinations. A dangling
+    /// link must remain visible to Settings so the user can forget it safely;
+    /// callers that advertise a link to the engine separately revalidate it
+    /// through ``destinationOfManagedLink``.
+    static func managedLinkURLs(
+        in linksDirectory: URL,
+        fileManager: FileManager = .default
+    ) throws -> [URL] {
+        guard linksDirectory.isFileURL,
+              linksDirectory.path.hasPrefix("/") else {
+            throw LinkError.linksDirectoryMustBeAbsolute
+        }
+        let root = linksDirectory.standardizedFileURL
+        guard let rootType = itemType(at: root, fileManager: fileManager) else {
+            return []
+        }
+        guard rootType == .typeDirectory else {
+            throw LinkError.linksDirectoryIsNotDirectory
+        }
+        let children: [URL]
+        do {
+            children = try fileManager.contentsOfDirectory(
+                at: root,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+        } catch {
+            throw LinkError.fileSystem(
+                operation: "read the linked-models folder",
+                message: error.localizedDescription
+            )
+        }
+        return children.filter {
+            isManagedLinkName($0.lastPathComponent)
+                && itemType(at: $0, fileManager: fileManager) == .typeSymbolicLink
+        }.sorted {
+            $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent)
+                == .orderedAscending
+        }
+    }
+
     /// Stable, filesystem-safe link name. The readable stem is diagnostic;
     /// canonical-path SHA-256 identity prevents same-named folders on two
     /// disks from colliding.
@@ -351,7 +394,7 @@ enum ExternalModelLinker {
         }
     }
 
-    private static func isManagedLinkName(_ name: String) -> Bool {
+    static func isManagedLinkName(_ name: String) -> Bool {
         guard name.hasPrefix(managedLinkPrefix),
               let suffix = name.split(separator: "-").last,
               suffix.count == 16 else { return false }

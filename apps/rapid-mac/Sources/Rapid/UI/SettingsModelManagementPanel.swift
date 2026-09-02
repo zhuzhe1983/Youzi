@@ -60,6 +60,13 @@ struct SettingsModelManagementPanel: View {
     /// catalog reload.
     @State private var customFolderPath: String? = ModelsFolderPreference.storedPath()
 
+    /// Individually selected checkpoints linked into Youzi's own Application
+    /// Support directory. This is intentionally separate from the global
+    /// models-folder preference: one link must never nominate its parent as a
+    /// cache or discovery root.
+    @State private var linkedModels: [ExternalModelRegistry.Record] =
+        (try? ExternalModelRegistry.records()) ?? []
+
     /// Detected once. Drives the "Recommended for your N GB Mac" header
     /// and which RAM bucket's role picks surface at the top (issue #507).
     /// Cheap sysctl probe; constant for the panel's lifetime.
@@ -128,6 +135,7 @@ struct SettingsModelManagementPanel: View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             header
             modelsFolderSection
+            linkedModelsSection
             storageOverviewSection
             preferencesSection
             capabilityTabs
@@ -167,6 +175,7 @@ struct SettingsModelManagementPanel: View {
         // Animating this container retains both conditional trees during the
         // transition, which can overlay the spinner on stale model rows.
         .task {
+            refreshLinkedModels()
             await refreshCatalog()
             refreshStorageCapacity()
         }
@@ -290,6 +299,70 @@ struct SettingsModelManagementPanel: View {
                 }
 
                 Text("Point Youzi at a folder where it already keeps downloaded models — for example on an external drive. New models download here; ones you already have stay where they are. Models downloaded by other apps in other formats won't appear here. New location takes effect the next time a model loads or downloads.")
+                    .font(RapidFont.caption)
+                    .foregroundStyle(RapidTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: - Individually linked models
+
+    @ViewBuilder
+    private var linkedModelsSection: some View {
+        SettingsSection("Linked models") {
+            VStack(alignment: .leading, spacing: RapidTheme.Space.md) {
+                HStack(alignment: .top, spacing: RapidTheme.Space.sm) {
+                    Image(systemName: "link")
+                        .foregroundStyle(RapidTheme.utilityActionLabel)
+                        .frame(width: RapidTheme.Layout.iconSlot)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
+                        Text("Reuse one local MLX model")
+                            .font(RapidFont.bodyEmphasis)
+                            .foregroundStyle(RapidTheme.textPrimary)
+                        Text("Choose a directly loadable model folder. Youzi links it in place without copying its weights or scanning neighboring models.")
+                            .font(RapidFont.caption)
+                            .foregroundStyle(RapidTheme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Button("Link model…") { chooseModelToLink() }
+                    .buttonStyle(.rapidSecondaryCompact)
+                    .accessibilityIdentifier("Settings.ModelManagement.LinkModel")
+
+                ForEach(linkedModels) { record in
+                    SettingsRowDivider()
+                    HStack(spacing: RapidTheme.Space.sm) {
+                        VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
+                            Text(record.alias)
+                                .font(RapidFont.code)
+                                .foregroundStyle(RapidTheme.textPrimary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text(record.isAvailable ? "Available to Youzi" : "Source unavailable")
+                                .font(RapidFont.caption)
+                                .foregroundStyle(
+                                    record.isAvailable
+                                        ? RapidTheme.textSecondary
+                                        : RapidTheme.statusWarning
+                                )
+                        }
+                        Spacer(minLength: RapidTheme.Space.sm)
+                        Button("Forget") { forgetLinkedModel(record) }
+                            .buttonStyle(.rapidTertiary)
+                            .help("Remove only Youzi's link. The original model and all of its weights stay untouched.")
+                            .accessibilityLabel("Forget linked model \(record.alias)")
+                            .accessibilityHint("Removes only Youzi's link and keeps every source file.")
+                            .accessibilityIdentifier(
+                                "Settings.ModelManagement.ForgetLinkedModel.\(record.alias)"
+                            )
+                    }
+                }
+
+                Text("Forgetting a linked model removes only Youzi's link. The original folder and every source weight remain untouched.")
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -455,6 +528,69 @@ struct SettingsModelManagementPanel: View {
         customFolderPath = nil
         refreshStorageCapacity()
         Task { await refreshCatalog() }
+    }
+
+    private func chooseModelToLink() {
+        let panel = NSOpenPanel()
+        panel.title = "Link a local MLX model"
+        panel.message = "Choose one model folder containing config.json and MLX safetensors weights."
+        panel.prompt = "Link Model"
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+        let linksDirectory = ExternalModelRegistry.linksDirectory()
+        Task {
+            do {
+                let outcome = try await Task.detached(priority: .userInitiated) {
+                    try ExternalModelLinker.linkModel(at: source, into: linksDirectory)
+                }.value
+                let alias: String
+                switch outcome {
+                case .linked(let link), .alreadyLinked(let link): alias = link.lastPathComponent
+                }
+                refreshLinkedModels()
+                downloads.markCacheChanged()
+                await refreshCatalog()
+                lastError = nil
+                lastFreed = "Linked \(alias). Youzi will reuse the original weights in place."
+            } catch {
+                lastFreed = nil
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
+    private func forgetLinkedModel(_ record: ExternalModelRegistry.Record) {
+        Task {
+            lastError = nil
+            lastFreed = nil
+            if server.servingAlias == record.alias {
+                await server.stop()
+                guard server.servingAlias != record.alias else {
+                    lastError = "Couldn't stop \(record.alias), so its link was kept."
+                    return
+                }
+            }
+            do {
+                try ExternalModelLinker.removeManagedLink(
+                    at: record.linkURL,
+                    from: ExternalModelRegistry.linksDirectory()
+                )
+                refreshLinkedModels()
+                downloads.markCacheChanged()
+                await refreshCatalog()
+                lastFreed = "Forgot \(record.alias). Only Youzi's link was removed; the original model is untouched."
+            } catch {
+                lastError = error.localizedDescription
+                refreshLinkedModels()
+            }
+        }
+    }
+
+    private func refreshLinkedModels() {
+        linkedModels = (try? ExternalModelRegistry.records()) ?? []
     }
 
     /// Capability tabs — Chat / Image / Audio (/ Video, once it has aliases). Only
@@ -1011,16 +1147,18 @@ struct SettingsModelManagementPanel: View {
                     .foregroundStyle(RapidTheme.statusReady)
                     .lineLimit(1)
                     .minimumScaleFactor(ModelTableLayout.cellMinimumScaleFactor)
-                QuietIconButton(
-                    symbol: "trash",
-                    label: "Stop serving and delete \(entry.alias) from disk",
-                    help: "Stop serving and delete this model from disk.",
-                    tint: RapidTheme.statusError,
-                    size: RapidTheme.ControlHeight.mini
-                ) {
-                    pendingDeletion = entry
+                if !entry.isExternal {
+                    QuietIconButton(
+                        symbol: "trash",
+                        label: "Stop serving and delete \(entry.alias) from disk",
+                        help: "Stop serving and delete this model from disk.",
+                        tint: RapidTheme.statusError,
+                        size: RapidTheme.ControlHeight.mini
+                    ) {
+                        pendingDeletion = entry
+                    }
+                    .accessibilityIdentifier("Settings.ModelManagement.Delete.\(entry.alias)")
                 }
-                .accessibilityIdentifier("Settings.ModelManagement.Delete.\(entry.alias)")
             }
         case .notCached:
             HStack(spacing: 8) {

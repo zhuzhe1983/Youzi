@@ -110,6 +110,32 @@ struct ExternalModelCatalogTests {
         #expect(entries[0].isExternal)
     }
 
+    @Test("An exact managed-link alias is cached, selectable, and read-only")
+    func exactManagedLinkBecomesSelectableExternalEntry() throws {
+        let alias = "youzi-external-selected-model-0123456789abcdef"
+        let listing = """
+          Cached models (1 on disk)
+          ─────────────────────────────────────────────────────────────
+          Alias                  HF repo                                             Size      Modified
+          ─────────────────────────────────────────────────────────────
+          (external)             \(alias)  1.0 GiB   1m ago
+          """
+
+        let entries = ModelCatalog.mergeAvailableAndCached(
+            available: [],
+            cached: ModelCatalog.parseCached(listing),
+            excluded: []
+        )
+
+        let entry = try #require(entries.first)
+        #expect(entry.alias == alias)
+        #expect(entry.hfRepo == alias)
+        #expect(entry.cached)
+        #expect(entry.isExternal)
+        #expect(ModelSelectionPurpose.chat.accepts(entry))
+        #expect(ServerManager.isValidAlias(entry.alias))
+    }
+
     @Test("An excluded external identifier cannot re-enter the chat catalog")
     func excludedExternalStaysExcluded() {
         let entries = ModelCatalog.mergeAvailableAndCached(
@@ -210,6 +236,15 @@ struct ExternalModelCatalogTests {
         #expect(engineSource?.contains("os.environ.get(\"\(ModelCatalog.extraModelRootsEnvKey)\"") == true)
     }
 
+    @Test("The exact-links env key matches the engine's contract")
+    func exactLinksEnvKeyMatchesEngine() {
+        var repository = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { repository.deleteLastPathComponent() }
+        let engineSource = try? String(contentsOf: repository
+            .appendingPathComponent("vllm_mlx/model_aliases.py"), encoding: .utf8)
+        #expect(engineSource?.contains(ExternalModelRegistry.environmentKey) == true)
+    }
+
     @Test("Selected model root is merged with ambient roots and deduplicated")
     func rootsAreMerged() {
         let root = FileManager.default.temporaryDirectory
@@ -242,8 +277,64 @@ struct ExternalModelCatalogTests {
         #expect(env["HF_HUB_CACHE"] == "/selected")
     }
 
+    @Test("Serve child receives app-owned exact links without allowlisting ambient values")
+    func serveEnvironmentPinsExactLinks() {
+        let ambient = #"["/ambient/model"]"#
+        let managed = #"["/managed/Application Support/model-link"]"#
+        let env = ServerManager.serveEnvironmentAdditions(
+            bearer: "test-token",
+            ambient: [ExternalModelRegistry.environmentKey: ambient],
+            exactModelLinks: managed
+        )
+
+        #expect(!ServerManager.serveEnvironmentAllowlist.contains(
+            ExternalModelRegistry.environmentKey
+        ))
+        #expect(env[ExternalModelRegistry.environmentKey] == managed)
+
+        let empty = ServerManager.serveEnvironmentAdditions(
+            bearer: "test-token",
+            ambient: [ExternalModelRegistry.environmentKey: ambient]
+        )
+        #expect(empty[ExternalModelRegistry.environmentKey] == nil)
+    }
+
+    @Test("Catalog probe replaces ambient exact links with app-owned links")
+    func catalogProbePinsExactLinks() {
+        let encoded = #"["/managed/Application Support/model-link"]"#
+        let env = ModelCatalog.probeEnvironment(
+            ambient: [ExternalModelRegistry.environmentKey: #"["/ambient/model"]"#],
+            hubCacheOverride: nil,
+            exactModelLinks: encoded
+        )
+
+        #expect(env[ExternalModelRegistry.environmentKey] == encoded)
+
+        let empty = ModelCatalog.probeEnvironment(
+            ambient: [ExternalModelRegistry.environmentKey: #"["/ambient/model"]"#],
+            hubCacheOverride: nil,
+            exactModelLinks: nil
+        )
+        #expect(empty[ExternalModelRegistry.environmentKey] == nil)
+    }
+
     private static func decodeRoots(_ value: String?) -> [String]? {
         guard let value else { return nil }
         return try? JSONDecoder().decode([String].self, from: Data(value.utf8))
+    }
+
+    @Test("External rows never expose picker or serving-row cache deletion")
+    func externalDeleteAffordancesStayHidden() throws {
+        var sourceRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<3 { sourceRoot.deleteLastPathComponent() }
+        let picker = try String(contentsOf: sourceRoot
+            .appendingPathComponent("Sources/Rapid/UI/ModelPickerBar.swift"), encoding: .utf8)
+        let settings = try String(contentsOf: sourceRoot
+            .appendingPathComponent("Sources/Rapid/UI/SettingsModelManagementPanel.swift"), encoding: .utf8)
+
+        #expect(picker.contains("entry.cached && !entry.isExternal"))
+        #expect(settings.components(separatedBy: "if !entry.isExternal").count >= 3)
+        #expect(settings.contains("Forgetting a linked model removes only Youzi's link"))
+        #expect(settings.contains("The original folder and every source weight remain untouched"))
     }
 }

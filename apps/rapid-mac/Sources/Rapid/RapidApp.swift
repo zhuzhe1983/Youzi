@@ -70,6 +70,8 @@ struct RapidApp: App {
     /// Per-window-but-shared chat controller — single window for now, so
     /// keeping a process-wide instance is fine.
     @State private var chatViewModel: ChatViewModel
+    /// Single durable Youzi product graph shared by every presentation.
+    @State private var youziProductModel: YouziProductModel
     /// Images-tab controller — text→image / image-edit against an image-gen
     /// alias. It keeps its own UI state while sharing the resident-model
     /// sidecar with Chat.
@@ -282,6 +284,8 @@ struct RapidApp: App {
                 starPromptCoordinator?.productValueDelivered(kind)
             }
         )
+        let productModel = YouziProductModel()
+        chat.setConversationLifecycleObserver(productModel)
         // Deterministic AX fixture for the otherwise release-only state where
         // Sparkle is already downloading in the background. Requiring both
         // variables keeps this inert in every normal/dev launch.
@@ -342,6 +346,7 @@ struct RapidApp: App {
         _dockPromptStore = State(initialValue: dockPrompt)
         AppDelegate.shared.dockPromptStore = dockPrompt
         _chatViewModel = State(initialValue: chat)
+        _youziProductModel = State(initialValue: productModel)
         let imageGenViewModel = ImageGenViewModel(server: manager)
         imageGenViewModel.observeProductValue { [weak consentCoordinator, weak starPromptCoordinator] kind in
             consentCoordinator?.productValueDelivered(kind)
@@ -383,6 +388,7 @@ struct RapidApp: App {
                 .environment(server)
                 .environment(downloads)
                 .environment(chatViewModel)
+                .environment(youziProductModel)
                 .environment(imageGen)
                 .environment(audio)
                 .environment(video)
@@ -567,6 +573,7 @@ struct RapidApp: App {
             SettingsView()
                 .tint(RapidTheme.brandAmber)
                 .environment(chatViewModel)
+                .environment(youziProductModel)
                 .environment(sampling)
                 .environment(customInstructions)
                 .environment(memoryStore)

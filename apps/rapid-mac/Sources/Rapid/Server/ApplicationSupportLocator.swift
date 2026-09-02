@@ -59,6 +59,14 @@ enum ApplicationSupportLocator {
     /// launches and gives the future Video library one stable location.
     static let videoArtifactsFolderName: String = "VideoArtifacts"
 
+    /// App-owned task workspaces. Each workspace occupies one UUID-named
+    /// directory below this root; user-selected folders never move here.
+    static let youziManagedWorkspacesFolderName = "YouziWorkspaces"
+
+    /// App-owned file sources. Each file occupies ``<UUID>/<safe-name>`` so
+    /// deletion can target one record without interpreting its display name.
+    static let youziManagedFilesFolderName = "YouziFiles"
+
     /// Production accessor — reads ``ProcessInfo.processInfo.environment``.
     /// All non-test callers use this shape.
     static func applicationSupportRoot() -> URL {
@@ -81,6 +89,24 @@ enum ApplicationSupportLocator {
     static func videoArtifactsDirectory(environment: [String: String]) -> URL {
         applicationSupportRoot(environment: environment)
             .appendingPathComponent(videoArtifactsFolderName, isDirectory: true)
+    }
+
+    static func youziManagedWorkspacesDirectory() -> URL {
+        youziManagedWorkspacesDirectory(environment: ProcessInfo.processInfo.environment)
+    }
+
+    static func youziManagedWorkspacesDirectory(environment: [String: String]) -> URL {
+        applicationSupportRoot(environment: environment)
+            .appendingPathComponent(youziManagedWorkspacesFolderName, isDirectory: true)
+    }
+
+    static func youziManagedFilesDirectory() -> URL {
+        youziManagedFilesDirectory(environment: ProcessInfo.processInfo.environment)
+    }
+
+    static func youziManagedFilesDirectory(environment: [String: String]) -> URL {
+        applicationSupportRoot(environment: environment)
+            .appendingPathComponent(youziManagedFilesFolderName, isDirectory: true)
     }
 
     /// ``Library/Application Support`` itself, resolved by the same

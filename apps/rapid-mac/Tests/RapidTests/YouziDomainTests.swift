@@ -27,6 +27,7 @@ struct YouziDomainTests {
         let taskID = id("000000000007")
         let permissionID = id("000000000008")
         let artifactID = id("000000000009")
+        let fileID = id("000000000020")
         let templateID = id("000000000010")
         let automationID = id("000000000011")
         let citationID = id("000000000012")
@@ -135,12 +136,27 @@ struct YouziDomainTests {
             skillIDs: [skillID],
             connectionAccountIDs: [accountID],
             permissionRecordIDs: [permissionID],
+            inputFileIDs: [],
             artifactIDs: [artifactID],
             status: .completed,
             isPinned: true,
             createdAt: created,
             updatedAt: updated,
             completedAt: updated
+        )
+        let file = YouziFile(
+            id: fileID,
+            displayName: "trip-plan.md",
+            contentTypeIdentifier: "net.daringfireball.markdown",
+            byteCount: 512,
+            sha256: String(repeating: "a", count: 64),
+            role: .artifact,
+            originTaskID: taskID,
+            projectID: projectID,
+            location: .workspace(workspaceID: workspaceID, relativePath: "Results/trip-plan.md"),
+            createdAt: created,
+            updatedAt: updated,
+            lastVerifiedAt: updated
         )
         let artifact = YouziArtifact(
             id: artifactID,
@@ -149,7 +165,7 @@ struct YouziDomainTests {
             title: "Trip plan",
             kind: .document,
             previewText: "Three-day itinerary",
-            location: .workspace(workspaceID: workspaceID, relativePath: "Results/trip-plan.md"),
+            fileID: fileID,
             createdAt: created,
             updatedAt: updated
         )
@@ -277,6 +293,7 @@ struct YouziDomainTests {
             skills: [skill],
             connectors: [connector],
             connectionAccounts: [account],
+            files: [file],
             artifacts: [artifact],
             templates: [template],
             automations: [automation],
@@ -301,6 +318,7 @@ struct YouziDomainTests {
         #expect(restored.tasks[0].workspaceID == restored.workspaces[0].id)
         #expect(restored.tasks[0].projectID == restored.projects[0].id)
         #expect(restored.tasks[0].artifactIDs == [restored.artifacts[0].id])
+        #expect(restored.artifacts[0].fileID == restored.files[0].id)
         #expect(restored.connectionAccounts[0].connectorID == restored.connectors[0].id)
         #expect(restored.memoryEdges[0].citationIDs == [restored.memoryCitations[0].id])
         #expect(restored.voiceSessions[0].conversationID == restored.tasks[0].conversationID)

@@ -1170,7 +1170,8 @@ struct ModelPickerBar: View {
         // way. The currently-serving alias is also off-limits
         // (rapid-mlx holds the weights mmap'd; rm would error).
         .contextMenu {
-            if entry.cached && server.servingAlias != entry.alias && deleting != entry.alias {
+            if entry.cached && !entry.isExternal
+                && server.servingAlias != entry.alias && deleting != entry.alias {
                 Button(role: .destructive) {
                     pendingDeletion = entry
                 } label: {

@@ -6046,6 +6046,26 @@ def _scan_external_model_dirs(
     return out
 
 
+def _scan_exact_model_links() -> list[tuple[str, int, float]]:
+    """Inventory only the exact app-managed links named by Desktop.
+
+    The link basename is the stable display/launch identifier. Source parents
+    and siblings are never traversed; size measurement begins at the one
+    already-validated canonical model directory.
+    """
+    from vllm_mlx.model_aliases import _exact_model_link_entries
+
+    out: list[tuple[str, int, float]] = []
+    for alias, _link, real in _exact_model_link_entries():
+        try:
+            size = _external_tree_size_bytes(real)
+            mtime = os.path.getmtime(real)
+        except OSError:
+            continue
+        out.append((alias, size, mtime))
+    return out
+
+
 def _cache_runnability(repo: str) -> bool | None:
     """Tri-state cache runnability: ``True`` runnable, ``False`` definitively
     not, ``None`` = inconclusive (a probe fault masked a real verdict).
@@ -6152,7 +6172,7 @@ def _print_cached_models() -> None:
     from vllm_mlx.model_aliases import list_profiles
 
     rows = _scan_hf_cache_models()
-    external_rows = _scan_external_model_dirs()
+    external_rows = _scan_external_model_dirs() + _scan_exact_model_links()
     # A RUNNABLE hub copy wins because it is managed by Rapid. Keep an
     # incomplete same-named hub row alongside the external copy: it is a real,
     # independently removable cache entry, and hiding it makes `rm <repo>` look
@@ -6404,7 +6424,7 @@ def _cached_models_json_payload() -> dict:
     from vllm_mlx.model_aliases import list_profiles
 
     rows = _scan_hf_cache_models()
-    external_rows = _scan_external_model_dirs()
+    external_rows = _scan_external_model_dirs() + _scan_exact_model_links()
     runnable_hub_repos = {repo for repo, _, _ in rows if _cache_entry_is_runnable(repo)}
     external_rows = [r for r in external_rows if r[0] not in runnable_hub_repos]
 

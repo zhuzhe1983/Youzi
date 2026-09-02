@@ -120,6 +120,12 @@ _RETIRED_MODEL_ALIASES: dict[str, str] = {
     ),
 }
 
+# Desktop-owned exact-link contract. Unlike RAPID_MLX_EXTRA_MODEL_ROOTS this
+# value is a strict JSON list of individual app-managed symlinks; no parent is
+# ever treated as a discovery root. Kept in this module so inventory and launch
+# share one parser and one completeness verdict.
+EXACT_MODEL_LINKS_ENV_KEY = "RAPID_MLX_EXACT_MODEL_LINKS"
+
 
 # ``AliasProfile`` is a DEPRECATED alias of the unified ``ModelProfile``
 # (defined in the import-light ``model_profile`` module). Retained so the
@@ -827,6 +833,8 @@ def resolve_model(name: str) -> str:
         return name
     if reason := _RETIRED_MODEL_ALIASES.get(name):
         raise RetiredModelAliasError(reason)
+    if exact := _resolve_exact_model_link(name):
+        return exact
     from .user_aliases import validated_user_aliases
 
     builtins = {alias: profile.hf_path for alias, profile in _load().items()}
@@ -855,6 +863,69 @@ def resolve_model(name: str) -> str:
         return external
     profile = _load().get(name)
     return profile.hf_path if profile is not None else name
+
+
+def _exact_model_link_entries(
+    raw: str | None = None,
+) -> list[tuple[str, str, str]]:
+    """Return validated ``(alias, link_path, real_model_path)`` entries.
+
+    The value is deliberately JSON-only. Path-separator fallbacks are unsafe
+    here because macOS filenames may contain ``:`` and Application Support
+    paths routinely contain spaces. Every entry must be one absolute symlink
+    whose basename is a safe one-component model identifier. Completeness is
+    checked on every call so an unplugged drive or mutated source disappears
+    from inventory and cannot launch from a stale catalog row.
+    """
+    if raw is None:
+        raw = os.environ.get(EXACT_MODEL_LINKS_ENV_KEY, "")
+    if not isinstance(raw, str) or not raw.strip():
+        return []
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(decoded, list) or len(decoded) > 128:
+        return []
+
+    from ._download_gate import _snapshot_is_complete
+
+    entries: list[tuple[str, str, str]] = []
+    seen_aliases: set[str] = set()
+    seen_models: set[str] = set()
+    for value in decoded:
+        if not isinstance(value, str) or not value or not os.path.isabs(value):
+            continue
+        link = os.path.normpath(value)
+        if link != value or not os.path.islink(link):
+            continue
+        alias = os.path.basename(link)
+        parts = _external_model_identifier_parts(alias)
+        if parts is None or len(parts) != 1:
+            continue
+        folded = alias.casefold()
+        if folded in seen_aliases:
+            continue
+        real = os.path.realpath(link)
+        if real in seen_models or not os.path.isdir(real):
+            continue
+        try:
+            if not _snapshot_is_complete(real):
+                continue
+        except OSError:
+            continue
+        seen_aliases.add(folded)
+        seen_models.add(real)
+        entries.append((alias, link, real))
+    return entries
+
+
+def _resolve_exact_model_link(name: str) -> str | None:
+    """Resolve one inventory alias to its exact, revalidated model path."""
+    for alias, _link, real in _exact_model_link_entries():
+        if alias == name:
+            return real
+    return None
 
 
 def _managed_hub_model_is_runnable(name: str) -> bool:

@@ -107,6 +107,9 @@ struct YouziTask: Identifiable, Codable, Equatable, Sendable {
     var skillIDs: [UUID]
     var connectionAccountIDs: [UUID]
     var permissionRecordIDs: [UUID]
+    /// Stable identities of imported inputs; bytes and access grants live on
+    /// the corresponding ``YouziFile`` records.
+    var inputFileIDs: [UUID]
     var artifactIDs: [UUID]
     var status: YouziTaskStatus
     var failureSummary: String?
@@ -126,6 +129,7 @@ struct YouziTask: Identifiable, Codable, Equatable, Sendable {
         skillIDs: [UUID] = [],
         connectionAccountIDs: [UUID] = [],
         permissionRecordIDs: [UUID] = [],
+        inputFileIDs: [UUID] = [],
         artifactIDs: [UUID] = [],
         status: YouziTaskStatus = .draft,
         failureSummary: String? = nil,
@@ -144,6 +148,7 @@ struct YouziTask: Identifiable, Codable, Equatable, Sendable {
         self.skillIDs = skillIDs
         self.connectionAccountIDs = connectionAccountIDs
         self.permissionRecordIDs = permissionRecordIDs
+        self.inputFileIDs = inputFileIDs
         self.artifactIDs = artifactIDs
         self.status = status
         self.failureSummary = failureSummary
@@ -198,6 +203,9 @@ struct YouziProject: Identifiable, Codable, Equatable, Sendable {
     var defaultHelperIDs: [UUID]
     var defaultSkillIDs: [UUID]
     var defaultConnectionAccountIDs: [UUID]
+    /// Files explicitly attached to the continuing project. A project never
+    /// takes ownership of conversation folders or arbitrary exports.
+    var resourceFileIDs: [UUID]
     var state: YouziRecordState
     let createdAt: Date
     var updatedAt: Date
@@ -211,6 +219,7 @@ struct YouziProject: Identifiable, Codable, Equatable, Sendable {
         defaultHelperIDs: [UUID] = [],
         defaultSkillIDs: [UUID] = [],
         defaultConnectionAccountIDs: [UUID] = [],
+        resourceFileIDs: [UUID] = [],
         state: YouziRecordState = .active,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -223,6 +232,7 @@ struct YouziProject: Identifiable, Codable, Equatable, Sendable {
         self.defaultHelperIDs = defaultHelperIDs
         self.defaultSkillIDs = defaultSkillIDs
         self.defaultConnectionAccountIDs = defaultConnectionAccountIDs
+        self.resourceFileIDs = resourceFileIDs
         self.state = state
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -449,12 +459,6 @@ enum YouziArtifactKind: String, Codable, Equatable, Sendable {
     case other
 }
 
-enum YouziArtifactLocation: Codable, Equatable, Sendable {
-    case workspace(workspaceID: UUID, relativePath: String)
-    case appManaged(relativePath: String)
-    case securityScopedBookmark(data: Data, displayPath: String)
-}
-
 struct YouziArtifact: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     var taskID: UUID
@@ -462,7 +466,9 @@ struct YouziArtifact: Identifiable, Codable, Equatable, Sendable {
     var title: String
     var kind: YouziArtifactKind
     var previewText: String?
-    var location: YouziArtifactLocation
+    /// The one authoritative file backing this deliverable. Exported copies
+    /// are intentionally not tracked as additional artifact ownership.
+    var fileID: UUID
     var state: YouziRecordState
     let createdAt: Date
     var updatedAt: Date
@@ -474,7 +480,7 @@ struct YouziArtifact: Identifiable, Codable, Equatable, Sendable {
         title: String,
         kind: YouziArtifactKind,
         previewText: String? = nil,
-        location: YouziArtifactLocation,
+        fileID: UUID,
         state: YouziRecordState = .active,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -485,7 +491,7 @@ struct YouziArtifact: Identifiable, Codable, Equatable, Sendable {
         self.title = title
         self.kind = kind
         self.previewText = previewText
-        self.location = location
+        self.fileID = fileID
         self.state = state
         self.createdAt = createdAt
         self.updatedAt = updatedAt

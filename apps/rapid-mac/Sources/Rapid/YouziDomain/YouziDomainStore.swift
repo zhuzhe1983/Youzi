@@ -3,7 +3,7 @@ import Foundation
 
 enum YouziDomainSchema {
     static let formatIdentifier = "com.rapidmlx.youzi.domain"
-    static let currentVersion = 1
+    static let currentVersion = 2
 }
 
 struct YouziDomainEnvelope: Codable, Equatable, Sendable {
@@ -57,10 +57,19 @@ final class YouziDomainStore: @unchecked Sendable {
 
     private let lock = NSLock()
     private let fileManager: FileManager
+    /// Test-only failure seam at the last point before the atomic temp write.
+    /// Production leaves it nil; it lets lifecycle tests prove filesystem
+    /// deletion never precedes a failed metadata commit.
+    private let beforeAtomicReplace: (() throws -> Void)?
 
-    init(fileURL: URL = YouziDomainStore.defaultFileURL(), fileManager: FileManager = .default) {
+    init(
+        fileURL: URL = YouziDomainStore.defaultFileURL(),
+        fileManager: FileManager = .default,
+        beforeAtomicReplace: (() throws -> Void)? = nil
+    ) {
         self.fileURL = fileURL
         self.fileManager = fileManager
+        self.beforeAtomicReplace = beforeAtomicReplace
     }
 
     static func defaultFileURL() -> URL {
@@ -127,6 +136,19 @@ final class YouziDomainStore: @unchecked Sendable {
         guard probe.formatIdentifier == YouziDomainSchema.formatIdentifier else {
             throw quarantineCorruptFile()
         }
+        if probe.schemaVersion == 1 {
+            let migrated: YouziDomainDocument
+            do {
+                migrated = try YouziDomainV1Migration.decode(data, decoder: decoder)
+            } catch {
+                throw quarantineCorruptFile()
+            }
+            // Atomic replacement is the migration commit point. If writing v2
+            // fails, the original v1 inode is still present and the next load
+            // can retry the same deterministic conversion.
+            try saveUnlocked(migrated)
+            return migrated
+        }
         guard probe.schemaVersion == YouziDomainSchema.currentVersion else {
             throw YouziDomainStoreError.unsupportedSchemaVersion(
                 found: probe.schemaVersion,
@@ -163,6 +185,7 @@ final class YouziDomainStore: @unchecked Sendable {
                 [.posixPermissions: 0o700],
                 ofItemAtPath: directory.path
             )
+            try beforeAtomicReplace?()
             try replaceAtomicallyWithOwnerOnlyFile(data, in: directory)
         } catch let error as YouziDomainStoreError {
             throw error

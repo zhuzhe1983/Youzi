@@ -80,6 +80,7 @@ let package = Package(
             // ``Bundle.main`` (flat files in the production .app).
             resources: [
                 .process("Resources/youzi-logo.png"),
+                .process("Resources/youzi-templates-v1.json"),
                 .process("Resources/Localizable.xcstrings"),
                 .process("Resources/benchmark-scores.json")
             ]

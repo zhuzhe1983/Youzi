@@ -2957,7 +2957,11 @@ final class ServerManager {
                     // directory right now (external drive unplugged), so
                     // this transparently falls back to the default
                     // location — the model still loads, no crash.
-                    modelsFolderOverride: modelsFolderOverride
+                    modelsFolderOverride: modelsFolderOverride,
+                    // Exact app-managed links are a separate Layer-2
+                    // contract. Never turn their parent into an external
+                    // model root: pass only revalidated individual links.
+                    exactModelLinks: ExternalModelRegistry.encodedEnvironmentValue()
                 ),
                 replaceEnvironment: true,
                 startMonitorImmediately: false
@@ -4638,7 +4642,8 @@ final class ServerManager {
         physicalRAMBytes: UInt64 = 0,
         availableRAMBytes: UInt64 = 0,
         supervisorPID: Int32 = -1,
-        modelsFolderOverride: String? = nil
+        modelsFolderOverride: String? = nil,
+        exactModelLinks: String? = nil
     ) -> [String: String] {
         // Layer 1: allowlisted ambient. The cache-root keys
         // (``HF_HOME`` / ``HF_HUB_CACHE`` / ``XDG_CACHE_HOME``)
@@ -4728,6 +4733,11 @@ final class ServerManager {
         if supervisorPID > 1 {
             env["RAPID_MLX_WATCHDOG_PPID"] = String(supervisorPID)
         }
+        // Individually selected external checkpoints are app-owned Layer-2
+        // state, never allowlisted ambient input. A missing registry value
+        // keeps the key absent; a supplied value contains exact managed
+        // symlinks and cannot widen into a parent-directory scan.
+        env[ExternalModelRegistry.environmentKey] = exactModelLinks
         // Force Python to flush stdout/stderr line-by-line so
         // huggingface_hub's tqdm progress bars reach our readability
         // handler without sitting in the libc block-buffer until the

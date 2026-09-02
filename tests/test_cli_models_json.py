@@ -108,6 +108,23 @@ def test_cached_payload_shape() -> None:
             assert m["alias"] is None
 
 
+def test_cached_payload_reports_exact_link_as_external(monkeypatch) -> None:
+    monkeypatch.setattr("vllm_mlx.cli._scan_hf_cache_models", lambda: [])
+    monkeypatch.setattr("vllm_mlx.cli._scan_external_model_dirs", lambda: [])
+    monkeypatch.setattr(
+        "vllm_mlx.cli._scan_exact_model_links",
+        lambda: [("youzi-external-model-0123456789abcdef", 4096, 1.0)],
+    )
+
+    payload = _cached_models_json_payload()
+
+    assert payload["count"] == 1
+    assert payload["cached"][0]["repo"] == "youzi-external-model-0123456789abcdef"
+    assert payload["cached"][0]["alias"] is None
+    assert payload["cached"][0]["state"] == "external"
+    assert payload["cached"][0]["external"] is True
+
+
 def test_command_emits_single_valid_json_available(capfd) -> None:
     models_command(SimpleNamespace(cached=False, json=True))
     out = capfd.readouterr().out

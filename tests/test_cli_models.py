@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 from types import ModuleType, SimpleNamespace
@@ -1013,6 +1014,74 @@ def test_external_scan_accepts_a_model_directly_under_the_root(tmp_path):
     rows = cli._scan_external_model_dirs([str(root)])
 
     assert [r[0] for r in rows] == ["SoloModel-4bit"]
+
+
+def test_exact_managed_link_is_inventoried_and_resolves_without_scanning_siblings(
+    tmp_path, monkeypatch
+):
+    source_parent = tmp_path / "Other App Models"
+    selected = _write_mlx_model(source_parent / "Selected Model")
+    _write_mlx_model(source_parent / "Sibling Model")
+    links = tmp_path / "Application Support" / "Rapid" / "LinkedModels"
+    links.mkdir(parents=True)
+    alias = "youzi-external-selected-model-0123456789abcdef"
+    link = links / alias
+    link.symlink_to(selected, target_is_directory=True)
+    monkeypatch.setenv("RAPID_MLX_EXACT_MODEL_LINKS", json.dumps([str(link)]))
+
+    rows = cli._scan_exact_model_links()
+
+    assert [row[0] for row in rows] == [alias]
+    assert resolve_model(alias) == os.path.realpath(selected)
+    assert all("Sibling" not in row[0] for row in rows)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["not-json", "{}", "[123]", '["relative/model"]'],
+)
+def test_exact_link_contract_rejects_malformed_or_non_absolute_values(
+    value, monkeypatch
+):
+    monkeypatch.setenv("RAPID_MLX_EXACT_MODEL_LINKS", value)
+
+    assert cli._scan_exact_model_links() == []
+
+
+def test_exact_link_contract_rejects_directories_and_unsafe_link_names(
+    tmp_path, monkeypatch
+):
+    model = _write_mlx_model(tmp_path / "direct-model")
+    unsafe = tmp_path / "bad name"
+    unsafe.symlink_to(model, target_is_directory=True)
+    monkeypatch.setenv(
+        "RAPID_MLX_EXACT_MODEL_LINKS", json.dumps([str(model), str(unsafe)])
+    )
+
+    assert cli._scan_exact_model_links() == []
+
+
+def test_exact_link_is_revalidated_at_launch(tmp_path, monkeypatch):
+    model = _write_mlx_model(tmp_path / "source")
+    link = tmp_path / "youzi-external-model-fedcba9876543210"
+    link.symlink_to(model, target_is_directory=True)
+    alias = link.name
+    monkeypatch.setenv("RAPID_MLX_EXACT_MODEL_LINKS", json.dumps([str(link)]))
+    assert [row[0] for row in cli._scan_exact_model_links()] == [alias]
+
+    (model / "model.safetensors").unlink()
+
+    assert resolve_model(alias) == alias
+
+
+def test_retired_alias_cannot_be_revived_by_exact_link(tmp_path, monkeypatch):
+    model = _write_mlx_model(tmp_path / "source")
+    link = tmp_path / "ministral-3b-4bit"
+    link.symlink_to(model, target_is_directory=True)
+    monkeypatch.setenv("RAPID_MLX_EXACT_MODEL_LINKS", json.dumps([str(link)]))
+
+    with pytest.raises(RetiredModelAliasError):
+        resolve_model(link.name)
 
 
 def test_root_level_model_is_not_double_counted_with_nested_model(tmp_path):
