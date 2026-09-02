@@ -100,6 +100,9 @@ struct RapidApp: App {
     @State private var memoryStore: MemoryStore
     /// Persisted theme override exposed via Settings → Appearance.
     @State private var appearance: AppearanceConfig
+    /// Persisted presentation choice. Both presentations continue to use all
+    /// of the app-owned runtime objects above and below this preference.
+    @State private var experienceMode: YouziExperienceModeConfig
     /// Deep-link channel into the Settings window.
     @State private var settingsRouter: SettingsRouter
     @State private var commandPaletteRequest = CommandPaletteRequestCoordinator()
@@ -184,6 +187,7 @@ struct RapidApp: App {
         let customInstructionsConfig = CustomInstructionsConfig()
         let memoryStore = MemoryStore()
         let appearanceConfig = AppearanceConfig()
+        let experienceModeConfig = YouziExperienceModeConfig()
         // Apply the persisted theme override before the first window
         // renders so the user doesn't see a flash of the wrong mode.
         appearanceConfig.apply()
@@ -353,6 +357,7 @@ struct RapidApp: App {
         _customInstructions = State(initialValue: customInstructionsConfig)
         _memoryStore = State(initialValue: memoryStore)
         _appearance = State(initialValue: appearanceConfig)
+        _experienceMode = State(initialValue: experienceModeConfig)
         _settingsRouter = State(initialValue: SettingsRouter())
         _deferredTelemetryConsent = State(initialValue: consentCoordinator)
         _githubStarPrompt = State(initialValue: starPromptCoordinator)
@@ -388,6 +393,7 @@ struct RapidApp: App {
                 .environment(customInstructions)
                 .environment(memoryStore)
                 .environment(appearance)
+                .environment(experienceMode)
                 .environment(settingsRouter)
                 .environment(commandPaletteRequest)
                 .environment(deferredTelemetryConsent)
@@ -535,6 +541,20 @@ struct RapidApp: App {
                     openWindow(id: "main")
                 }
                 .keyboardShortcut("p", modifiers: .command)
+            }
+            CommandMenu("体验") {
+                ForEach(YouziExperienceMode.allCases) { mode in
+                    Button {
+                        experienceMode.mode = mode
+                    } label: {
+                        if experienceMode.mode == mode {
+                            Label(mode.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(mode.displayName)
+                        }
+                    }
+                    .accessibilityIdentifier(mode.accessibilityIdentifier)
+                }
             }
         }
 

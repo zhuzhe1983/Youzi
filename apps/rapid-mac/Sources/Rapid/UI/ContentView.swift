@@ -85,6 +85,7 @@ struct ContentView: View {
     @Environment(GitHubStarPromptCoordinator.self) private var githubStarPrompt
     @Environment(SparkleUpdateController.self) private var sparkleUpdater
     @Environment(CommandPaletteRequestCoordinator.self) private var commandPaletteRequest
+    @Environment(YouziExperienceModeConfig.self) private var experienceMode
     @Environment(\.openWindow) private var openWindow
 
     @State private var alias: String = ""
@@ -160,7 +161,9 @@ struct ContentView: View {
         // model comes up on first send (implicit lifecycle). Search belongs
         // to the sidebar column beside macOS's native collapse control.
         Group {
-            if quickstartVisible {
+            if experienceMode.mode == .simple {
+                simpleProductionShell
+            } else if quickstartVisible {
                 // Setup owns the window (Paper 05.1.A). See ``onboardingShell``.
                 onboardingShell
             } else {
@@ -575,6 +578,25 @@ struct ContentView: View {
         }
     }
 
+    /// Task-first presentation of the same app-owned chat and server state.
+    /// The mode branch lives beside (not inside) ``productionShell`` so the
+    /// mature Professional Mode hierarchy remains byte-for-byte intact.
+    private var simpleProductionShell: some View {
+        YouziSimpleShell(
+            assistantAlias: alias,
+            onPrepareAssistant: {
+                // First-time setup remains the mature Professional flow. The
+                // Simple composer stores its draft in scene state, so this
+                // explicit handoff does not discard what the user typed.
+                experienceMode.mode = .professional
+                performReadinessAction(.chooseModel)
+            },
+            onOpenSettings: {
+                openWindow(id: "settings")
+            }
+        )
+    }
+
     private var starPromptPresentationContext: GitHubStarPromptCoordinator.PresentationContext {
         let dictationIsBusy: Bool = switch dictation.phase {
         case .preparingModel, .starting, .recording, .transcribing: true
@@ -591,7 +613,7 @@ struct ContentView: View {
                 || video.isSubmitting
                 || video.isPreparing
                 || dictationIsBusy,
-            hasBlockingSurface: quickstartVisible
+            hasBlockingSurface: onboardingIsPresented
                 || deferredTelemetryConsent.isPresented
                 || campaignIsVisible
                 || showConversationSearch
@@ -1212,6 +1234,12 @@ struct ContentView: View {
         return ContentView.quickstartRetainsSurface(phase: quickstart.phase)
     }
 
+    /// The eligibility state can be true while Simple Mode is on screen. Keep
+    /// presentation-only consumers from treating hidden onboarding as visible.
+    private var onboardingIsPresented: Bool {
+        experienceMode.mode == .professional && quickstartVisible
+    }
+
     /// Does onboarding still own the window in this phase?
     ///
     /// Pure so the one rule that decides whether setup is on screen can be
@@ -1285,7 +1313,7 @@ struct ContentView: View {
     /// ``QuickstartView`` presents on, so the two surfaces can never
     /// disagree about who owns the decision.
     private var memoryWarningHandledByQuickstart: Bool {
-        quickstartVisible
+        onboardingIsPresented
             && QuickstartView.memoryWarningToPresent(
                 phase: quickstart.phase,
                 pending: server.pendingMemoryWarning,

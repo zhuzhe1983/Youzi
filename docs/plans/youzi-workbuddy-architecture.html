@@ -1,0 +1,486 @@
+<section id="youzi-workbuddy-architecture" aria-label="Youzi WorkBuddy 化产品架构图">
+  <style>
+    #youzi-workbuddy-architecture {
+      --yz-ink: light-dark(#2f2a25, #f6f0e8);
+      --yz-muted: light-dark(#756b62, #b8aea4);
+      --yz-line: light-dark(#ded4c8, #49423b);
+      --yz-surface: light-dark(#fffdf9, #201d1a);
+      --yz-surface-2: light-dark(#f7f1e8, #2a2521);
+      --yz-orange: #ef8f35;
+      --yz-green: #6e9d70;
+      --yz-blue: #5d86ae;
+      --yz-purple: #8d75a5;
+      color: var(--yz-ink);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+      padding: 12px 4px 18px;
+    }
+
+    #youzi-workbuddy-architecture * { box-sizing: border-box; }
+
+    #youzi-workbuddy-architecture .yz-heading {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    #youzi-workbuddy-architecture h2 {
+      margin: 0;
+      font-size: clamp(24px, 4vw, 38px);
+      line-height: 1.1;
+      letter-spacing: -0.035em;
+    }
+
+    #youzi-workbuddy-architecture .yz-subtitle {
+      margin: 7px 0 0;
+      color: var(--yz-muted);
+      font-size: 14px;
+    }
+
+    #youzi-workbuddy-architecture .yz-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+
+    #youzi-workbuddy-architecture .yz-filter {
+      min-height: 36px;
+      border: 1px solid var(--yz-line);
+      border-radius: 10px;
+      padding: 0 12px;
+      background: var(--yz-surface);
+      color: var(--yz-muted);
+      font: inherit;
+      cursor: pointer;
+    }
+
+    #youzi-workbuddy-architecture .yz-filter[aria-pressed="true"] {
+      color: light-dark(#fff, #1b1713);
+      border-color: var(--yz-orange);
+      background: var(--yz-orange);
+      font-weight: 700;
+    }
+
+    #youzi-workbuddy-architecture .yz-canvas {
+      border: 1px solid var(--yz-line);
+      border-radius: 22px;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--yz-orange) 12%, transparent), transparent 30%),
+        var(--yz-surface);
+    }
+
+    #youzi-workbuddy-architecture .yz-user {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+      padding: 16px 20px;
+      background: var(--yz-surface-2);
+      border-bottom: 1px solid var(--yz-line);
+    }
+
+    #youzi-workbuddy-architecture .yz-avatar {
+      width: 42px;
+      height: 42px;
+      border-radius: 13px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-weight: 900;
+      background: linear-gradient(145deg, #f5a44f, #dd7326);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.35);
+    }
+
+    #youzi-workbuddy-architecture .yz-user strong,
+    #youzi-workbuddy-architecture .yz-user span { display: block; }
+
+    #youzi-workbuddy-architecture .yz-user span {
+      margin-top: 2px;
+      color: var(--yz-muted);
+      font-size: 13px;
+    }
+
+    #youzi-workbuddy-architecture .yz-principles {
+      color: var(--yz-muted);
+      font-size: 12px;
+      text-align: right;
+      line-height: 1.6;
+    }
+
+    #youzi-workbuddy-architecture .yz-layer {
+      display: grid;
+      grid-template-columns: 112px minmax(0, 1fr);
+      gap: 14px;
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--yz-line);
+    }
+
+    #youzi-workbuddy-architecture .yz-layer:last-of-type { border-bottom: 0; }
+
+    #youzi-workbuddy-architecture .yz-layer-label {
+      padding-top: 6px;
+    }
+
+    #youzi-workbuddy-architecture .yz-layer-label strong {
+      display: block;
+      font-size: 13px;
+      letter-spacing: .04em;
+    }
+
+    #youzi-workbuddy-architecture .yz-layer-label span {
+      display: block;
+      color: var(--yz-muted);
+      font-size: 11px;
+      margin-top: 4px;
+    }
+
+    #youzi-workbuddy-architecture .yz-nodes {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 9px;
+    }
+
+    #youzi-workbuddy-architecture .yz-node {
+      position: relative;
+      min-height: 78px;
+      border: 1px solid var(--yz-line);
+      border-radius: 14px;
+      padding: 12px;
+      background: color-mix(in srgb, var(--yz-surface-2) 74%, transparent);
+      color: var(--yz-ink);
+      text-align: left;
+      font: inherit;
+      cursor: pointer;
+      transition: transform 180ms ease, opacity 180ms ease, border-color 180ms ease, background 180ms ease;
+    }
+
+    #youzi-workbuddy-architecture .yz-node:hover,
+    #youzi-workbuddy-architecture .yz-node:focus-visible {
+      transform: translateY(-2px);
+      border-color: var(--yz-orange);
+      outline: none;
+    }
+
+    #youzi-workbuddy-architecture .yz-node[aria-pressed="true"] {
+      border-color: var(--yz-orange);
+      background: color-mix(in srgb, var(--yz-orange) 12%, var(--yz-surface));
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--yz-orange) 20%, transparent);
+    }
+
+    #youzi-workbuddy-architecture .yz-node.yz-dim { opacity: .2; }
+
+    #youzi-workbuddy-architecture .yz-node-title {
+      display: block;
+      padding-right: 34px;
+      font-size: 14px;
+      font-weight: 750;
+      line-height: 1.2;
+    }
+
+    #youzi-workbuddy-architecture .yz-node-desc {
+      display: block;
+      margin-top: 7px;
+      color: var(--yz-muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    #youzi-workbuddy-architecture .yz-kind {
+      position: absolute;
+      top: 10px;
+      right: 9px;
+      min-width: 27px;
+      padding: 3px 5px;
+      border-radius: 7px;
+      color: #fff;
+      font-size: 9px;
+      font-weight: 800;
+      line-height: 1;
+      text-align: center;
+      background: var(--yz-orange);
+    }
+
+    #youzi-workbuddy-architecture .yz-node[data-build="new"] .yz-kind { background: var(--yz-blue); }
+    #youzi-workbuddy-architecture .yz-node[data-build="reuse"] .yz-kind { background: var(--yz-green); }
+
+    #youzi-workbuddy-architecture .yz-orchestrator {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--yz-line);
+      background: color-mix(in srgb, var(--yz-orange) 6%, var(--yz-surface));
+    }
+
+    #youzi-workbuddy-architecture .yz-orchestrator-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 13px;
+    }
+
+    #youzi-workbuddy-architecture .yz-orchestrator-title strong { font-size: 15px; }
+    #youzi-workbuddy-architecture .yz-orchestrator-title span { color: var(--yz-muted); font-size: 11px; }
+
+    #youzi-workbuddy-architecture .yz-flow {
+      display: grid;
+      grid-template-columns: repeat(11, auto);
+      align-items: center;
+      gap: 7px;
+    }
+
+    #youzi-workbuddy-architecture .yz-step {
+      min-height: 46px;
+      border: 1px solid color-mix(in srgb, var(--yz-orange) 35%, var(--yz-line));
+      border-radius: 12px;
+      padding: 8px 10px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      background: var(--yz-surface);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    #youzi-workbuddy-architecture .yz-arrow {
+      color: var(--yz-orange);
+      font-size: 17px;
+      text-align: center;
+    }
+
+    #youzi-workbuddy-architecture .yz-boundary {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 10px;
+      align-items: stretch;
+      padding: 18px 20px;
+    }
+
+    #youzi-workbuddy-architecture .yz-zone {
+      border: 1px solid var(--yz-line);
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: var(--yz-surface-2);
+    }
+
+    #youzi-workbuddy-architecture .yz-zone strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 7px;
+    }
+
+    #youzi-workbuddy-architecture .yz-zone span {
+      color: var(--yz-muted);
+      font-size: 11px;
+      line-height: 1.55;
+    }
+
+    #youzi-workbuddy-architecture .yz-gate {
+      display: grid;
+      place-items: center;
+      width: 76px;
+      padding: 8px;
+      border-radius: 14px;
+      color: #fff;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 800;
+      background: var(--yz-green);
+    }
+
+    #youzi-workbuddy-architecture .yz-detail {
+      display: grid;
+      grid-template-columns: minmax(150px, .7fr) minmax(0, 2fr) auto;
+      gap: 16px;
+      align-items: center;
+      min-height: 68px;
+      padding: 13px 18px;
+      border-top: 1px solid var(--yz-line);
+      background: light-dark(#2f2a25, #f2ebe2);
+      color: light-dark(#fffaf4, #231f1b);
+    }
+
+    #youzi-workbuddy-architecture .yz-detail strong { font-size: 14px; }
+    #youzi-workbuddy-architecture .yz-detail p { margin: 0; font-size: 12px; line-height: 1.45; opacity: .8; }
+    #youzi-workbuddy-architecture .yz-status { font-size: 11px; font-weight: 800; white-space: nowrap; }
+
+    #youzi-workbuddy-architecture .yz-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 11px 20px 0;
+      color: var(--yz-muted);
+      font-size: 11px;
+    }
+
+    #youzi-workbuddy-architecture .yz-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 5px;
+      border-radius: 50%;
+      background: var(--yz-orange);
+    }
+
+    #youzi-workbuddy-architecture .yz-dot.new { background: var(--yz-blue); }
+    #youzi-workbuddy-architecture .yz-dot.reuse { background: var(--yz-green); }
+
+    @media (max-width: 820px) {
+      #youzi-workbuddy-architecture .yz-heading { align-items: flex-start; flex-direction: column; }
+      #youzi-workbuddy-architecture .yz-controls { justify-content: flex-start; }
+      #youzi-workbuddy-architecture .yz-nodes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #youzi-workbuddy-architecture .yz-flow { grid-template-columns: 1fr; }
+      #youzi-workbuddy-architecture .yz-arrow { transform: rotate(90deg); }
+      #youzi-workbuddy-architecture .yz-principles { display: none; }
+      #youzi-workbuddy-architecture .yz-user { grid-template-columns: auto 1fr; }
+      #youzi-workbuddy-architecture .yz-detail { grid-template-columns: 1fr; gap: 5px; }
+      #youzi-workbuddy-architecture .yz-status { white-space: normal; }
+    }
+
+    @media (max-width: 520px) {
+      #youzi-workbuddy-architecture .yz-layer { grid-template-columns: 1fr; }
+      #youzi-workbuddy-architecture .yz-layer-label { padding-top: 0; }
+      #youzi-workbuddy-architecture .yz-nodes { grid-template-columns: 1fr; }
+      #youzi-workbuddy-architecture .yz-boundary { grid-template-columns: 1fr; }
+      #youzi-workbuddy-architecture .yz-gate { width: 100%; min-height: 44px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #youzi-workbuddy-architecture .yz-node { transition: none; }
+    }
+  </style>
+
+  <header class="yz-heading">
+    <div>
+      <h2>Youzi 私人智能平台架构</h2>
+      <p class="yz-subtitle">任务优先 · 简约 / 专业双界面 · 知我图谱 · 本地实时语音 · 渐进披露</p>
+    </div>
+    <div class="yz-controls" aria-label="按工程属性筛选">
+      <button type="button" class="yz-filter" data-filter="all" aria-pressed="true">全部</button>
+      <button type="button" class="yz-filter" data-filter="reuse" aria-pressed="false">现有复用</button>
+      <button type="button" class="yz-filter" data-filter="reshape" aria-pressed="false">交互重塑</button>
+      <button type="button" class="yz-filter" data-filter="new" aria-pressed="false">全新建设</button>
+    </div>
+  </header>
+
+  <div class="yz-canvas">
+    <div class="yz-user">
+      <div class="yz-avatar" aria-hidden="true">柚</div>
+      <div>
+        <strong>简约模式只面对一个“柚子助手”</strong>
+        <span>说清楚想完成什么；专业模式仍保留完整 Rapid-MLX 调试能力</span>
+      </div>
+      <div class="yz-principles">不先选模型<br>不先学工具<br>外部访问先确认</div>
+    </div>
+
+    <div class="yz-layer">
+      <div class="yz-layer-label"><strong>日常体验层</strong><span>用户看得到</span></div>
+      <div class="yz-nodes">
+        <button type="button" class="yz-node" data-build="reshape" data-title="新任务" data-status="重塑现有 Chat" data-detail="统一文字、文件、图片、语音等入口；首页只问‘今天想让我帮你做什么？’。" aria-pressed="false"><span class="yz-kind">重塑</span><span class="yz-node-title">新任务</span><span class="yz-node-desc">唯一主入口</span></button>
+        <button type="button" class="yz-node" data-build="reshape" data-title="我的事情" data-status="复用并重塑历史记录" data-detail="承载最近任务、搜索、置顶、归档与分组，并引入真正的项目上下文。" aria-pressed="false"><span class="yz-kind">重塑</span><span class="yz-node-title">我的事情</span><span class="yz-node-desc">任务历史与项目</span></button>
+        <button type="button" class="yz-node" data-build="reshape" data-title="帮手中心" data-status="重塑 Tools / Connectors" data-detail="统一呈现帮手、会做的事和已连接应用，用用途与数据边界解释能力。" aria-pressed="false"><span class="yz-kind">重塑</span><span class="yz-node-title">帮手中心</span><span class="yz-node-desc">少量精选能力</span></button>
+        <button type="button" class="yz-node" data-build="new" data-title="知我" data-status="全新建设个人记忆图谱" data-detail="用可筛选知识图谱、关系解释和精确引用呈现长期记忆；添加资料、分类与待确认是安静的二级入口。" aria-pressed="false"><span class="yz-kind">新增</span><span class="yz-node-title">知我</span><span class="yz-node-desc">个人记忆与知识图谱</span></button>
+        <button type="button" class="yz-node" data-build="new" data-title="灵感" data-status="全新建设" data-detail="用示例成果帮助用户开始；选择后生成可编辑任务草稿，不直接执行外部动作。" aria-pressed="false"><span class="yz-kind">新增</span><span class="yz-node-title">灵感</span><span class="yz-node-desc">模板与示例成果</span></button>
+        <button type="button" class="yz-node" data-build="new" data-title="定时帮我" data-status="全新建设" data-detail="自然语言创建定时任务，带长期授权、运行记录、失败恢复和通知。" aria-pressed="false"><span class="yz-kind">新增</span><span class="yz-node-title">定时帮我</span><span class="yz-node-desc">自动化与记录</span></button>
+        <button type="button" class="yz-node" data-build="new" data-title="沉浸式语音" data-status="全新建设双维度语音体验" data-detail="全局入口只显示动态智能球；智能体入口留在当前任务中，让对应帮手拥有耳朵和嘴。" aria-pressed="false"><span class="yz-kind">新增</span><span class="yz-node-title">沉浸式语音</span><span class="yz-node-desc">全局球体与智能体 Live</span></button>
+      </div>
+    </div>
+
+    <div class="yz-orchestrator">
+      <div class="yz-orchestrator-title"><strong>柚子任务中枢</strong><span>普通用户无需理解这一层</span></div>
+      <div class="yz-flow" aria-label="任务编排流程">
+        <div class="yz-step">理解需求</div><div class="yz-arrow">→</div>
+        <div class="yz-step">组合上下文</div><div class="yz-arrow">→</div>
+        <div class="yz-step">选择能力与模型</div><div class="yz-arrow">→</div>
+        <div class="yz-step">访问确认</div><div class="yz-arrow">→</div>
+        <div class="yz-step">执行与恢复</div><div class="yz-arrow">→</div>
+        <div class="yz-step">沉淀成果与记忆</div>
+      </div>
+    </div>
+
+    <div class="yz-layer">
+      <div class="yz-layer-label"><strong>任务支撑层</strong><span>持续完成事情</span></div>
+      <div class="yz-nodes">
+        <button type="button" class="yz-node" data-build="new" data-title="柚子助手" data-status="全新建设默认人格" data-detail="始终使用一个稳定入口；系统自动匹配专业能力，不让用户先挑角色。" aria-pressed="false"><span class="yz-kind">新增</span><span class="yz-node-title">柚子助手</span><span class="yz-node-desc">默认人格与语气</span></button>
+        <button type="button" class="yz-node" data-build="new" data-title="任务 / 工作空间 / 项目" data-status="全新建设统一领域模型" data-detail="任务是一次执行边界并引用一个真实本地工作目录；项目位于任务之上，保存长期规则、资料和可用能力。" aria-pressed="false"><span class="yz-kind">新增</span><span class="yz-node-title">任务 / 工作空间 / 项目</span><span class="yz-node-desc">真实目录与长期上下文</span></button>
+        <button type="button" class="yz-node" data-build="reshape" data-title="自动模型路由" data-status="重塑现有模型管理" data-detail="默认自动选择兼容的本地模型；下载、启动、恢复合并成任务进度。" aria-pressed="false"><span class="yz-kind">重塑</span><span class="yz-node-title">自动模型路由</span><span class="yz-node-desc">隐藏运行时细节</span></button>
+        <button type="button" class="yz-node" data-build="reshape" data-title="权限闸门" data-status="重塑现有授权体验" data-detail="执行前说明访问什么、为什么访问、允许一次还是持续允许。" aria-pressed="false"><span class="yz-kind">重塑</span><span class="yz-node-title">权限闸门</span><span class="yz-node-desc">外部访问先确认</span></button>
+        <button type="button" class="yz-node" data-build="new" data-title="成果管理" data-status="全新建设成果对象" data-detail="文档、表格、图片、音频与视频拥有稳定标题、预览、保存位置和导出动作。" aria-pressed="false"><span class="yz-kind">新增</span><span class="yz-node-title">成果管理</span><span class="yz-node-desc">预览、保存与导出</span></button>
+        <button type="button" class="yz-node" data-build="new" data-title="记忆图谱与内置 MCP" data-status="全新建设本地派生系统" data-detail="闲时从授权聊天和文件提取节点、关系与引用；任务通过本地 MCP 按意图和作用域检索，不能读取整张图。" aria-pressed="false"><span class="yz-kind">新增</span><span class="yz-node-title">记忆图谱与内置 MCP</span><span class="yz-node-desc">可解释、可纠正、可忘记</span></button>
+      </div>
+    </div>
+
+    <div class="yz-layer">
+      <div class="yz-layer-label"><strong>能力系统层</strong><span>WorkBuddy 骨架</span></div>
+      <div class="yz-nodes">
+        <button type="button" class="yz-node" data-build="new" data-title="帮手" data-status="全新建设受控目录" data-detail="一套角色、表达风格、工作步骤与推荐能力；只收录真实高频场景。" aria-pressed="false"><span class="yz-kind">新增</span><span class="yz-node-title">帮手</span><span class="yz-node-desc">用户理解的能力预设</span></button>
+        <button type="button" class="yz-node" data-build="reshape" data-title="会做的事" data-status="重塑现有内置工具" data-detail="将网页搜索、天气、浏览和媒体生成等能力改写成用途卡片。" aria-pressed="false"><span class="yz-kind">重塑</span><span class="yz-node-title">会做的事</span><span class="yz-node-desc">工具与媒体能力</span></button>
+        <button type="button" class="yz-node" data-build="reshape" data-title="已连接应用" data-status="重塑现有 MCP 入口" data-detail="用品牌、用途、状态和权限范围呈现连接；MCP、命令和 URL 留在高级设置。" aria-pressed="false"><span class="yz-kind">重塑</span><span class="yz-node-title">已连接应用</span><span class="yz-node-desc">MCP 与外部服务</span></button>
+        <button type="button" class="yz-node" data-build="new" data-title="灵感模板" data-status="全新建设受控清单" data-detail="按生活和工作场景分类，包含示例成果、预填需求与所需资料。" aria-pressed="false"><span class="yz-kind">新增</span><span class="yz-node-title">灵感模板</span><span class="yz-node-desc">可预览的任务起点</span></button>
+        <button type="button" class="yz-node" data-build="new" data-title="帮手组合" data-status="纳入完整目标" data-detail="多角色协作作为完整产品能力实现，但只有确实提升结果时才自动启用，不增加用户选择负担。" aria-pressed="false"><span class="yz-kind">新增</span><span class="yz-node-title">帮手组合</span><span class="yz-node-desc">多角色与协作</span></button>
+      </div>
+    </div>
+
+    <div class="yz-layer">
+      <div class="yz-layer-label"><strong>Rapid-MLX 基座</strong><span>尽量复用</span></div>
+      <div class="yz-nodes">
+        <button type="button" class="yz-node" data-build="reshape" data-title="双模式共享运行时" data-status="一个进程、一套状态" data-detail="简约模式与专业模式只是两套信息组织；共享同一个模型、会话、任务、权限、连接器、成果和记忆状态，切换不重启。" aria-pressed="false"><span class="yz-kind">重塑</span><span class="yz-node-title">双模式共享运行时</span><span class="yz-node-desc">简约呈现 / 专业控制台</span></button>
+        <button type="button" class="yz-node" data-build="reuse" data-title="会话与文件" data-status="现有能力直接复用" data-detail="复用流式对话、会话持久化、搜索、重命名、置顶、归档和附件。" aria-pressed="false"><span class="yz-kind">复用</span><span class="yz-node-title">会话与文件</span><span class="yz-node-desc">历史、附件与整理</span></button>
+        <button type="button" class="yz-node" data-build="reuse" data-title="本地模型运行时" data-status="现有能力直接复用" data-detail="复用模型下载、启动、自动恢复和资源保护；普通模式隐藏技术参数。" aria-pressed="false"><span class="yz-kind">复用</span><span class="yz-node-title">本地模型运行时</span><span class="yz-node-desc">模型与资源保护</span></button>
+        <button type="button" class="yz-node" data-build="reshape" data-title="单模型外部复用" data-status="新增安全链接并接入现有目录" data-detail="只为用户选中的一个 OMLX/MLX 模型创建受管理软链；不链接整个缓存、不复制权重、不删除源模型。" aria-pressed="false"><span class="yz-kind">重塑</span><span class="yz-node-title">单模型外部复用</span><span class="yz-node-desc">安全软链与直接识别</span></button>
+        <button type="button" class="yz-node" data-build="reuse" data-title="工具与 MCP" data-status="现有能力直接复用" data-detail="复用内置工具、连接器、逐工具开关和调用授权。" aria-pressed="false"><span class="yz-kind">复用</span><span class="yz-node-title">工具与 MCP</span><span class="yz-node-desc">调用和授权基础</span></button>
+        <button type="button" class="yz-node" data-build="reuse" data-title="多媒体能力" data-status="现有能力直接复用" data-detail="复用图片、音频和实验性视频能力，但从任务场景进入。" aria-pressed="false"><span class="yz-kind">复用</span><span class="yz-node-title">多媒体能力</span><span class="yz-node-desc">图片、音频与视频</span></button>
+        <button type="button" class="yz-node" data-build="new" data-title="本地实时语音管线" data-status="全新建设 VAD / ASR / LLM / TTS" data-detail="四段本地模型共享统一资源调度、任务编排和权限；支持流式转写、流式合成、自然打断和长任务转后台。" aria-pressed="false"><span class="yz-kind">新增</span><span class="yz-node-title">本地实时语音管线</span><span class="yz-node-desc">全局与智能体共用</span></button>
+        <button type="button" class="yz-node" data-build="reuse" data-title="高级设置" data-status="保留现有专业入口" data-detail="模型、性能、MCP、自定义连接器和诊断继续存在，但不进入日常主路径。" aria-pressed="false"><span class="yz-kind">复用</span><span class="yz-node-title">高级设置</span><span class="yz-node-desc">管理员与诊断入口</span></button>
+      </div>
+    </div>
+
+    <div class="yz-boundary">
+      <div class="yz-zone"><strong>本机信任区</strong><span>本地模型 · 会话与记忆 · 项目资料 · 未发送的任务草稿</span></div>
+      <div class="yz-gate">访问确认<br>与审计</div>
+      <div class="yz-zone"><strong>外部服务区</strong><span>网页与互联网 · 已连接应用 · 云端接口 · 对外写入动作</span></div>
+    </div>
+
+    <div class="yz-detail" aria-live="polite">
+      <strong id="yz-detail-title">点击任一模块查看说明</strong>
+      <p id="yz-detail-copy">按工程属性筛选，可区分现有复用、交互重塑和全新建设。</p>
+      <span class="yz-status" id="yz-detail-status">完整目标一次性交付</span>
+    </div>
+  </div>
+
+  <div class="yz-legend" aria-label="工程属性图例">
+    <span><i class="yz-dot reuse"></i>现有复用：保留成熟基座能力</span>
+    <span><i class="yz-dot"></i>交互重塑：能力保留，入口和语言重做</span>
+    <span><i class="yz-dot new"></i>全新建设：补齐完整产品架构</span>
+  </div>
+
+  <script>
+    (() => {
+      const root = document.getElementById('youzi-workbuddy-architecture');
+      const filters = [...root.querySelectorAll('.yz-filter')];
+      const nodes = [...root.querySelectorAll('.yz-node')];
+      const title = root.querySelector('#yz-detail-title');
+      const copy = root.querySelector('#yz-detail-copy');
+      const status = root.querySelector('#yz-detail-status');
+
+      filters.forEach((button) => {
+        button.addEventListener('click', () => {
+          const filter = button.dataset.filter;
+          filters.forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+          nodes.forEach((node) => node.classList.toggle('yz-dim', filter !== 'all' && node.dataset.build !== filter));
+        });
+      });
+
+      nodes.forEach((node) => {
+        node.addEventListener('click', () => {
+          nodes.forEach((item) => item.setAttribute('aria-pressed', String(item === node)));
+          title.textContent = node.dataset.title;
+          copy.textContent = node.dataset.detail;
+          status.textContent = node.dataset.status;
+        });
+      });
+    })();
+  </script>
+</section>
