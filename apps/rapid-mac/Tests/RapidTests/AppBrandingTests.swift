@@ -29,6 +29,10 @@ struct AppBrandingTests {
         #expect(plist["CFBundleName"] as? String == "Youzi")
         #expect(plist["CFBundleExecutable"] as? String == "Rapid")
         #expect(plist["CFBundleIdentifier"] as? String == "com.rapidmlx.rapid")
+        #expect(
+            plist["SUFeedURL"] as? String
+                == "https://github.com/zhuzhe1983/Youzi/releases/latest/download/appcast.xml"
+        )
     }
 
     @Test("shared Youzi logo is high-resolution with a transparent canvas")

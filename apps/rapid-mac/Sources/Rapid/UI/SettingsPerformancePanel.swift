@@ -85,33 +85,22 @@ struct SettingsPerformancePanel: View {
     /// question. Nil-safe: with no child, there is nothing to compare against.
     @State private var launchedFlags: [String] = []
 
+    /// DetailCanvas already scrolls and pads; drop the nested scroll when
+    /// this panel is stacked under 模型.
+    var embedsInParentScroll: Bool = false
+    var showsPageHeader: Bool = true
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
-                SectionHeader(
-                    "Performance",
-                    subtitle: "These settings change speed and memory use, and some can change what the model writes. They apply to one model at a time and take effect when that model next starts.",
-                    emphasis: .page
-                )
-                modelSection
-                if let alias = targetAlias {
-                    if needsReload { reloadBanner(alias: alias) }
-                    kvSection(alias: alias)
-                    speculativeDecodingSection(alias: alias)
-                    prefixSection(alias: alias)
-                    footer(alias: alias)
-                } else {
-                    noModelNotice
-                }
-                if let error = perf.loadError {
-                    InlineNotice(message: error, tone: .error)
-                }
-                if let applyError {
-                    InlineNotice(message: applyError, tone: .error)
+        Group {
+            if embedsInParentScroll {
+                panelContent
+            } else {
+                ScrollView {
+                    panelContent
+                        .padding(RapidTheme.Space.xl)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(RapidTheme.Space.xl)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityIdentifier("Settings.Performance.Panel")
         .task(id: server.launchedChildAlias) {
@@ -134,6 +123,32 @@ struct SettingsPerformancePanel: View {
         .onChange(of: selectedAlias) { _, alias in
             launchedFlags = alias.map { perf.launchFlags(forAlias: $0) } ?? []
             applyError = nil
+        }
+    }
+
+    private var panelContent: some View {
+        VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
+            SectionHeader(
+                "Performance",
+                subtitle: "These settings change speed and memory use, and some can change what the model writes. They apply to one model at a time and take effect when that model next starts.",
+                emphasis: showsPageHeader ? .page : .section
+            )
+            modelSection
+            if let alias = targetAlias {
+                if needsReload { reloadBanner(alias: alias) }
+                kvSection(alias: alias)
+                speculativeDecodingSection(alias: alias)
+                prefixSection(alias: alias)
+                footer(alias: alias)
+            } else {
+                noModelNotice
+            }
+            if let error = perf.loadError {
+                InlineNotice(message: error, tone: .error)
+            }
+            if let applyError {
+                InlineNotice(message: applyError, tone: .error)
+            }
         }
     }
 

@@ -415,7 +415,7 @@ struct SidebarView: View {
         HStack(spacing: RapidTheme.Space.sm) {
             YouziLogo(size: 22)
                 .frame(width: RapidTheme.Layout.iconSlot, alignment: .center)
-            Text("Youzi")
+            Text("柚子")
                 .font(RapidFont.bodyEmphasis)
                 .foregroundStyle(RapidTheme.textPrimary)
         }

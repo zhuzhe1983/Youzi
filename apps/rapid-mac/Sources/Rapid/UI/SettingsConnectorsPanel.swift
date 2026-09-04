@@ -56,13 +56,17 @@ struct SettingsConnectorsPanel: View {
         var id: String { original?.name ?? "" }
     }
 
+    /// The combined 智能体 page supplies the page title; demote this
+    /// header to a section when embedded.
+    var showsPageHeader: Bool = true
+
     var body: some View {
         @Bindable var config = config
         return VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
                 "Connectors",
                 subtitle: "Connect the model to MCP servers — programs on this Mac that expose tools like file access, databases or search. Off by default: a connector is a program that runs on your machine and that the model can invoke.",
-                emphasis: .page
+                emphasis: showsPageHeader ? .page : .section
             )
             masterSection
             if config.isEnabled {

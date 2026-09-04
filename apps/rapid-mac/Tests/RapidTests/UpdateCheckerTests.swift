@@ -531,9 +531,9 @@ struct UpdateCheckerTests {
     @Test("endpointURL appends the app version as a percent-encoded ?v= query")
     func endpointCarriesVersion() throws {
         let url = try #require(UpdateChecker.endpointURL(forVersion: "0.10.9"))
-        #expect(url.absoluteString == "https://rapidmlx.com/api/desktop-update?v=0.10.9")
-        // Base is the landing-page worker, not the raw R2 object.
-        #expect(UpdateChecker.endpoint == "https://rapidmlx.com/api/desktop-update")
+        #expect(url.absoluteString == "https://github.com/zhuzhe1983/Youzi/releases/latest/download/latest.json?v=0.10.9")
+        #expect(UpdateChecker.endpoint == "https://github.com/zhuzhe1983/Youzi/releases/latest/download/latest.json")
+        #expect(UpdateChecker.fallbackEndpoint == "https://github.com/zhuzhe1983/Youzi/releases/latest/download/latest.json")
     }
 
     @Test("endpointURL defensively encodes a malformed version string")

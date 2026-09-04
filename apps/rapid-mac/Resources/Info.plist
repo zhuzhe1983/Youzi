@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.13.3</string>
+	<string>0.14.0</string>
 	<key>CFBundleVersion</key>
-	<string>169</string>
+	<string>170</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSAccentColorName</key>
@@ -73,7 +73,7 @@
 	misconfigured Sparkle session.
 	-->
 	<key>SUFeedURL</key>
-	<string>https://dl.rapidmlx.com/appcast.xml</string>
+	<string>https://github.com/zhuzhe1983/Youzi/releases/latest/download/appcast.xml</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUAutomaticallyUpdate</key>

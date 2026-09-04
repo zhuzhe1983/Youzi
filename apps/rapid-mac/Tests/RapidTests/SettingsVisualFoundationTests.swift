@@ -115,17 +115,27 @@ struct SettingsVisualFoundationTests {
         expectedOrder.append("developer")
         #endif
         #expect(SettingsView.Category.allCases.map(\.rawValue) == expectedOrder)
-        // #1717: ``performance`` sits after ``connectors`` — both are
-        // "what the engine is wired to do", ahead of the presentation and
-        // app-level sections.
-        #expect(SettingsView.category(.connectors, movedBy: 1) == .performance)
-        #expect(SettingsView.category(.performance, movedBy: 1) == .experimentalFeatures)
-        #expect(SettingsView.category(.experimentalFeatures, movedBy: 1) == .appearance)
-        // The rail's ↑/↓ handler walks this order and clamps at the ends.
-        #expect(SettingsView.category(.modelManagement, movedBy: -1) == nil)
-        // Developer sits after App in debug, so App is only the last row in
-        // a release build. Both spellings assert the same property: arrowing
-        // past the final row clamps rather than wrapping.
+
+        var expectedRail = [
+            "appearance", "instructions", "memory", "tools", "modelManagement", "privacy", "app",
+        ]
+        #if DEBUG
+        expectedRail.append("developer")
+        #endif
+        #expect(SettingsView.Category.railCategories.map(\.rawValue) == expectedRail)
+        #expect(SettingsView.Category.railDestination(for: .experimentalFeatures) == .appearance)
+        #expect(SettingsView.Category.railDestination(for: .connectors) == .tools)
+        #expect(SettingsView.Category.railDestination(for: .performance) == .modelManagement)
+        #expect(SettingsView.Category.railDestination(for: .appearance) == .appearance)
+
+        // Arrow keys walk the visible rail. Hidden cases first normalize
+        // through ``railDestination(for:)``.
+        #expect(SettingsView.category(.connectors, movedBy: 1) == .modelManagement)
+        #expect(SettingsView.category(.performance, movedBy: 1) == .privacy)
+        #expect(SettingsView.category(.experimentalFeatures, movedBy: 1) == .instructions)
+        #expect(SettingsView.category(.appearance, movedBy: -1) == nil)
+        #expect(SettingsView.category(.modelManagement, movedBy: 1) == .privacy)
+        #expect(SettingsView.category(.modelManagement, movedBy: -1) == .tools)
         #if DEBUG
         #expect(SettingsView.category(.app, movedBy: 1) == .developer)
         #expect(SettingsView.category(.developer, movedBy: 1) == nil)
@@ -133,7 +143,6 @@ struct SettingsVisualFoundationTests {
         #else
         #expect(SettingsView.category(.app, movedBy: 1) == nil)
         #endif
-        #expect(SettingsView.category(.modelManagement, movedBy: 1) == .instructions)
         #expect(SettingsView.category(.app, movedBy: -1) == .privacy)
     }
 

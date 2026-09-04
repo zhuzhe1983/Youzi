@@ -80,6 +80,8 @@ final class YouziExperienceModeTests {
             YouziExperienceMode.professional.accessibilityIdentifier
                 == "Youzi.ExperienceMode.professional"
         )
+        #expect(YouziExperienceMode.simple.other == .professional)
+        #expect(YouziExperienceMode.professional.other == .simple)
     }
 
     @Test("Simple and Professional presentations reuse the app-owned runtime")
@@ -126,6 +128,8 @@ final class YouziExperienceModeTests {
         #expect(rapidApp.contains(".environment(chatViewModel)"))
         #expect(rapidApp.contains(".environment(experienceMode)"))
 
+        #expect(contentView.contains("YouziAccountMenu()"))
+        #expect(simpleShell.contains("YouziAccountMenu()"))
         #expect(simpleTask.contains("@Environment(ChatViewModel.self) private var chat"))
         #expect(simpleTask.contains("@Environment(ServerManager.self) private var server"))
         #expect(simpleShell.contains("@Environment(ChatViewModel.self) private var chat"))

@@ -88,11 +88,24 @@ enum AppearanceMode: String, CaseIterable, Identifiable, Sendable {
     /// Settings → Appearance row text.
     var displayName: String {
         switch self {
-        case .system: return "Auto (follow system)"
-        case .light:  return "Light"
-        case .dark:   return "Dark"
+        case .system: return "跟随系统"
+        case .light:  return "浅色"
+        case .dark:   return "深色"
         }
     }
+
+    /// Compact labels for the account-menu segmented control.
+    var shortDisplayName: String {
+        switch self {
+        case .system: return "自动"
+        case .light:  return "浅色"
+        case .dark:   return "深色"
+        }
+    }
+
+    /// Light / Auto / Dark — the WorkBuddy-style order used by the
+    /// account menu. Settings still walks ``allCases``.
+    static let accountMenuOrder: [AppearanceMode] = [.light, .system, .dark]
 
     /// AppKit appearance for `NSApp.appearance`. `nil` means
     /// "don't override" — the app inherits the system setting.

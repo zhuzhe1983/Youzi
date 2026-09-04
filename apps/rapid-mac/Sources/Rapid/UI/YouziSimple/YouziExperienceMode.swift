@@ -24,6 +24,15 @@ enum YouziExperienceMode: String, CaseIterable, Identifiable, Sendable {
     var accessibilityIdentifier: String {
         "Youzi.ExperienceMode.\(rawValue)"
     }
+
+    /// The other presentation. Switching writes this preference only;
+    /// `ContentView` is the sole branch on the stored mode.
+    var other: Self {
+        switch self {
+        case .simple: .professional
+        case .professional: .simple
+        }
+    }
 }
 
 /// App-owned, persisted experience preference.

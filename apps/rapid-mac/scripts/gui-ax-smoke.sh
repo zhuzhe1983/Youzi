@@ -124,7 +124,7 @@ done
 [[ -n "${SETTINGS_WINDOW_ID:-}" ]] || die "Settings window did not open"
 
 pb see --window-id "$SETTINGS_WINDOW_ID" --json > "$OUT/settings.json"
-for category in modelManagement tools appearance privacy app; do
+for category in appearance instructions memory tools modelManagement privacy app; do
     jq -e --arg id "Settings.Category.$category" \
         '.data.ui_elements[]? | select(.identifier == $id)' "$OUT/settings.json" >/dev/null \
         || die "Settings missing category identifier: $category"
@@ -152,9 +152,9 @@ pb see --window-id "$SETTINGS_WINDOW_ID" --json > "$OUT/appearance.json"
 
 for mode in system light dark; do
     case "$mode" in
-        system) expected_description="Auto (follow system)" ;;
-        light) expected_description="Light" ;;
-        dark) expected_description="Dark" ;;
+        system) expected_description="跟随系统" ;;
+        light) expected_description="浅色" ;;
+        dark) expected_description="深色" ;;
     esac
     jq -e --arg id "Settings.Appearance.Theme.$mode" --arg description "$expected_description" \
         '.data.ui_elements[]? | select(.identifier == $id and .description == $description)' \

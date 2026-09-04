@@ -12,11 +12,11 @@ import Observation
 /// as an aggregate active-install signal — no proxy of GitHub, no
 /// PAT, no GH API rate-limit:
 ///
-///   GET https://rapidmlx.com/api/desktop-update?v=<app-version>
+///   GET https://github.com/zhuzhe1983/Youzi/releases/latest/download/latest.json?v=<app-version>
 ///
 /// If that Worker fetch fails for any reason (down, non-2xx, or a
 /// manifest that fails decode/validation) the check falls back to the
-/// static R2 object it proxies (`dl.rapidmlx.com/latest.json`), so a
+/// same GitHub latest.json asset without the `?v=` query, so a
 /// Worker outage never stops updates — only the active-install count
 /// is missed for that poll. See ``fetchWithFallback``.
 ///     200  {
@@ -296,15 +296,11 @@ final class UpdateChecker {
         }
     }
 
-    /// Production fetcher — Worker-primary with an R2 fallback.
+    /// Production fetcher — Youzi GitHub latest.json, with a query-less fallback.
     ///
-    /// Tries the versioned Worker endpoint first (so the poll is
-    /// counted as an active-install signal). If the Worker is down,
-    /// non-2xx's, or serves a manifest that fails decode/validation, it
-    /// falls back to the static R2 object the Worker proxies — so a
-    /// Worker outage can never stop clients from seeing updates while
-    /// `dl.rapidmlx.com/latest.json` is healthy; the aggregate count is
-    /// simply not incremented for that poll. Scene-teardown cancellation
+    /// Tries the versioned GitHub latest.json URL first. If that fetch is
+    /// down, non-2xx, or serves a manifest that fails decode/validation, it
+    /// falls back to the same asset without `?v=`. Scene-teardown cancellation
     /// is rethrown (not retried) so a racing window-close preserves
     /// state instead of doubling the request.
     private static let defaultFetch: Fetcher = {
@@ -433,23 +429,17 @@ final class UpdateChecker {
         }
     }
 
-    /// Production update-ping endpoint — a thin Cloudflare Worker on
-    /// the landing-page domain that returns the byte-identical manifest
-    /// the R2 object (`dl.rapidmlx.com/latest.json`) serves, while also
-    /// counting the poll as an aggregate active-install signal. Public,
-    /// no auth. See the class docstring for the schema + privacy
-    /// contract. This is the BASE URL; the app version is appended as
-    /// the `?v=` query by ``endpointURL(forVersion:)``.
-    nonisolated static let endpoint = "https://rapidmlx.com/api/desktop-update"
+    /// Production update-ping endpoint — Youzi's GitHub Releases
+    /// `latest.json`. Public, no auth. See the class docstring for the
+    /// schema + privacy contract. This is the BASE URL; the app version
+    /// is appended as the `?v=` query by ``endpointURL(forVersion:)``.
+    nonisolated static let endpoint = "https://github.com/zhuzhe1983/Youzi/releases/latest/download/latest.json"
 
-    /// R2 fallback manifest — the static object the Worker proxies.
-    /// Used ONLY when the Worker fetch fails (down / non-2xx / bad
-    /// JSON), so a Worker outage can never stop every client from
-    /// seeing updates while `dl.rapidmlx.com/latest.json` is still
-    /// healthy. No `?v=` query: R2 serves a static object and counts
-    /// nothing, so a poll that falls back is simply not counted as an
-    /// active-install signal. See ``fetchWithFallback``.
-    nonisolated static let fallbackEndpoint = "https://dl.rapidmlx.com/latest.json"
+    /// Fallback manifest — the same GitHub latest.json without `?v=`.
+    /// Used ONLY when the versioned fetch fails (down / non-2xx / bad
+    /// JSON), so a transient query-parameter issue cannot stop every
+    /// client from seeing updates. See ``fetchWithFallback``.
+    nonisolated static let fallbackEndpoint = "https://github.com/zhuzhe1983/Youzi/releases/latest/download/latest.json"
 
     /// Build the concrete request URL for ``endpoint`` carrying the
     /// current app version as the sole `?v=` query parameter. Uses

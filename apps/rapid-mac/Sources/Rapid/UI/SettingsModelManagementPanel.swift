@@ -131,9 +131,14 @@ struct SettingsModelManagementPanel: View {
 
     @Environment(\.settingsContentIsCompact) private var isCompact
 
+    /// The combined 模型 page supplies the page title.
+    var showsPageHeader: Bool = true
+
     var body: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
-            header
+            if showsPageHeader {
+                header
+            }
             modelsFolderSection
             linkedModelsSection
             storageOverviewSection

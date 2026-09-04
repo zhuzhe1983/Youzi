@@ -2426,7 +2426,7 @@ flow_settings_persistence() {
     # #1717: configure a chosen model before it runs. This proves the panel is
     # not coupled to the current child, its model selector is addressable, and
     # a real control mutation reaches the honest "next load" state.
-    press "$OUT/settings-root.json" Settings.Category.performance "$OUT/settings-performance-open.json"
+    press "$OUT/settings-root.json" Settings.Category.modelManagement "$OUT/settings-performance-open.json"
     wait_settings_stable "$OUT/performance-open.json" Settings.Performance.ModelPicker
     jq -e '.data.ui_elements[]? | select(.identifier == "Settings.Performance.Panel")' \
         "$OUT/performance-open.json" >/dev/null || die "Performance settings panel did not mount"
@@ -2509,7 +2509,7 @@ flow_settings_mtp() {
     dismiss_first_run
     open_settings
     wait_settings_stable "$OUT/settings-root.json"
-    press "$OUT/settings-root.json" Settings.Category.performance "$OUT/performance-open-press.json"
+    press "$OUT/settings-root.json" Settings.Category.modelManagement "$OUT/performance-open-press.json"
     wait_identifier Settings.Performance.SpeculativeDecoding.Enabled "$OUT/performance-mtp-on.json"
     jq -e '.data.ui_elements[]?
            | select(.identifier == "Settings.Performance.ModelPicker"
@@ -2538,7 +2538,7 @@ flow_settings_mtp() {
     dismiss_first_run
     open_settings
     wait_settings_stable "$OUT/settings-unsupported-root.json"
-    press "$OUT/settings-unsupported-root.json" Settings.Category.performance \
+    press "$OUT/settings-unsupported-root.json" Settings.Category.modelManagement \
         "$OUT/performance-unsupported-open-press.json"
     wait_identifier Settings.Performance.SpeculativeDecoding.Enabled \
         "$OUT/performance-spec-unsupported.json"
@@ -3062,7 +3062,7 @@ flow_no_dead_controls() {
     see_main "$OUT/dead-before.json"
 
     local category
-    local settings_categories=(modelManagement instructions tools connectors performance appearance privacy app)
+    local settings_categories=(appearance instructions memory tools modelManagement privacy app)
     if jq -e '.data.ui_elements[]?
               | select(.identifier == "Settings.Category.developer")' \
         "$OUT/dead-before.json" >/dev/null; then
@@ -3135,7 +3135,7 @@ flow_no_dead_controls() {
         "dead-panel-tools.json|Settings.Tools.Toggle.browse|Browse pages"
         "dead-panel-tools.json|Settings.Tools.Toggle.weather|Weather"
         "dead-panel-tools.json|Settings.Tools.Browse.AutoApproveToggle|Approve every page automatically"
-        "dead-panel-app.json|Settings.App.HideDockOnCloseToggle|Hide Dock icon when closing window"
+        "dead-panel-appearance.json|Settings.App.HideDockOnCloseToggle|Hide Dock icon when closing window"
     )
     local contract file identifier label
     for contract in "${ax_contracts[@]}"; do
@@ -3225,12 +3225,10 @@ flow_no_dead_controls() {
     press_and_require_selected Settings.Tools.WebSearch.Backend.duckduckgo dead-actions-backend-restore
 
     see_main "$OUT/dead-actions-tools-done.json"
-    press "$OUT/dead-actions-tools-done.json" Settings.Category.connectors \
-        "$OUT/dead-actions-connectors-open.json"
     round_trip_toggle Settings.Connectors.MasterToggle dead-actions-connectors-master
 
     see_main "$OUT/dead-actions-connectors-done.json"
-    press "$OUT/dead-actions-connectors-done.json" Settings.Category.performance \
+    press "$OUT/dead-actions-connectors-done.json" Settings.Category.modelManagement \
         "$OUT/dead-actions-performance-open.json"
     press_and_require_selected Settings.Performance.Prefix.On dead-actions-prefix-on
     press_and_require_selected Settings.Performance.Prefix.Off dead-actions-prefix-off
@@ -3256,9 +3254,12 @@ flow_no_dead_controls() {
         || die "Cache budget slider did not restore $cache_before"
 
     see_main "$OUT/dead-actions-performance-done.json"
-    press "$OUT/dead-actions-performance-done.json" Settings.Category.app \
-        "$OUT/dead-actions-app-open.json"
+    press "$OUT/dead-actions-performance-done.json" Settings.Category.appearance \
+        "$OUT/dead-actions-appearance-open.json"
     round_trip_toggle Settings.App.HideDockOnCloseToggle dead-actions-hide-dock
+    see_main "$OUT/dead-actions-appearance-done.json"
+    press "$OUT/dead-actions-appearance-done.json" Settings.Category.app \
+        "$OUT/dead-actions-app-open.json"
     see_main "$OUT/dead-actions-app-before-recheck.json"
     # The App panel is a per-STATE tree (see the update-state flow above):
     # ``AheadOfManifest`` — the build is newer than anything published — has NO

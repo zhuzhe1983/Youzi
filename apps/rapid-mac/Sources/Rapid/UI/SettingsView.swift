@@ -110,21 +110,49 @@ struct SettingsView: View {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .modelManagement: return "Model Management"
-            case .instructions: return "System Prompt"
-            case .memory: return "Memory"
-            case .tools: return "Tools"
+            case .modelManagement: return "模型"
+            case .instructions: return "个性化"
+            case .memory: return "记忆"
+            case .tools: return "智能体"
             case .connectors: return "Connectors"
             case .performance: return "Performance"
             case .experimentalFeatures: return "Experimental Features"
-            case .appearance: return "Appearance"
-            case .privacy: return "Privacy"
-            case .app: return "App"
+            case .appearance: return "通用"
+            case .privacy: return "数据与安全"
+            case .app: return "关于"
             #if DEBUG
-            case .developer: return "Developer"
+            case .developer: return "开发者"
             #endif
             }
         }
+
+        /// Visible Settings rail. Hidden cases stay in ``allCases`` for
+        /// deep links and tests, then normalize through ``railDestination(for:)``.
+        static var railCategories: [Category] {
+            railSections.flatMap { $0.categories }
+        }
+
+        static var railSections: [(title: String?, categories: [Category])] {
+            var sections: [(title: String?, categories: [Category])] = [
+                ("设置", [.appearance, .instructions]),
+                ("功能", [.memory, .tools, .modelManagement]),
+                (nil, [.privacy, .app]),
+            ]
+            #if DEBUG
+            sections.append((nil, [.developer]))
+            #endif
+            return sections
+        }
+
+        static func railDestination(for category: Category) -> Category {
+            switch category {
+            case .experimentalFeatures: return .appearance
+            case .connectors: return .tools
+            case .performance: return .modelManagement
+            default: return category
+            }
+        }
+
         var iconName: String {
             switch self {
             case .modelManagement: return "externaldrive.fill"
@@ -149,7 +177,7 @@ struct SettingsView: View {
     final class CategorySelection {
         var selected: Category
 
-        init(selected: Category = .modelManagement) {
+        init(selected: Category = .appearance) {
             self.selected = selected
         }
     }
@@ -160,30 +188,8 @@ struct SettingsView: View {
 
         var body: some View {
             List {
-                ForEach(Category.allCases) { cat in
-                    Button {
-                        selection.selected = cat
-                    } label: {
-                        categoryRowContent(cat, isSelected: selection.selected == cat)
-                    }
-                    .buttonStyle(.pressable)
-                    .listRowBackground(
-                        categoryRowBackground(
-                            isSelected: selection.selected == cat,
-                            isHovered: hoveredCategory == cat
-                        )
-                    )
-                    .onHover { hovering in
-                        if hovering {
-                            hoveredCategory = cat
-                        } else if hoveredCategory == cat {
-                            hoveredCategory = nil
-                        }
-                    }
-                    .rapidAnimation(RapidMotion.quick, value: hoveredCategory)
-                    .accessibilityLabel(cat.title)
-                    .accessibilityAddTraits(selection.selected == cat ? .isSelected : [])
-                    .accessibilityIdentifier("Settings.Category.\(cat.rawValue)")
+                ForEach(Array(Category.railSections.enumerated()), id: \.offset) { _, section in
+                    railSection(section)
                 }
             }
             .listStyle(.sidebar)
@@ -205,6 +211,51 @@ struct SettingsView: View {
             if let next = SettingsView.category(selection.selected, movedBy: delta) {
                 selection.selected = next
             }
+        }
+
+        @ViewBuilder
+        private func railSection(
+            _ section: (title: String?, categories: [Category])
+        ) -> some View {
+            if let title = section.title {
+                Section(title) {
+                    ForEach(section.categories) { cat in
+                        categoryButton(cat)
+                    }
+                }
+            } else {
+                Section {
+                    ForEach(section.categories) { cat in
+                        categoryButton(cat)
+                    }
+                }
+            }
+        }
+
+        private func categoryButton(_ cat: Category) -> some View {
+            Button {
+                selection.selected = cat
+            } label: {
+                categoryRowContent(cat, isSelected: selection.selected == cat)
+            }
+            .buttonStyle(.pressable)
+            .listRowBackground(
+                categoryRowBackground(
+                    isSelected: selection.selected == cat,
+                    isHovered: hoveredCategory == cat
+                )
+            )
+            .onHover { hovering in
+                if hovering {
+                    hoveredCategory = cat
+                } else if hoveredCategory == cat {
+                    hoveredCategory = nil
+                }
+            }
+            .rapidAnimation(RapidMotion.quick, value: hoveredCategory)
+            .accessibilityLabel(cat.title)
+            .accessibilityAddTraits(selection.selected == cat ? .isSelected : [])
+            .accessibilityIdentifier("Settings.Category.\(cat.rawValue)")
         }
 
         /// One rail row: glyph and title, both wearing the SAME colour.
@@ -462,13 +513,16 @@ struct SettingsView: View {
     }
 
     /// Pure navigation step for ``CategoryRail.moveCategorySelection(by:)``: the
-    /// category `delta` rows from `current` in `Category.allCases`, or
-    /// nil at the ends. No wrap-around — matches the native sidebar,
-    /// where arrowing past the last row is a no-op. Static + pure so the
-    /// clamping contract is unit-testable without the SwiftUI view.
+    /// category `delta` rows from `current` in the visible rail, or nil at
+    /// the ends. Hidden cases first normalize through
+    /// ``Category.railDestination(for:)``. No wrap-around — matches the
+    /// native sidebar, where arrowing past the last row is a no-op.
+    /// Static + pure so the clamping contract is unit-testable without
+    /// the SwiftUI view.
     static func category(_ current: Category, movedBy delta: Int) -> Category? {
-        let all = Category.allCases
-        guard let idx = all.firstIndex(of: current) else { return nil }
+        let all = Category.railCategories
+        let resolved = Category.railDestination(for: current)
+        guard let idx = all.firstIndex(of: resolved) else { return nil }
         let next = idx + delta
         guard next >= 0, next < all.count else { return nil }
         return all[next]
@@ -480,28 +534,24 @@ struct SettingsView: View {
     /// tab the user was last on.
     private func consumeRouterRequest() {
         if let target = router.requestedCategory {
-            categorySelection.selected = target
+            categorySelection.selected = Category.railDestination(for: target)
             router.requestedCategory = nil
         }
     }
 
     @ViewBuilder
     private func detailPanel(for category: Category) -> some View {
-        switch category {
+        switch Category.railDestination(for: category) {
         case .modelManagement:
-            SettingsModelManagementPanel()
+            modelsPanel
         case .instructions:
             instructionsPanel
         case .memory:
             SettingsMemoryPanel()
         case .tools:
-            SettingsToolsPanel()
-        case .connectors:
-            SettingsConnectorsPanel()
-        case .performance:
-            SettingsPerformancePanel()
-        case .experimentalFeatures:
-            experimentalFeaturesPanel
+            agentsPanel
+        case .connectors, .performance, .experimentalFeatures:
+            EmptyView()
         case .appearance:
             appearancePanel
         case .privacy:
@@ -515,23 +565,43 @@ struct SettingsView: View {
         }
     }
 
-    private var experimentalFeaturesPanel: some View {
+    private var agentsPanel: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
-                "Experimental Features",
-                subtitle: "Opt in to features that are still being validated across supported Macs.",
+                Category.tools.title,
+                subtitle: "Built-in tools and MCP connectors the assistant can use.",
                 emphasis: .page
             )
-            SettingsSection {
-                Toggle(isOn: $videoGenerationEnabled) {
-                    SettingsRowLabel(
-                        title: "Enable Video Generation",
-                        description: "Shows the Video tab. Video models need Apple silicon, large downloads, and typically 24 GB or more of unified memory. Nothing downloads or starts until you choose a model."
-                    )
-                }
-                .toggleStyle(TrailingSettingsToggleStyle())
-                .accessibilityIdentifier("Settings.Experimental.VideoGenerationToggle")
+            SettingsToolsPanel(showsPageHeader: false)
+            SettingsConnectorsPanel(showsPageHeader: false)
+        }
+    }
+
+    private var modelsPanel: some View {
+        VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
+            SectionHeader(
+                Category.modelManagement.title,
+                subtitle: "Manage the on-disk model cache and per-model engine performance.",
+                emphasis: .page
+            )
+            SettingsModelManagementPanel(showsPageHeader: false)
+            SettingsPerformancePanel(embedsInParentScroll: true, showsPageHeader: false)
+        }
+    }
+
+    private var experimentalFeaturesPanel: some View {
+        SettingsSection(
+            "Experimental Features",
+            subtitle: "Opt in to features that are still being validated across supported Macs."
+        ) {
+            Toggle(isOn: $videoGenerationEnabled) {
+                SettingsRowLabel(
+                    title: "Enable Video Generation",
+                    description: "Shows the Video tab. Video models need Apple silicon, large downloads, and typically 24 GB or more of unified memory. Nothing downloads or starts until you choose a model."
+                )
             }
+            .toggleStyle(TrailingSettingsToggleStyle())
+            .accessibilityIdentifier("Settings.Experimental.VideoGenerationToggle")
         }
         .accessibilityIdentifier("Settings.Experimental.Panel")
     }
@@ -540,7 +610,7 @@ struct SettingsView: View {
         @Bindable var config = customInstructions
         return VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
-                "System Prompt",
+                Category.instructions.title,
                 subtitle: "Sent as a system message with every conversation. Conversation prompts can override it.",
                 emphasis: .page
             )
@@ -573,7 +643,7 @@ struct SettingsView: View {
         @Bindable var a = appearance
         return VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
-                "Appearance",
+                Category.appearance.title,
                 subtitle: "Override the system theme. Auto follows your macOS setting; Light and Dark force the app to stay there regardless of system changes.",
                 emphasis: .page
             )
@@ -590,6 +660,8 @@ struct SettingsView: View {
                 .labelsHidden()
                 .accessibilityIdentifier("Settings.Appearance.ThemePicker")
             }
+            experimentalFeaturesPanel
+            dockVisibilitySection
         }
     }
 
@@ -597,7 +669,7 @@ struct SettingsView: View {
     private var privacyPanel: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
-                "Privacy",
+                Category.privacy.title,
                 subtitle: "Youzi is local-first. Prompts, attachments, and model responses never leave your Mac. Anonymous usage data is sent only after you opt in.",
                 emphasis: .page
             )
@@ -728,7 +800,7 @@ struct SettingsView: View {
     private var appPanel: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
-                "Youzi",
+                Category.app.title,
                 subtitle: "Self-update for Youzi. New releases bundle the latest models, performance improvements, and bug fixes.",
                 emphasis: .page
             )
@@ -786,7 +858,6 @@ struct SettingsView: View {
 
             diagnosticsSection
             setupSection
-            dockVisibilitySection
         }
         .confirmationDialog(
             ReonboardingReset.confirmation(for: .onboarding).title,

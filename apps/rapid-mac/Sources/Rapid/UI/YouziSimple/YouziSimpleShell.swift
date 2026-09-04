@@ -11,7 +11,6 @@ struct YouziSimpleShell: View {
 
     let assistantAlias: String
     let onPrepareAssistant: () -> Void
-    let onOpenSettings: () -> Void
 
     @State private var selection: YouziSimpleDestination = .newTask
     @State private var selectedTaskID: UUID?
@@ -236,39 +235,7 @@ struct YouziSimpleShell: View {
     }
 
     private var accountMenu: some View {
-        Menu {
-            Button("设置…", action: onOpenSettings)
-                .accessibilityIdentifier("YouziSimple.Account.Settings")
-            Divider()
-            Button {
-                experienceMode.mode = .professional
-            } label: {
-                Label("专业模式", systemImage: "slider.horizontal.3")
-            }
-            .accessibilityIdentifier(YouziExperienceMode.professional.accessibilityIdentifier)
-        } label: {
-            HStack(spacing: RapidTheme.Space.sm) {
-                Image(systemName: "person.crop.circle")
-                    .font(.system(size: 18))
-                VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
-                    Text("柚子")
-                        .font(RapidFont.bodyEmphasis)
-                    Text("简约模式")
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textSecondary)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(RapidFont.caption)
-                    .foregroundStyle(RapidTheme.textSecondary)
-            }
-            .padding(.horizontal, RapidTheme.Space.md)
-            .frame(minHeight: 48)
-            .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .padding(RapidTheme.Space.sm)
-        .accessibilityIdentifier("YouziSimple.AccountMenu")
+        YouziAccountMenu()
     }
 
     private func navigationRow(_ destination: YouziSimpleDestination) -> some View {

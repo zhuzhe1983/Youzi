@@ -35,9 +35,13 @@ final class AppearanceConfigTests {
 
     @Test("Display names are human-friendly and distinct")
     func displayNames() {
-        #expect(AppearanceMode.system.displayName == "Auto (follow system)")
-        #expect(AppearanceMode.light.displayName == "Light")
-        #expect(AppearanceMode.dark.displayName == "Dark")
+        #expect(AppearanceMode.system.displayName == "跟随系统")
+        #expect(AppearanceMode.light.displayName == "浅色")
+        #expect(AppearanceMode.dark.displayName == "深色")
+        #expect(AppearanceMode.system.shortDisplayName == "自动")
+        #expect(AppearanceMode.light.shortDisplayName == "浅色")
+        #expect(AppearanceMode.dark.shortDisplayName == "深色")
+        #expect(AppearanceMode.accountMenuOrder == [.light, .system, .dark])
         let names = AppearanceMode.allCases.map(\.displayName)
         #expect(AppearanceMode.system.accessibilityIdentifier == "Settings.Appearance.Theme.system")
         #expect(AppearanceMode.light.accessibilityIdentifier == "Settings.Appearance.Theme.light")

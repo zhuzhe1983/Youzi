@@ -13,7 +13,7 @@ struct SettingsMemoryPanel: View {
         @Bindable var store = memoryStore
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
-                "Memory",
+                "记忆",
                 subtitle: "The assistant learns your preferences across conversations. It never sends data off this Mac.",
                 emphasis: .page
             )

@@ -32,17 +32,24 @@ struct SettingsToolsPanel: View {
     ///   which has to capture the disclosure OPEN and cannot drive
     ///   private `@State` from outside. Production always uses the
     ///   default (all rows collapsed).
-    init(initiallyExpanded: Set<String> = []) {
+    /// - Parameter showsPageHeader: the combined 智能体 page supplies its
+    ///   own title; hide this panel's page header in that embedding.
+    init(initiallyExpanded: Set<String> = [], showsPageHeader: Bool = true) {
         _expandedTools = State(initialValue: initiallyExpanded)
+        self.showsPageHeader = showsPageHeader
     }
+
+    private let showsPageHeader: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
-            SectionHeader(
-                "Tools",
-                subtitle: "Tools the model can call during a chat. Turn one off and it is never offered — and never runs, even if the model asks for it by name.",
-                emphasis: .page
-            )
+            if showsPageHeader {
+                SectionHeader(
+                    "Tools",
+                    subtitle: "Tools the model can call during a chat. Turn one off and it is never offered — and never runs, even if the model asks for it by name.",
+                    emphasis: .page
+                )
+            }
             toolsSection
             webSearchSection
             browseSection

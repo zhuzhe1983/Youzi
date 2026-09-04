@@ -484,33 +484,40 @@ struct ContentView: View {
                 )
             }
             NavigationSplitView {
-                SidebarView(
-                    selection: $section,
-                    videoGenerationEnabled: videoGenerationEnabled,
-                    chat: chat,
-                onNewChat: {
-                    chat.newConversation()
-                    section = .chat
-                },
-                onSearchChats: {
-                    openConversationSearch()
-                },
-                onSelectConversation: { id in
-                    chat.selectConversation(id)
-                    section = .chat
-                },
-                server: server
-            )
-            // v1.0: the rail paints an explicit warm surface rather than
-            // inheriting the system sidebar material. The material is a
-            // cool translucent grey that fought the warm canvas beside
-            // it — the two planes read as belonging to different apps.
-            .background(RapidTheme.surfaceSidebar)
-            .navigationSplitViewColumnWidth(
-                min: SidebarView.columnMinWidth,
-                ideal: SidebarView.columnIdealWidth,
-                max: SidebarView.columnMaxWidth
-            )
+                VStack(spacing: 0) {
+                    SidebarView(
+                        selection: $section,
+                        videoGenerationEnabled: videoGenerationEnabled,
+                        chat: chat,
+                        onNewChat: {
+                            chat.newConversation()
+                            section = .chat
+                        },
+                        onSearchChats: {
+                            openConversationSearch()
+                        },
+                        onSelectConversation: { id in
+                            chat.selectConversation(id)
+                            section = .chat
+                        },
+                        server: server
+                    )
+                    Divider()
+                    YouziAccountMenu()
+                }
+                // v1.0: the rail paints an explicit warm surface rather than
+                // inheriting the system sidebar material. The material is a
+                // cool translucent grey that fought the warm canvas beside
+                // it — the two planes read as belonging to different apps.
+                // The account menu lives outside SidebarView so DevSnapshot's
+                // isolated sidebar fixtures do not need the experience-mode
+                // environment.
+                .background(RapidTheme.surfaceSidebar)
+                .navigationSplitViewColumnWidth(
+                    min: SidebarView.columnMinWidth,
+                    ideal: SidebarView.columnIdealWidth,
+                    max: SidebarView.columnMaxWidth
+                )
             } detail: {
                 detailArea
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -590,9 +597,6 @@ struct ContentView: View {
                 // explicit handoff does not discard what the user typed.
                 experienceMode.mode = .professional
                 performReadinessAction(.chooseModel)
-            },
-            onOpenSettings: {
-                openWindow(id: "settings")
             }
         )
     }
