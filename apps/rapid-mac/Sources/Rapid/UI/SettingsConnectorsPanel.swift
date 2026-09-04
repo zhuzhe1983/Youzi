@@ -64,8 +64,8 @@ struct SettingsConnectorsPanel: View {
         @Bindable var config = config
         return VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
-                "Connectors",
-                subtitle: "Connect the model to MCP servers — programs on this Mac that expose tools like file access, databases or search. Off by default: a connector is a program that runs on your machine and that the model can invoke.",
+                "连接器",
+                subtitle: "把模型接到本机 MCP 服务——文件、数据库或搜索等工具。默认关闭：连接器是跑在这台 Mac 上、模型可以调用的程序。",
                 emphasis: showsPageHeader ? .page : .section
             )
             masterSection

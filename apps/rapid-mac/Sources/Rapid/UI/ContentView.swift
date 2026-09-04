@@ -446,6 +446,17 @@ struct ContentView: View {
         quickstartSurface
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(RapidTheme.surfaceCanvas)
+            // Setup used to own the whole window, which hid the shared account
+            // menu and trapped people in Professional Mode. Keep the WorkBuddy-
+            // style entry available here too so 简约/专业 remains a two-way door.
+            .overlay(alignment: .topTrailing) {
+                YouziAccountMenu(arrowEdge: .top)
+                    .background(
+                        RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
+                            .fill(RapidTheme.surfaceSidebar)
+                    )
+                    .padding(RapidTheme.Space.md)
+            }
             // The last resort for a dismissal request that did not come from a
             // visible control. Every Step 2 micro-stage, the hero and both
             // warning screens carry a `.cancelAction` control, and AppKit

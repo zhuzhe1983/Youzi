@@ -114,9 +114,9 @@ struct SettingsView: View {
             case .instructions: return "个性化"
             case .memory: return "记忆"
             case .tools: return "智能体"
-            case .connectors: return "Connectors"
-            case .performance: return "Performance"
-            case .experimentalFeatures: return "Experimental Features"
+            case .connectors: return "连接器"
+            case .performance: return "性能"
+            case .experimentalFeatures: return "实验功能"
             case .appearance: return "通用"
             case .privacy: return "数据与安全"
             case .app: return "关于"
@@ -134,9 +134,10 @@ struct SettingsView: View {
 
         static var railSections: [(title: String?, categories: [Category])] {
             var sections: [(title: String?, categories: [Category])] = [
-                ("设置", [.appearance, .instructions]),
-                ("功能", [.memory, .tools, .modelManagement]),
-                (nil, [.privacy, .app]),
+                ("设置", [.appearance]),
+                ("功能", [.instructions, .memory, .tools, .modelManagement]),
+                ("数据与安全", [.privacy]),
+                ("关于", [.app]),
             ]
             #if DEBUG
             sections.append((nil, [.developer]))
@@ -569,7 +570,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
                 Category.tools.title,
-                subtitle: "Built-in tools and MCP connectors the assistant can use.",
+                subtitle: "内置工具，以及助手可以调用的 MCP 连接器。",
                 emphasis: .page
             )
             SettingsToolsPanel(showsPageHeader: false)
@@ -581,7 +582,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
                 Category.modelManagement.title,
-                subtitle: "Manage the on-disk model cache and per-model engine performance.",
+                subtitle: "管理本机模型缓存，以及每个模型的引擎性能。",
                 emphasis: .page
             )
             SettingsModelManagementPanel(showsPageHeader: false)
@@ -591,13 +592,13 @@ struct SettingsView: View {
 
     private var experimentalFeaturesPanel: some View {
         SettingsSection(
-            "Experimental Features",
-            subtitle: "Opt in to features that are still being validated across supported Macs."
+            "实验功能",
+            subtitle: "这些能力还在不同 Mac 上验证。打开后立即生效，不用重启。"
         ) {
             Toggle(isOn: $videoGenerationEnabled) {
                 SettingsRowLabel(
-                    title: "Enable Video Generation",
-                    description: "Shows the Video tab. Video models need Apple silicon, large downloads, and typically 24 GB or more of unified memory. Nothing downloads or starts until you choose a model."
+                    title: "启用视频生成",
+                    description: "显示视频标签。视频模型需要 Apple 芯片、较大下载，通常还需要 24 GB 及以上统一内存。在你选择模型之前，不会开始下载或启动。"
                 )
             }
             .toggleStyle(TrailingSettingsToggleStyle())
@@ -611,12 +612,12 @@ struct SettingsView: View {
         return VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
                 Category.instructions.title,
-                subtitle: "Sent as a system message with every conversation. Conversation prompts can override it.",
+                subtitle: "作为系统消息发送到每段对话。对话里的提示可以覆盖它。",
                 emphasis: .page
             )
             InstructionEditorSection(
-                "Global default",
-                subtitle: "Used when a conversation has no conflicting prompt. Stored only on this Mac.",
+                "全局默认",
+                subtitle: "对话没有单独提示时使用。只保存在这台 Mac 上。",
                 clearEnabled: CustomInstructionsConfig.normalized(config.global) != nil,
                 onClear: { config.global = "" }
             ) {
@@ -644,7 +645,7 @@ struct SettingsView: View {
         return VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
                 Category.appearance.title,
-                subtitle: "Override the system theme. Auto follows your macOS setting; Light and Dark force the app to stay there regardless of system changes.",
+                subtitle: "覆盖系统外观。自动跟随 macOS；浅色和深色会固定应用外观。",
                 emphasis: .page
             )
             SettingsSection {
@@ -931,13 +932,13 @@ struct SettingsView: View {
     @ViewBuilder
     private var dockVisibilitySection: some View {
         SettingsSection(
-            "Window",
-            subtitle: "Choose what happens when you close the main window. Youzi keeps running in the menu bar either way — this only affects whether the Dock icon stays visible."
+            "窗口",
+            subtitle: "选择关闭主窗口后的行为。柚子仍会在菜单栏运行——这里只决定 Dock 图标是否保持可见。"
         ) {
             Toggle(isOn: hideDockOnCloseBinding) {
                 SettingsRowLabel(
-                    title: "Hide Dock icon when closing window",
-                    description: "On close, Youzi stays available from the menu bar. Turn off to keep the Dock icon visible; disabling takes effect immediately."
+                    title: "关闭窗口时隐藏 Dock 图标",
+                    description: "关闭后柚子仍可从菜单栏打开。关掉此项会立刻恢复 Dock 图标。"
                 )
             }
             .toggleStyle(TrailingSettingsToggleStyle())
@@ -951,7 +952,7 @@ struct SettingsView: View {
                 Spacer(minLength: 0)
                 // Label unchanged; only the button tier and the
                 // container around it moved onto the shared system.
-                Button("Reset onboarding alerts") {
+                Button("重置引导提示") {
                     dockPromptStore.resetOnboarding()
                 }
                 .buttonStyle(.rapidSecondaryCompact)

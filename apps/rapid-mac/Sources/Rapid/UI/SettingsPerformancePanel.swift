@@ -129,8 +129,8 @@ struct SettingsPerformancePanel: View {
     private var panelContent: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
-                "Performance",
-                subtitle: "These settings change speed and memory use, and some can change what the model writes. They apply to one model at a time and take effect when that model next starts.",
+                "性能",
+                subtitle: "这些选项会影响速度和内存，有的还会改变模型输出。每次只作用于一个模型，并在该模型下次启动时生效。",
                 emphasis: showsPageHeader ? .page : .section
             )
             modelSection

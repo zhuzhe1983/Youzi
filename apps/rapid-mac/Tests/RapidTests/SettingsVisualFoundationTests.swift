@@ -123,6 +123,34 @@ struct SettingsVisualFoundationTests {
         expectedRail.append("developer")
         #endif
         #expect(SettingsView.Category.railCategories.map(\.rawValue) == expectedRail)
+
+        var expectedSectionTitles: [String?] = ["设置", "功能", "数据与安全", "关于"]
+        var expectedSectionCategories: [[String]] = [
+            ["appearance"],
+            ["instructions", "memory", "tools", "modelManagement"],
+            ["privacy"],
+            ["app"],
+        ]
+        #if DEBUG
+        expectedSectionTitles.append(nil)
+        expectedSectionCategories.append(["developer"])
+        #endif
+        #expect(SettingsView.Category.railSections.map(\.title) == expectedSectionTitles)
+        #expect(
+            SettingsView.Category.railSections.map { $0.categories.map(\.rawValue) }
+                == expectedSectionCategories
+        )
+        #expect(SettingsView.Category.appearance.title == "通用")
+        #expect(SettingsView.Category.instructions.title == "个性化")
+        #expect(SettingsView.Category.memory.title == "记忆")
+        #expect(SettingsView.Category.tools.title == "智能体")
+        #expect(SettingsView.Category.modelManagement.title == "模型")
+        #expect(SettingsView.Category.privacy.title == "数据与安全")
+        #expect(SettingsView.Category.app.title == "关于")
+        #expect(SettingsView.Category.connectors.title == "连接器")
+        #expect(SettingsView.Category.performance.title == "性能")
+        #expect(SettingsView.Category.experimentalFeatures.title == "实验功能")
+
         #expect(SettingsView.Category.railDestination(for: .experimentalFeatures) == .appearance)
         #expect(SettingsView.Category.railDestination(for: .connectors) == .tools)
         #expect(SettingsView.Category.railDestination(for: .performance) == .modelManagement)
@@ -594,5 +622,14 @@ struct SettingsVisualFoundationTests {
             committed <= floor,
             "The shell commits \(committed)pt inside a \(floor)pt window."
         )
+    }
+
+    @Test("Hide Dock toggle keeps its English accessibility contract")
+    func hideDockAccessibilityLabelStaysEnglish() throws {
+        let url = Self.packageRoot.appendingPathComponent("Sources/Rapid/UI/SettingsView.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        #expect(source.contains(".accessibilityLabel(\"Hide Dock icon when closing window\")"))
+        #expect(source.contains(".accessibilityIdentifier(\"Settings.App.HideDockOnCloseToggle\")"))
+        #expect(source.contains("title: \"关闭窗口时隐藏 Dock 图标\""))
     }
 }

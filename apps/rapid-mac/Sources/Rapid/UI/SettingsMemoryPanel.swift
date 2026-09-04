@@ -14,7 +14,7 @@ struct SettingsMemoryPanel: View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
                 "记忆",
-                subtitle: "The assistant learns your preferences across conversations. It never sends data off this Mac.",
+                subtitle: "助手会跨对话记住你的偏好。数据不会离开这台 Mac。",
                 emphasis: .page
             )
 
@@ -23,9 +23,9 @@ struct SettingsMemoryPanel: View {
                 set: { memoryStore.isEnabled = $0 }
             )) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Automatic memory")
+                    Text("自动记忆")
                         .font(.body)
-                    Text("Review completed conversations and save durable preferences. Disabled by default.")
+                    Text("回顾已完成的对话并保存长期偏好。默认关闭。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

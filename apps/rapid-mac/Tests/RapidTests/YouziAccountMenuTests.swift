@@ -37,7 +37,10 @@ struct YouziAccountMenuTests {
         #expect(!menu.contains("登出"))
         #expect(!menu.contains("个人主页"))
 
+        #expect(menu.contains("var arrowEdge: Edge = .bottom"))
         #expect(content.contains("YouziAccountMenu()"))
+        #expect(content.contains("YouziAccountMenu(arrowEdge: .top)"))
+        #expect(content.contains("RapidTheme.Radius.card"))
         #expect(simple.contains("YouziAccountMenu()"))
         #expect(!sidebar.contains("YouziAccountMenu"))
         #expect(content.contains("The account menu lives outside SidebarView"))

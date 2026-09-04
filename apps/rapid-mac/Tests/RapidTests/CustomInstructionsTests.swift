@@ -159,8 +159,8 @@ struct CustomInstructionsTests {
     func systemPromptTerminologyAndPreviewWiring() throws {
         let settings = try Self.source("Sources/Rapid/UI/SettingsView.swift")
         #expect(settings.contains("case .instructions: return \"个性化\""))
-        #expect(settings.contains("\"Global default\""))
-        #expect(settings.contains("Conversation prompts can override it."))
+        #expect(settings.contains("\"全局默认\""))
+        #expect(settings.contains("作为系统消息发送到每段对话。对话里的提示可以覆盖它。"))
         #expect(settings.contains("Settings.SystemPrompt.EffectivePreview"))
 
         let editor = try Self.source("Sources/Rapid/UI/InstructionTextEditor.swift")

@@ -8,6 +8,8 @@ import SwiftUI
 struct YouziAccountMenu: View {
     static let helpURL = URL(string: "https://github.com/zhuzhe1983/Youzi/issues")!
 
+    var arrowEdge: Edge = .bottom
+
     @Environment(YouziExperienceModeConfig.self) private var experienceMode
     @Environment(AppearanceConfig.self) private var appearance
     @Environment(ServerManager.self) private var server
@@ -28,7 +30,7 @@ struct YouziAccountMenu: View {
         .buttonStyle(.plain)
         .padding(.horizontal, RapidTheme.Space.sm)
         .padding(.vertical, RapidTheme.Space.xs)
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .popover(isPresented: $isPresented, arrowEdge: arrowEdge) {
             menuBody
         }
         .accessibilityIdentifier("Youzi.AccountMenu")
