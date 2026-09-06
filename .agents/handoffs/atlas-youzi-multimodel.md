@@ -25,6 +25,27 @@
   and runtime override were not replaced or restarted during development/testing.
   Source Swift compilation alone does not update the installed Python runtime.
 
+## Delivery state
+
+- Implementation commit `37e75526` pushed to `atlas/youzi-multimodel` and safely
+  fast-forwarded into `atlas/youzi-local-delivery` after confirming local/remote
+  delivery were still `c32379fe` and had no tracked edits. Main was untouched;
+  the delivery worktree's existing untracked scratch directories were preserved.
+- A complete local candidate was assembled under the task worktree at
+  `apps/rapid-mac/build/Rapid-MLX Desktop.app`, identity `candidate-37e75526`.
+  Its bundled runtime is the verified offline-tested clone with the changed
+  modules, not a fresh dependency rebuild. Deep/strict ad-hoc signature
+  verification passed. This is not Apple notarization or public publication.
+- The candidate has not replaced/restarted the user's running app. The old
+  active runtime override takes precedence when opening apps normally; install
+  the matching override safely, or launch the candidate explicitly with
+  `RAPID_BIN` pointing to its bundled `Contents/Resources/rapid-mlx/bin/rapid-mlx`
+  after quitting the old client. Do not imply double-clicking an arbitrary
+  candidate will update the active override.
+- User service on its original port returned HTTP 200/healthy after all tests.
+  The exact owned isolated inference process was sent SIGTERM after validation
+  to return the duplicate model memory; no broad process/port sweep was used.
+
 ## Limits and next actions
 
 - Receiver Atlas: deliver a complete candidate app plus matching runtime, not an
