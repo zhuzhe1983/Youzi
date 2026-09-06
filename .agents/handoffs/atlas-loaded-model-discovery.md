@@ -15,6 +15,12 @@
 - Current working-source verification: model/residency/Responses/auth suite
   844 passed, 2 skipped (official SDK 3.8.0 enabled); Agent/audio/routes suite
   666 passed, 12 skipped; scoped Ruff checks and `git diff --check` passed.
+- Independent committed-source verification: `b4ea91bd` was checked out in
+  a clean detached worktree. A combined model/residency/Responses/Agent/audio/
+  routes/capabilities/auth regression run passed **1480 tests, 14 skipped**
+  with official SDK 3.8.0 strict list/retrieve checks enabled. Import location
+  was asserted to be the clean worktree, not the dirty application checkout.
+  The uncommitted anonymous-auth batch was intentionally absent from this run.
 - Risk: the installed app's sourceless Python runtime is still the previous
   build. Source/test completion is not a live runtime update. Full current
   application batch packaging and native QA remain separate delivery work.

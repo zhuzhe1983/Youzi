@@ -66,6 +66,25 @@ Existing model, capability, residency, Responses, Agent, and audio route
 regressions must also pass. Capability-test fixtures now explicitly represent
 loaded engines instead of treating a configured model name as loaded.
 
+### Recorded clean-commit result
+
+On 2026-09-06, commit `b4ea91bd` passed **1480 tests, 14 skipped** in a clean
+worktree, independent of the uncommitted UI/settings/auth batch. Environment:
+macOS arm64, Python 3.12.13, pytest 9.1.1, official OpenAI SDK 3.8.0 available
+only in the test process. Source import location was checked before running:
+
+```sh
+python -m pytest -q tests/test_*models*.py tests/test_resident*.py \
+  tests/test_residency*.py tests/test_responses*.py tests/test_agent*.py \
+  tests/test_audio*.py tests/test_routes.py tests/test_capabilities_field.py \
+  tests/test_model_card_client_contract.py tests/test_http_auth.py \
+  tests/test_embeddings_extra_guard.py
+```
+
+The recorded runner deduplicated expanded paths before passing them to pytest.
+This is a correctness result, not an inference benchmark or installed-runtime
+verification.
+
 ## Delivery and rollback
 
 This change is scoped to the model routes, their regression fixtures, and
