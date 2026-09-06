@@ -23,6 +23,19 @@ import SwiftUI
 /// promoted the sidebar's date headings and Connect Tools' "Endpoint"
 /// from 11pt to 15pt.
 struct SectionHeader: View {
+    @Environment(YouziI18nConfig.self) private var i18n: YouziI18nConfig?
+
+    private var resolvedTitle: String {
+        let isZh = i18n?.isChinese ?? YouziI18nConfig.shared.isChinese
+        return YouziLocalization.localized(title, isChinese: isZh)
+    }
+
+    private var resolvedSubtitle: String? {
+        guard let subtitle else { return nil }
+        let isZh = i18n?.isChinese ?? YouziI18nConfig.shared.isChinese
+        return YouziLocalization.localized(subtitle, isChinese: isZh)
+    }
+
     enum Emphasis {
         case page
         case section
@@ -62,8 +75,8 @@ struct SectionHeader: View {
         HStack(alignment: .firstTextBaseline, spacing: RapidTheme.Space.md) {
             VStack(alignment: .leading, spacing: subtitle == nil ? 0 : RapidTheme.Space.xs) {
                 titleText
-                if let subtitle {
-                    Text(subtitle)
+                if let resolvedSubtitle {
+                    Text(resolvedSubtitle)
                         .font(RapidFont.secondary)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -87,11 +100,11 @@ struct SectionHeader: View {
     private var titleText: some View {
         switch emphasis {
         case .page:
-            Text(title)
+            Text(resolvedTitle)
                 .font(RapidFont.pageTitle)
                 .foregroundStyle(RapidTheme.textPrimary)
         case .section:
-            Text(title)
+            Text(resolvedTitle)
                 .font(RapidFont.sectionTitle)
                 .foregroundStyle(RapidTheme.textPrimary)
         case .group:
@@ -100,7 +113,7 @@ struct SectionHeader: View {
             // content under it — "ENDPOINT" was shouting at the values
             // it labels. A quiet 11pt semibold in secondary does the
             // same structural job without competing.
-            Text(title)
+            Text(resolvedTitle)
                 .font(RapidFont.groupLabel)
                 .foregroundStyle(RapidTheme.textSecondary)
         }

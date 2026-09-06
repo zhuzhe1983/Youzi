@@ -19,10 +19,11 @@ import Foundation
 /// time-of-check/time-of-use gap. The remaining residuals cannot be closed at
 /// this layer:
 ///
-///  1. System / PAC HTTP proxies. If the OS is configured with a proxy, the
-///     proxy resolves and connects on its own, on a path our local resolution
-///     never sees — so a locally-public result does not prove the proxy's
-///     connection is public.
+///  1. Trusted TUN / Fake-IP proxies. Optional compatibility accepts only
+///     benchmark-range DNS answers for public hostnames. The proxy controls
+///     their actual destination, which this client cannot independently prove
+///     is public. The pinned transport does not automatically use HTTP/PAC
+///     proxy settings. Strict mode disables this exception.
 ///  2. Network-specific NAT64 prefixes. We unwrap the well-known (`64:ff9b::/96`)
 ///     and RFC 8215 local-use (`64:ff9b:1::/48`) prefixes to range-check the
 ///     embedded IPv4, but a site can deploy NAT64 under any prefix we can't know
@@ -83,7 +84,7 @@ enum BrowseSSRFGuard {
     /// Validate a URL and return every concrete address selected by DNS, in
     /// resolver order. All returned addresses passed the same range checks, so
     /// the caller can fall back to a later address without resolving DNS again.
-    static func validatedAddresses(_ url: URL) async throws -> [ParsedIP] {
+    static func validatedAddresses(_ url: URL, proxyCompatibility: Bool = false) async throws -> [ParsedIP] {
         guard let scheme = url.scheme?.lowercased() else { throw Rejection.badURL }
         guard allowedSchemes.contains(scheme) else { throw Rejection.blockedScheme(scheme) }
         guard let host = url.host, !host.isEmpty else { throw Rejection.noHost }
@@ -103,10 +104,33 @@ enum BrowseSSRFGuard {
             return [literal]
         }
 
+        try validatePublicHostname(bareHost)
         let addresses = try await resolve(bareHost)
+        return try validateDNSAnswers(host: bareHost, addresses: addresses, proxyCompatibility: proxyCompatibility)
+    }
+
+    /// Only public names may opt into proxy-assigned benchmark DNS answers.
+    /// Never relax IP literals, local names, mixed private answers or redirects.
+    static func validatePublicHostname(_ host: String) throws {
+        let name = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let localSuffixes = ["localhost", "local", "internal", "lan", "home", "home.arpa", "localdomain", "test", "invalid", "onion"]
+        if !name.contains(".") || localSuffixes.contains(where: { name == $0 || name.hasSuffix("." + $0) }) {
+            throw Rejection.blockedAddress(host: host, address: "local hostname")
+        }
+    }
+
+    static func validateDNSAnswers(host: String, addresses: [ParsedIP], proxyCompatibility: Bool) throws -> [ParsedIP] {
+        // Keep this pure boundary safe even when called directly by a test or
+        // future transport. DNS exemption must never authorize literal URLs.
+        if let literal = ParsedIP(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))), literal.isBlocked {
+            throw Rejection.blockedAddress(host: host, address: literal.canonical)
+        }
+        try validatePublicHostname(host)
         guard !addresses.isEmpty else { throw Rejection.unresolvable(host) }
         for ip in addresses where ip.isBlocked {
-            throw Rejection.blockedAddress(host: host, address: ip.canonical)
+            guard proxyCompatibility && ip.isProxyFakeIPv4 else {
+                throw Rejection.blockedAddress(host: host, address: ip.canonical)
+            }
         }
         return addresses
     }
@@ -128,6 +152,10 @@ enum BrowseSSRFGuard {
     static let resolveTimeout: TimeInterval = 8
 
     static func resolve(_ host: String) async throws -> [ParsedIP] {
+        // A Fake-IP resolver may synthesize even reserved non-existent names.
+        // Do not turn a known-invalid name into an apparently valid address.
+        let name = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        if name == "invalid" || name.hasSuffix(".invalid") { return [] }
         let gate = SingleResume()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation {
@@ -227,6 +255,16 @@ struct ParsedIP: Equatable {
     let family: Family
     /// 4 bytes for v4, 16 for v6 (network order / big-endian, as stored).
     let bytes: [UInt8]
+
+    /// The narrow Surge/TUN Fake-IP exception. NAT64 remains blocked normally.
+    var isProxyFakeIPv4: Bool {
+        let v4: [UInt8]
+        if family == .v4 { v4 = bytes }
+        else if bytes.count == 16, bytes.prefix(10).allSatisfy({ $0 == 0 }),
+                bytes[10] == 255, bytes[11] == 255 { v4 = Array(bytes.suffix(4)) }
+        else { return false }
+        return v4.count == 4 && v4[0] == 198 && (v4[1] == 18 || v4[1] == 19)
+    }
 
     /// Parse a textual literal via `inet_pton` (no DNS). Returns nil if the
     /// string is not a valid IPv4 or IPv6 literal.

@@ -28,10 +28,15 @@ final class MenuBarController: NSObject {
 
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
+    private var resourceTask: Task<Void, Never>?
+    private var resourceItem: NSMenuItem?
+    private var lastResourceLine: String?
+
 
     override init() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
+        statusItem.isVisible = true
         configureButton()
         menu.delegate = self
         // Take full ownership of item enablement. With AppKit's default
@@ -71,12 +76,14 @@ final class MenuBarController: NSObject {
         else {
             return nil
         }
-        return "http://\(server.host):\(server.activePort)/v1"
+        return ModelAPIAccess.baseURL(port: server.activePort)
     }
 
     private func configureButton() {
         guard let button = statusItem.button else { return }
         button.image = Self.trayGlyph()
+        button.image?.size = NSSize(width: 18, height: 18)
+        button.setAccessibilityIdentifier("Youzi.MenuBar")
         // Brand name, not "menu bar item" jargon — this is the hover
         // tooltip the user sees.
         button.toolTip = Self.accessibilityTitle
@@ -122,12 +129,20 @@ final class MenuBarController: NSObject {
     /// every open without an AppKit-side observer.
     private func rebuildMenu() {
         menu.removeAllItems()
+        resourceItem = nil
+        let resourceLine = lastResourceLine ?? "CPU — · GPU — · \(YouziI18nConfig.shared.isChinese ? "内存" : "Memory") —"
         for item in MenuBarStatus.menuItems(
             state: AppDelegate.shared.server?.state ?? .idle,
             hasUpdate: Self.hasAvailableUpdate(),
             updateVersion: AppDelegate.shared.updater?.availableUpdate?.version ?? "",
             checking: AppDelegate.shared.updater?.checking ?? false,
-            baseURL: Self.apiBaseURL()
+            baseURL: Self.apiBaseURL(),
+            resourceLine: resourceLine,
+            modelLines: AppDelegate.shared.server.map {
+                YouziTraySnapshot.modelLines(residency: $0.residency, isChinese: YouziI18nConfig.shared.isChinese)
+            } ?? [],
+            hasAPIKey: AppDelegate.shared.server?.activeBearer?.isEmpty == false,
+            isChinese: YouziI18nConfig.shared.isChinese
         ) {
             switch item {
             case .separator:
@@ -137,6 +152,7 @@ final class MenuBarController: NSObject {
                 // A nil action renders the row as a disabled label.
                 let line = NSMenuItem(title: text, action: nil, keyEquivalent: "")
                 line.isEnabled = false
+                if text == resourceLine { resourceItem = line }
                 menu.addItem(line)
 
             case .button(let action, let title, let enabled, let shortcut):
@@ -222,7 +238,10 @@ final class MenuBarController: NSObject {
             // Transient "Copied ✓" feedback. The menu rebuilds on every
             // open (``menuNeedsUpdate``), so this label self-heals back
             // to "Copy API endpoint" next time without a timer.
-            sender.title = "Copied ✓"
+            sender.title = YouziI18nConfig.shared.text(zh: "已复制 ✓", en: "Copied ✓")
+        case .copyAPIKey:
+            let copied = ModelAPIKeyClipboard.shared.copy(AppDelegate.shared.server?.activeBearer)
+            sender.title = YouziI18nConfig.shared.text(zh: copied ? "已复制 ✓" : "服务未启动", en: copied ? "Copied ✓" : "Service not running")
         case .about:
             if let server = AppDelegate.shared.server {
                 AboutPanel.show(server: server)
@@ -285,5 +304,33 @@ extension MenuBarController: NSMenuDelegate {
     /// for content only visible during a click.
     func menuNeedsUpdate(_ menu: NSMenu) {
         rebuildMenu()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        resourceTask?.cancel()
+        resourceTask = Task { [weak self] in
+            var previous: CPUProbe.Snapshot?
+            while !Task.isCancelled {
+                // IOKit / host statistics must never block menu tracking.
+                let sample = await Task.detached(priority: .utility) {
+                    (CPUProbe.snapshot(), GPUProbe.snapshot(), MemoryProbe.snapshot())
+                }.value
+                guard !Task.isCancelled, let self else { return }
+                let cpu = sample.0.flatMap { current in
+                    previous.map { CPUProbe.percentBusy(previous: $0, current: current) }
+                }
+                previous = sample.0
+                let line = YouziTraySnapshot.resourceLine(cpu: cpu, gpu: sample.1?.percent,
+                    memory: sample.2, isChinese: YouziI18nConfig.shared.isChinese)
+                self.lastResourceLine = line
+                self.resourceItem?.title = line
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            }
+        }
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        resourceTask?.cancel()
+        resourceTask = nil
     }
 }

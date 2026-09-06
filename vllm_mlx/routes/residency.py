@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field, StrictBool, model_validator
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from ..config import get_config
-from ..middleware.auth import verify_api_key
+from ..middleware.auth import anonymous_inference_enabled, verify_api_key
 from ..middleware.exception_handlers import (
     register_request_model,
     register_request_path,
@@ -23,6 +23,31 @@ from ..runtime.resident_models import (
 )
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
+
+
+class ServiceAuthRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    anonymous_inference: StrictBool
+
+
+@router.get("/v1/service/auth")
+async def get_service_auth(request: Request):
+    return {"anonymous_inference": anonymous_inference_enabled(request)}
+
+
+@router.put("/v1/service/auth")
+async def update_service_auth(settings: ServiceAuthRequest, request: Request):
+    """Change inference auth only; never rotate keys or restart resident engines.
+
+    This router requires authentication even when local inference is anonymous.
+    The desktop persists the preference; app state applies it to this process.
+    """
+    request.app.state.youzi_anonymous_inference = settings.anonymous_inference
+    return {"anonymous_inference": anonymous_inference_enabled(request)}
+
+
+register_request_model(ServiceAuthRequest)
+register_request_path("/v1/service/auth", ServiceAuthRequest)
 
 
 class ModelPerformanceRequest(BaseModel):

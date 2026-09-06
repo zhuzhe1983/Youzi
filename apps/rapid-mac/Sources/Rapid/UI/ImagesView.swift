@@ -330,9 +330,9 @@ struct ImagesView: View {
                 sizeText: entry?.sizeOnDisk
             ),
             imageMode: viewModel.isEditing ? .editing : .generation,
-            // mflux is a modal engine, like TTS: it cannot be admitted through
-            // the chat sidecar's resident /v1/models/load endpoint.
-            residencyEligible: false
+            // Resident image loading preserves running text/vision LLM instances.
+            residencyEligible: true,
+            requestIsMedia: true
         )
         // A cold resident load can change the cache while the sidecar stays
         // globally ready. Refresh this surface so its cached/downloaded copy

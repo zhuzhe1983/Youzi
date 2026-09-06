@@ -41,6 +41,24 @@ struct ToolLoopBudgetIntegrationTests {
         #expect((system["content"] as? String)?.contains("tool-use budget") == true)
     }
 
+    @Test("raw calls in the tools-disabled final round fail without more execution")
+    func finalArtifactFails() async throws {
+        ToolLoopBudgetProtocol.reset(rawFinal: true)
+        let registry = CountingToolRegistry()
+        let model = ChatViewModel(
+            client: ChatStreamClient(baseURL: URL(string: "fake://tool-loop")!, session: ToolLoopBudgetProtocol.session()),
+            tools: registry, persistsConversations: false
+        )
+        model.send("Research", alias: "test-model")
+        for _ in 0..<200 where model.isStreaming { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(!model.isStreaming)
+        #expect(registry.runCount == 3)
+        #expect(ToolLoopBudgetProtocol.requestBodies.count == 4)
+        #expect(model.messages.last?.status == .failed)
+        #expect(model.messages.last?.toolCallArtifactSuppressed == true)
+        #expect(model.lastError != nil)
+    }
+
     @Test("a batched response cannot execute past the three-call budget")
     func batchedCallsAreCappedIndividually() async throws {
         ToolLoopBudgetProtocol.reset(batched: true)
@@ -94,7 +112,10 @@ private final class ToolLoopBudgetProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var requestBodies: [Data] = []
     nonisolated(unsafe) static var sendsBatchedCalls = false
 
-    static func reset(batched: Bool = false) {
+    nonisolated(unsafe) static var rawFinal = false
+
+    static func reset(batched: Bool = false, rawFinal: Bool = false) {
+        Self.rawFinal = rawFinal
         requestBodies = []
         sendsBatchedCalls = batched
     }
@@ -134,6 +155,13 @@ private final class ToolLoopBudgetProtocol: URLProtocol, @unchecked Sendable {
         } else if !Self.sendsBatchedCalls, requestNumber <= 3 {
             stream = """
             data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_\(requestNumber)","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
+
+            data: [DONE]
+
+            """
+        } else if Self.rawFinal {
+            stream = """
+            data: {"choices":[{"delta":{"content":"<tool_call><function=lookup><parameter=query>test</parameter></function></tool_call>"},"finish_reason":"stop"}]}
 
             data: [DONE]
 

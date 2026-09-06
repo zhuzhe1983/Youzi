@@ -18,6 +18,7 @@ struct SettingsConnectorsPanel: View {
     @Environment(MCPToolApprovalStore.self) private var approval
     @Environment(MCPToolRegistry.self) private var registry
     @Environment(ServerManager.self) private var server
+    @Environment(YouziI18nConfig.self) private var i18n
 
     /// The server being added or edited, when the sheet is up.
     @State private var editing: EditorTarget?
@@ -64,8 +65,11 @@ struct SettingsConnectorsPanel: View {
         @Bindable var config = config
         return VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
-                "连接器",
-                subtitle: "把模型接到本机 MCP 服务——文件、数据库或搜索等工具。默认关闭：连接器是跑在这台 Mac 上、模型可以调用的程序。",
+                i18n.text(zh: "连接器", en: "Connectors"),
+                subtitle: i18n.text(
+                    zh: "把模型接到本机 MCP 服务——文件、数据库或搜索等工具。默认关闭：连接器是跑在这台 Mac 上、模型可以调用的程序。",
+                    en: "Connect the model to local MCP servers — tools for files, databases, or search. Off by default: connectors run on this Mac and expose tools to the model."
+                ),
                 emphasis: showsPageHeader ? .page : .section
             )
             masterSection
@@ -92,22 +96,22 @@ struct SettingsConnectorsPanel: View {
             )
         }
         .confirmationDialog(
-            "Remove “\(confirmingRemoval?.name ?? "")”?",
+            i18n.text(zh: "移除“\(confirmingRemoval?.name ?? "")”？", en: "Remove “\(confirmingRemoval?.name ?? "")”?"),
             isPresented: Binding(
                 get: { confirmingRemoval != nil },
                 set: { if !$0 { confirmingRemoval = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("Remove", role: .destructive) {
+            Button(i18n.text(zh: "移除", en: "Remove"), role: .destructive) {
                 if let target = confirmingRemoval { remove(target) }
                 confirmingRemoval = nil
             }
             .accessibilityIdentifier("Settings.Connectors.ConfirmRemove")
-            Button("Cancel", role: .cancel) { confirmingRemoval = nil }
+            Button(i18n.text(zh: "取消", en: "Cancel"), role: .cancel) { confirmingRemoval = nil }
                 .accessibilityIdentifier("Settings.Connectors.CancelRemove")
         } message: {
-            Text("Its tools stop being offered to the model. The program itself isn't uninstalled.")
+            Text(i18n.text(zh: "其提供的工具将不再提供给模型。该程序本身不会被卸载。", en: "Its tools stop being offered to the model. The program itself isn't uninstalled."))
         }
     }
 
@@ -118,8 +122,8 @@ struct SettingsConnectorsPanel: View {
         return SettingsSection {
                 Toggle(isOn: $config.isEnabled) {
                     SettingsRowLabel(
-                        title: "Enable connectors",
-                        description: "The local server only loads connectors when this is on."
+                        title: i18n.text(zh: "启用连接器", en: "Enable connectors"),
+                        description: i18n.text(zh: "开启后本机服务才会加载并提供连接器工具。", en: "The local server only loads connectors when this is on.")
                     )
                 }
                 .toggleStyle(TrailingSettingsToggleStyle())
@@ -168,13 +172,13 @@ struct SettingsConnectorsPanel: View {
                 InlineNotice(message: why, tone: .error)
             }
 
-            SettingsSection("Servers", subtitle: "Each server runs as its own program and exposes a set of tools.") {
-                Button("Add…") { editing = EditorTarget(original: nil) }
+            SettingsSection(i18n.text(zh: "服务", en: "Servers"), subtitle: i18n.text(zh: "每个服务作为独立进程运行并提供一组工具。", en: "Each server runs as its own program and exposes a set of tools.")) {
+                Button(i18n.text(zh: "添加…", en: "Add…")) { editing = EditorTarget(original: nil) }
                     .buttonStyle(.rapidSecondaryCompact)
                     .accessibilityIdentifier("Settings.Connectors.AddButton")
             } content: {
                 if config.servers.isEmpty {
-                    Text("No connectors yet. Add one to give the model tools beyond the built-ins.")
+                    Text(i18n.text(zh: "暂无连接器。添加连接器可为模型扩展内置功能之外的工具能力。", en: "No connectors yet. Add one to give the model tools beyond the built-ins."))
                         .font(RapidFont.body)
                         .foregroundStyle(RapidTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -224,9 +228,9 @@ struct SettingsConnectorsPanel: View {
             .controlSize(.small)
             .accessibilityIdentifier("Settings.Connectors.Row.Toggle.\(entry.name)")
             Menu {
-                Button("Edit…") { editing = EditorTarget(original: entry) }
+                Button(i18n.text(zh: "编辑…", en: "Edit…")) { editing = EditorTarget(original: entry) }
                     .accessibilityIdentifier("Settings.Connectors.Row.Edit.\(entry.name)")
-                Button("Remove", role: .destructive) { confirmingRemoval = entry }
+                Button(i18n.text(zh: "移除", en: "Remove"), role: .destructive) { confirmingRemoval = entry }
                     .accessibilityIdentifier("Settings.Connectors.Row.Remove.\(entry.name)")
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -234,7 +238,7 @@ struct SettingsConnectorsPanel: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .foregroundStyle(RapidTheme.utilityActionLabel)
-            .accessibilityLabel("Connector actions")
+            .accessibilityLabel(i18n.text(zh: "连接器操作", en: "Connector actions"))
             .accessibilityIdentifier("Settings.Connectors.Row.Menu.\(entry.name)")
         }
     }
@@ -260,7 +264,7 @@ struct SettingsConnectorsPanel: View {
     /// One line saying what this server is doing right now — the question the
     /// panel exists to answer.
     private func statusLine(for entry: MCPServerConfig, status: MCPCatalog.ServerStatus?) -> String {
-        if !entry.enabled { return "Turned off" }
+        if !entry.enabled { return i18n.text(zh: "已关闭", en: "Turned off") }
         // The engine's error string can carry a connector's own stderr, so
         // scrub it the same way the tool rows and approval sheet scrub server
         // text — a bidi/zero-width scalar must not spoof this status line.
@@ -268,18 +272,18 @@ struct SettingsConnectorsPanel: View {
         if let status {
             if status.isConnected {
                 let n = status.toolsCount
-                return n == 1 ? "Connected · 1 tool" : "Connected · \(n) tools"
+                return i18n.text(zh: "已连接 · \(n) 个工具可用", en: n == 1 ? "Connected · 1 tool" : "Connected · \(n) tools")
             }
             return status.state.capitalized
         }
         // No row from the engine at all.
         if server.launchedChildAlias == nil {
-            return "Start a model to connect"
+            return i18n.text(zh: "启动模型后即可连接", en: "Start a model to connect")
         }
         if catalog.fetchError != nil {
-            return "Couldn't check — the local server didn't answer"
+            return i18n.text(zh: "无法检查——本地服务未响应", en: "Couldn't check — the local server didn't answer")
         }
-        return needsRestart ? "Not applied yet" : "Not connected"
+        return needsRestart ? i18n.text(zh: "尚未生效", en: "Not applied yet") : i18n.text(zh: "未连接", en: "Not connected")
     }
 
     /// Shown when the running model predates the connectors being switched on.
@@ -300,17 +304,20 @@ struct SettingsConnectorsPanel: View {
                 .foregroundStyle(RapidTheme.statusWarning)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: RapidTheme.Space.xs) {
-                Text("Restart the model to finish turning connectors on.")
+                Text(i18n.text(zh: "重启模型以完成连接器启用。", en: "Restart the model to finish turning connectors on."))
                     .font(RapidFont.bodyEmphasis)
                     .foregroundStyle(RapidTheme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("The running model started before connectors were enabled, so it isn't loading them yet. Restarting takes a moment and keeps your conversation.")
+                Text(i18n.text(
+                    zh: "当前运行的模型在启用连接器之前启动，因此尚未加载连接器。重启需要片刻时间，并会保留当前对话。",
+                    en: "The running model started before connectors were enabled, so it isn't loading them yet. Restarting takes a moment and keeps your conversation."
+                ))
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button(isRestarting ? "Restarting…" : "Restart") { restartModel() }
+            Button(i18n.text(zh: isRestarting ? "正在重启…" : "重启", en: isRestarting ? "Restarting…" : "Restart")) { restartModel() }
                 .buttonStyle(.rapidSecondaryCompact)
                 .fixedSize()
                 .disabled(isRestarting || server.isOperating)
@@ -352,8 +359,11 @@ struct SettingsConnectorsPanel: View {
 
     private var toolsSection: some View {
         SettingsSection(
-            "Tools",
-            subtitle: "What the connected servers expose. Turn one off and it is never offered to the model — and never runs, even if the model asks for it by name."
+            i18n.text(zh: "工具", en: "Tools"),
+            subtitle: i18n.text(
+                zh: "连接的服务所提供的工具。关闭某项工具后，模型将不再看到该工具，也不会执行该工具。",
+                en: "What the connected servers expose. Turn one off and it is never offered to the model — and never runs, even if the model asks for it by name."
+            )
         ) {
             let tools = registry.allKnownTools
             ForEach(Array(tools.enumerated()), id: \.element.function.name) { index, def in
@@ -393,7 +403,7 @@ struct SettingsConnectorsPanel: View {
                                 .background(Capsule().fill(RapidTheme.hoverFill))
                         }
                         if approval.grantedTools.contains(name) {
-                            Text("always allowed")
+                            Text(i18n.text(zh: "始终允许", en: "always allowed"))
                                 .font(RapidFont.caption)
                                 .foregroundStyle(RapidTheme.textTertiary)
                         }
@@ -415,16 +425,22 @@ struct SettingsConnectorsPanel: View {
     private var approvalSection: some View {
         @Bindable var approval = approval
         return SettingsSection(
-            "Approvals",
-            subtitle: "The first time the model calls a connector tool, Youzi asks. Your answer is remembered per tool."
+            i18n.text(zh: "权限与授权", en: "Approvals"),
+            subtitle: i18n.text(
+                zh: "模型首次调用连接器工具时会提示授权。授权记录按工具单独保存。",
+                en: "The first time the model calls a connector tool, Youzi asks. Your answer is remembered per tool."
+            )
         ) {
             Toggle(isOn: Binding(
                 get: { approval.mode == .autoApproveAll },
                 set: { approval.mode = $0 ? .autoApproveAll : .ask }
             )) {
                 SettingsRowLabel(
-                    title: "Auto-approve all tool calls",
-                    description: "Skips every prompt, including for connectors added later. For unattended use only."
+                    title: i18n.text(zh: "自动授权所有工具调用", en: "Auto-approve all tool calls"),
+                    description: i18n.text(
+                        zh: "跳过所有授权弹窗，包括后续添加的连接器。仅建议无人值守模式使用。",
+                        en: "Skips every prompt, including for connectors added later. For unattended use only."
+                    )
                 )
             }
             .toggleStyle(TrailingSettingsToggleStyle())
@@ -434,11 +450,17 @@ struct SettingsConnectorsPanel: View {
 
             SettingsRow(
                 title: approval.grantedTools.isEmpty
-                    ? "No tools are permanently allowed."
-                    : "\(approval.grantedTools.count) tool\(approval.grantedTools.count == 1 ? "" : "s") permanently allowed.",
-                description: "Resetting makes Youzi ask again the next time each one is called."
+                    ? i18n.text(zh: "暂无永久授权的工具。", en: "No tools are permanently allowed.")
+                    : i18n.text(
+                        zh: "\(approval.grantedTools.count) 个工具已获永久授权。",
+                        en: "\(approval.grantedTools.count) tool\(approval.grantedTools.count == 1 ? "" : "s") permanently allowed."
+                    ),
+                description: i18n.text(
+                    zh: "重置后，下次调用各工具时将再次提示授权。",
+                    en: "Resetting makes Youzi ask again the next time each one is called."
+                )
             ) {
-                Button("Reset") { approval.resetGrants() }
+                Button(i18n.text(zh: "重置", en: "Reset")) { approval.resetGrants() }
                     .buttonStyle(.rapidSecondaryCompact)
                     .disabled(approval.grantedTools.isEmpty)
                     .accessibilityIdentifier("Settings.Connectors.ResetApprovals")

@@ -16,6 +16,7 @@ struct YouziAccountMenuTests {
     }
 
     @Test("Account menu is the shared uncommon-action entry")
+    @MainActor
     func sharedEntryContract() throws {
         let menu = try Self.source("Sources/Rapid/UI/YouziAccountMenu.swift")
         let content = try Self.source("Sources/Rapid/UI/ContentView.swift")
@@ -23,11 +24,11 @@ struct YouziAccountMenuTests {
         let sidebar = try Self.source("Sources/Rapid/UI/SidebarView.swift")
 
         #expect(YouziAccountMenu.helpURL.absoluteString == "https://github.com/zhuzhe1983/Youzi/issues")
-        #expect(menu.contains("title: \"设置\""))
-        #expect(menu.contains("Label(\"外观\""))
-        #expect(menu.contains("Label(\"系统状态\""))
-        #expect(menu.contains("title: \"检查更新\""))
-        #expect(menu.contains("title: \"帮助与反馈\""))
+        #expect(menu.contains("zh: \"设置\"") || menu.contains("title: \"设置\""))
+        #expect(menu.contains("zh: \"外观\"") || menu.contains("Label(\"外观\""))
+        #expect(menu.contains("zh: \"系统状态\"") || menu.contains("Label(\"系统状态\""))
+        #expect(menu.contains("zh: \"检查更新\"") || menu.contains("title: \"检查更新\""))
+        #expect(menu.contains("zh: \"帮助与反馈\"") || menu.contains("title: \"帮助与反馈\""))
         #expect(menu.contains("experienceMode.mode.other"))
         #expect(menu.contains("openWindow(id: \"settings\")"))
         #expect(menu.contains("Youzi.AccountMenu.Settings"))

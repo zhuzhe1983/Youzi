@@ -20,12 +20,13 @@ struct StreamingTextKitMarkdownView: View {
     @ScaledMetric(relativeTo: .body) private var basePointSize: CGFloat = 15
 
     var body: some View {
-        let options = TextKitMarkdownView.options(basePointSize: basePointSize)
+        let pointSize = basePointSize * YouziFontSizeConfig.shared.scale
+        let options = TextKitMarkdownView.options(basePointSize: pointSize)
         VStack(alignment: .leading, spacing: options.interContentSpacing) {
             ForEach(store.segments(for: messageID)) { segment in
                 StreamingMarkdownSegmentView(
                     segment: segment,
-                    basePointSize: basePointSize,
+                    basePointSize: pointSize,
                     fadeState: fadeState,
                     fadeConfiguration: Self.fadeConfiguration
                 )

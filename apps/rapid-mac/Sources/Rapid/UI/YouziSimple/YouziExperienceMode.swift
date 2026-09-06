@@ -14,6 +14,14 @@ enum YouziExperienceMode: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    func localizedDisplayName(isChinese: Bool) -> String {
+        if isChinese { return displayName }
+        switch self {
+        case .simple: return "Simple Mode"
+        case .professional: return "Professional Mode"
+        }
+    }
+
     var displayName: String {
         switch self {
         case .simple: "简约模式"

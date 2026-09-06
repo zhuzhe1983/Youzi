@@ -1420,6 +1420,7 @@ Open the picker any time to switch models.
 /// ``QuickstartCoordinator`` reports the surface should show.
 struct QuickstartView: View {
     @Environment(SettingsRouter.self) private var settingsRouter
+    @Environment(YouziI18nConfig.self) private var i18n
 
     /// The ONLY mechanism that opens this app's Settings. It declares a real
     /// ``Window("Settings", id: "settings")`` and no SwiftUI ``Settings``
@@ -1893,8 +1894,11 @@ struct QuickstartView: View {
                 // where it left off. Paper 05.1 state 18: "The copy promises a
                 // fresh download, never a resume."
                 if coordinator.isResumingIncompleteSetup {
-                    Text("Setup didn't finish last time. Nothing was carried over — "
-                         + "choose a model and it downloads from here.")
+                    Text(i18n.text(
+                        zh: "上次设置未完成。未保留任何内容——请选择一个模型并从这里开始下载。",
+                        en: "Setup didn't finish last time. Nothing was carried over — "
+                         + "choose a model and it downloads from here."
+                    ))
                         .scaledSystemFont(13)
                         .foregroundStyle(RapidTheme.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1907,7 +1911,7 @@ struct QuickstartView: View {
                     Button {
                         advanceToModelChoice()
                     } label: {
-                        Text(Self.welcomePrimaryTitle(resuming: coordinator.isResumingIncompleteSetup))
+                        Text(Self.welcomePrimaryTitle(resuming: coordinator.isResumingIncompleteSetup, isChinese: i18n.isChinese))
                     }
                     .buttonStyle(.onboardingPrimary)
                     .keyboardShortcut(.defaultAction)
@@ -1951,8 +1955,11 @@ struct QuickstartView: View {
     /// thing the screen knows to be false. Pure so the pairing can be pinned
     /// without a SwiftUI host (Paper 05.1 state 18 — "Primary Continue setup →
     /// the model chooser").
-    static func welcomePrimaryTitle(resuming: Bool) -> String {
-        resuming ? "Continue setup" : "Get started"
+    static func welcomePrimaryTitle(resuming: Bool, isChinese: Bool = false) -> String {
+        if isChinese {
+            return resuming ? "继续设置" : "开始使用"
+        }
+        return resuming ? "Continue setup" : "Get started"
     }
 
     /// Resolve the latest hardware/cache policy at the user's action boundary.

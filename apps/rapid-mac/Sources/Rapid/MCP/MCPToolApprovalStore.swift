@@ -108,6 +108,12 @@ final class MCPToolApprovalStore {
         mode == .autoApproveAll || grantedTools.contains(toolName)
     }
 
+    /// Revokes one remembered grant. Global automatic approval remains explicit.
+    func revokeGrant(forTool toolName: String) {
+        defaults.removeObject(forKey: Self.grantKey(toolName))
+        grantedTools.remove(toolName)
+    }
+
     /// Forget every remembered grant. The blanket auto-approve mode is a
     /// separate switch and is left alone — a user resetting individual grants
     /// has not asked to change the global posture.

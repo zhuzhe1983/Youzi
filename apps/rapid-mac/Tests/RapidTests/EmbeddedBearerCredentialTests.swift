@@ -260,6 +260,21 @@ struct ServerManagerEmbeddedBearerTests {
         #expect(credentialStore.clearCount == 0)
     }
 
+    @Test("Desktop migrates once to a persistent manually rotated key")
+    func manualDefaultMigration() {
+        let suite = "youzi-manual-migration-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("perLaunch", forKey: "rapid.embeddedBearer.lifetime.v1")
+        let server = ServerManager(testingState: .idle, sessionDefaults: defaults,
+            bearerCredentialStore: RecordingCredentialStore())
+        #expect(server.embeddedBearerLifetime == .explicit)
+        #expect(defaults.bool(forKey: "youzi.models.service.manualKey.v1"))
+        #expect(!ModelServicePreference.allowsAnonymousInference(in: defaults))
+        #expect(server.rotateEmbeddedBearerNow())
+        #expect(server.embeddedBearerRotationPending)
+    }
+
     @Test("Selecting Every start clears persisted storage without replacing the active bearer")
     func selectingPerLaunchClearsPersistedStorage() {
         let suiteName = "server-bearer-select-per-launch"
@@ -356,6 +371,7 @@ struct ServerManagerEmbeddedBearerTests {
             sessionDefaults: UserDefaults(suiteName: "server-bearer-per-launch")!,
             bearerCredentialStore: perLaunchCredentialStore
         )
+        perLaunchServer.setEmbeddedBearerLifetime(.perLaunch)
         let perLaunchRotated = perLaunchServer.rotateEmbeddedBearerNow(now: Date(timeIntervalSince1970: 20))
 
         #expect(!perLaunchRotated)

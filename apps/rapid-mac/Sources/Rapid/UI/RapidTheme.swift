@@ -851,17 +851,16 @@ enum ModelDisplayName {
 /// desktop density target is tighter than the system defaults. Views
 /// that must honour Dynamic Type keep using ``scaledSystemFont``; this
 /// ramp covers the chrome.
+@MainActor
 enum RapidFont {
+    static var fontScale: CGFloat {
+        YouziFontSizeConfig.shared.scale
+    }
+
     /// The one display line on a surface that has nothing else on it —
     /// the chat empty state's "Ask anything", and nothing else in this
     /// slice. 34pt semibold over a 40pt leading.
-    ///
-    /// The ramp previously topped out at ``pageTitle`` (20pt), which is a
-    /// *page heading* size: correct above a list of settings rows, far
-    /// too small to be the only object in a 1440pt window. An empty
-    /// surface has no hierarchy to sit inside, so its title has to
-    /// establish one on its own.
-    static let displayTitle = Font.system(size: 34, weight: .semibold)
+    static var displayTitle: Font { Font.system(size: max(16, round(34 * fontScale)), weight: .semibold) }
 
     /// Optical tracking for ``displayTitle``. SF tightens as it grows;
     /// at 34pt the default spacing reads loose, and -0.022em is where the
@@ -871,56 +870,45 @@ enum RapidFont {
     /// Supporting line under ``displayTitle``. 14pt — one step above
     /// ``body``, because at display scale a 12pt subtitle reads as a
     /// footnote attached to the wrong heading.
-    static let displaySubtitle = Font.system(size: 14)
+    static var displaySubtitle: Font { Font.system(size: max(10, round(14 * fontScale))) }
 
     /// The model name inside the lifecycle band. Between ``pageTitle``
     /// and ``displayTitle``: the band is a priority surface, but it is
     /// still chrome around a transcript, not the subject of the window.
-    static let bandTitle = Font.system(size: 21, weight: .semibold)
+    static var bandTitle: Font { Font.system(size: max(12, round(21 * fontScale)), weight: .semibold) }
 
     /// The all-caps eyebrow over a band or stage title, and the
     /// monospaced counters beside it. Monospaced because these values
     /// tick live (bytes, percent, step counts) and proportional digits
     /// make a progress line jitter its own width.
-    static let bandEyebrow = Font.system(size: 10, weight: .semibold, design: .monospaced)
+    static var bandEyebrow: Font { Font.system(size: max(8, round(10 * fontScale)), weight: .semibold, design: .monospaced) }
 
     /// The big amber percentage in the lifecycle band.
-    static let bandMetric = Font.system(size: 34, weight: .semibold, design: .default)
+    static var bandMetric: Font { Font.system(size: max(16, round(34 * fontScale)), weight: .semibold, design: .default) }
 
     /// Window / toolbar title.
-    static let windowTitle = Font.system(size: 15, weight: .semibold)
+    static var windowTitle: Font { Font.system(size: max(11, round(15 * fontScale)), weight: .semibold) }
     /// The one big title on a page. Chat empty state, page headers,
     /// the title at the top of a Settings category.
-    static let pageTitle = Font.system(size: 20, weight: .semibold)
+    static var pageTitle: Font { Font.system(size: max(14, round(20 * fontScale)), weight: .semibold) }
     /// A titled division WITHIN a page — "Models folder", "Web search",
     /// "Approvals". The tier between ``pageTitle`` and ``groupLabel``.
-    ///
-    /// This is the role Settings was missing, and its absence is why the
-    /// window carried four heading sizes: panels reached for `.title2`
-    /// (22pt) or `.title3` (17pt) because the ramp offered nothing
-    /// between a 20pt page title and an 11pt group label. 15pt semibold
-    /// sits a clear step under ``pageTitle`` without shouting.
-    static let sectionTitle = Font.system(size: 15, weight: .semibold)
+    static var sectionTitle: Font { Font.system(size: max(12, round(15 * fontScale)), weight: .semibold) }
     /// The quiet organisational label directly above a group of rows.
-    /// Structural, not announcing — it should recede behind the content
-    /// it files.
-    ///
-    /// Formerly named ``sectionTitle``; renamed when the real section
-    /// tier above was added, because two roles cannot share one name.
-    static let groupLabel = Font.system(size: 11, weight: .semibold)
+    static var groupLabel: Font { Font.system(size: max(9, round(12 * fontScale)), weight: .semibold) }
     /// Default body copy and row labels.
-    static let body = Font.system(size: 13)
+    static var body: Font { Font.system(size: max(10, round(13.5 * fontScale))) }
     /// Emphasised body — a row's primary label.
-    static let bodyEmphasis = Font.system(size: 13, weight: .medium)
+    static var bodyEmphasis: Font { Font.system(size: max(10, round(13.5 * fontScale)), weight: .medium) }
     /// Supporting copy under a title or row label.
-    static let secondary = Font.system(size: 12)
+    static var secondary: Font { Font.system(size: max(9, round(12.5 * fontScale))) }
     /// The smallest supporting text: hints, footnotes, timestamps.
-    static let caption = Font.system(size: 11)
+    static var caption: Font { Font.system(size: max(9, round(11.5 * fontScale))) }
     /// A number meant to be compared or watched. Monospaced digits so
     /// a live-updating value doesn't jitter its own layout.
-    static let metric = Font.system(size: 11, design: .monospaced)
+    static var metric: Font { Font.system(size: max(9, round(11.5 * fontScale)), design: .monospaced) }
     /// Code, endpoints, and API keys.
-    static let code = Font.system(size: 11, design: .monospaced)
+    static var code: Font { Font.system(size: max(9, round(11.5 * fontScale)), design: .monospaced) }
 }
 
 private extension NSAppearance {

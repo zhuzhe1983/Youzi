@@ -36,9 +36,9 @@ struct ImageGenerationResolutionTests {
         let model = try Self.source("Sources/Rapid/Images/ImageGenViewModel.swift")
 
         #expect(view.contains("ImageCatalogRefreshKey(cacheGeneration: downloads.cacheGeneration)"))
-        #expect(view.contains("residencyEligible: false"))
-        #expect(model.components(separatedBy: "residencyEligible: false").count - 1 == 2,
-                "Both generation and editing must use the modal process-swap path.")
+        #expect(view.contains("residencyEligible: true"))
+        #expect(model.components(separatedBy: "residencyEligible: true").count - 1 == 2,
+                "Both generation and editing must preserve the resident LLM without process eviction.")
     }
 
     @Test("A completed image pull changes the catalog key and view-model readiness to Start")

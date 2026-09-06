@@ -22,6 +22,8 @@ struct YouziManifestSource: Codable, Equatable, Sendable {
     var identifier: String
     /// Source package/manifest version, present even for built-in content.
     var version: String
+
+    private enum CodingKeys: String, CodingKey { case kind, identifier, version }
 }
 
 enum YouziPermissionKind: String, Codable, Equatable, Sendable {
@@ -49,9 +51,34 @@ enum YouziPermissionDecision: String, Codable, Equatable, Sendable {
     case revoked
 }
 
+/// Stable, non-sensitive recovery categories. Persist codes rather than raw
+/// runtime errors so domain JSON and audit records cannot accidentally capture
+/// credentials, command lines, paths, or response bodies.
+enum YouziRecoveryCode: String, Codable, Equatable, Sendable {
+    case packageMissing
+    case packageInvalid
+    case bookmarkStale
+    case dependencyMissing
+    case credentialMissing
+    case credentialCleanupPending
+    case connectorUnconfigured
+    case connectorUnavailable
+    case permissionRequired
+    case grantRevoked
+    case automationRevisionChanged
+    case scheduleInvalid
+    case retryExhausted
+    case notificationUnavailable
+    case runtimeUnavailable
+}
+
 struct YouziPermissionRecord: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     var taskID: UUID?
+    /// Automation permission requests are scoped to one immutable definition
+    /// revision. These fields appear together and never alongside `taskID`.
+    var automationID: UUID?
+    var automationRevision: Int?
     var kind: YouziPermissionKind
     /// Connector, workspace, file, or action identifier the decision covers.
     var targetIdentifier: String
@@ -64,6 +91,8 @@ struct YouziPermissionRecord: Identifiable, Codable, Equatable, Sendable {
     init(
         id: UUID = UUID(),
         taskID: UUID? = nil,
+        automationID: UUID? = nil,
+        automationRevision: Int? = nil,
         kind: YouziPermissionKind,
         targetIdentifier: String,
         purpose: String,
@@ -74,6 +103,8 @@ struct YouziPermissionRecord: Identifiable, Codable, Equatable, Sendable {
     ) {
         self.id = id
         self.taskID = taskID
+        self.automationID = automationID
+        self.automationRevision = automationRevision
         self.kind = kind
         self.targetIdentifier = targetIdentifier
         self.purpose = purpose
@@ -81,6 +112,65 @@ struct YouziPermissionRecord: Identifiable, Codable, Equatable, Sendable {
         self.decision = decision
         self.requestedAt = requestedAt
         self.decidedAt = decidedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, taskID, automationID, automationRevision, kind, targetIdentifier
+        case purpose, duration, decision, requestedAt, decidedAt
+    }
+}
+
+/// Authority issued from an allowed permission request. A request/decision is
+/// history; only a live, matching grant can authorize execution.
+struct YouziPermissionGrant: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let permissionRecordID: UUID
+    let taskID: UUID?
+    let automationID: UUID?
+    let automationRevision: Int?
+    let kind: YouziPermissionKind
+    let targetIdentifier: String
+    let targetRevision: Int?
+    let duration: YouziPermissionDuration
+    let grantedAt: Date
+    var expiresAt: Date?
+    var consumedAt: Date?
+    var revokedAt: Date?
+
+    init(
+        id: UUID = UUID(),
+        permissionRecordID: UUID,
+        taskID: UUID? = nil,
+        automationID: UUID? = nil,
+        automationRevision: Int? = nil,
+        kind: YouziPermissionKind,
+        targetIdentifier: String,
+        targetRevision: Int? = nil,
+        duration: YouziPermissionDuration,
+        grantedAt: Date = Date(),
+        expiresAt: Date? = nil,
+        consumedAt: Date? = nil,
+        revokedAt: Date? = nil
+    ) {
+        self.id = id
+        self.permissionRecordID = permissionRecordID
+        self.taskID = taskID
+        self.automationID = automationID
+        self.automationRevision = automationRevision
+        self.kind = kind
+        self.targetIdentifier = targetIdentifier
+        self.targetRevision = targetRevision
+        self.duration = duration
+        self.grantedAt = grantedAt
+        self.expiresAt = expiresAt
+        self.consumedAt = consumedAt
+        self.revokedAt = revokedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, permissionRecordID, taskID, automationID, automationRevision
+        case kind, targetIdentifier, targetRevision, duration, grantedAt
+        case expiresAt, consumedAt, revokedAt
     }
 }
 
@@ -95,6 +185,13 @@ enum YouziTaskStatus: String, Codable, Equatable, Sendable {
     case archived
 }
 
+/// Persists whether an empty task capability selection inherits its active
+/// project's defaults or represents an intentional, explicitly empty choice.
+enum YouziTaskSelectionIntent: String, Codable, Equatable, Sendable {
+    case inheritProjectDefaults
+    case explicit
+}
+
 struct YouziTask: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
     var title: String
@@ -104,8 +201,11 @@ struct YouziTask: Identifiable, Codable, Equatable, Sendable {
     var workspaceID: UUID?
     var projectID: UUID?
     var helperID: UUID?
+    var helperSelectionIntent: YouziTaskSelectionIntent
     var skillIDs: [UUID]
+    var skillSelectionIntent: YouziTaskSelectionIntent
     var connectionAccountIDs: [UUID]
+    var connectionAccountSelectionIntent: YouziTaskSelectionIntent
     var permissionRecordIDs: [UUID]
     /// Stable identities of imported inputs; bytes and access grants live on
     /// the corresponding ``YouziFile`` records.
@@ -126,8 +226,11 @@ struct YouziTask: Identifiable, Codable, Equatable, Sendable {
         workspaceID: UUID? = nil,
         projectID: UUID? = nil,
         helperID: UUID? = nil,
+        helperSelectionIntent: YouziTaskSelectionIntent = .inheritProjectDefaults,
         skillIDs: [UUID] = [],
+        skillSelectionIntent: YouziTaskSelectionIntent = .inheritProjectDefaults,
         connectionAccountIDs: [UUID] = [],
+        connectionAccountSelectionIntent: YouziTaskSelectionIntent = .inheritProjectDefaults,
         permissionRecordIDs: [UUID] = [],
         inputFileIDs: [UUID] = [],
         artifactIDs: [UUID] = [],
@@ -145,8 +248,11 @@ struct YouziTask: Identifiable, Codable, Equatable, Sendable {
         self.workspaceID = workspaceID
         self.projectID = projectID
         self.helperID = helperID
+        self.helperSelectionIntent = helperSelectionIntent
         self.skillIDs = skillIDs
+        self.skillSelectionIntent = skillSelectionIntent
         self.connectionAccountIDs = connectionAccountIDs
+        self.connectionAccountSelectionIntent = connectionAccountSelectionIntent
         self.permissionRecordIDs = permissionRecordIDs
         self.inputFileIDs = inputFileIDs
         self.artifactIDs = artifactIDs
@@ -157,6 +263,13 @@ struct YouziTask: Identifiable, Codable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.completedAt = completedAt
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, request, conversationID, workspaceID, projectID, helperID
+        case helperSelectionIntent, skillIDs, skillSelectionIntent, connectionAccountIDs
+        case connectionAccountSelectionIntent, permissionRecordIDs, inputFileIDs
+        case artifactIDs, status, failureSummary, isPinned, createdAt, updatedAt, completedAt
+    }
 }
 
 /// A durable workspace location. User-selected folders persist their sandbox
@@ -164,6 +277,35 @@ struct YouziTask: Identifiable, Codable, Equatable, Sendable {
 enum YouziWorkspaceLocation: Codable, Equatable, Sendable {
     case managed(relativePath: String)
     case securityScopedBookmark(data: Data, displayPath: String)
+
+    private enum CodingKeys: String, CodingKey { case kind, relativePath, data, displayPath }
+    private enum Kind: String, Codable { case managed, securityScopedBookmark }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .managed:
+            self = .managed(relativePath: try container.decode(String.self, forKey: .relativePath))
+        case .securityScopedBookmark:
+            self = .securityScopedBookmark(
+                data: try container.decode(Data.self, forKey: .data),
+                displayPath: try container.decode(String.self, forKey: .displayPath)
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .managed(relativePath):
+            try container.encode(Kind.managed, forKey: .kind)
+            try container.encode(relativePath, forKey: .relativePath)
+        case let .securityScopedBookmark(data, displayPath):
+            try container.encode(Kind.securityScopedBookmark, forKey: .kind)
+            try container.encode(data, forKey: .data)
+            try container.encode(displayPath, forKey: .displayPath)
+        }
+    }
 }
 
 struct YouziWorkspace: Identifiable, Codable, Equatable, Sendable {
@@ -191,6 +333,10 @@ struct YouziWorkspace: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.lastAccessedAt = lastAccessedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, location, state, createdAt, updatedAt, lastAccessedAt
     }
 }
 
@@ -236,6 +382,12 @@ struct YouziProject: Identifiable, Codable, Equatable, Sendable {
         self.state = state
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, summary, instructions, preferences, defaultHelperIDs
+        case defaultSkillIDs, defaultConnectionAccountIDs, resourceFileIDs
+        case state, createdAt, updatedAt
     }
 }
 
@@ -284,6 +436,12 @@ struct YouziHelper: Identifiable, Codable, Equatable, Sendable {
         self.isFavorite = isFavorite
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, summary, systemInstructions, methodology, recommendedSkillIDs
+        case allowedConnectorIDs, preferredOutputTypes, source, state, isFavorite
+        case createdAt, updatedAt
     }
 }
 
@@ -343,6 +501,95 @@ struct YouziSkill: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, summary, packageVersion, entrypoint, resourcePaths
+        case executionLocation, requestedPermissions, connectorDependencyIDs
+        case requiresFirstUseConfirmation, source, state, lastUsedAt, createdAt, updatedAt
+    }
+}
+
+/// Durable authority for locating an installed declarative skill package.
+/// Filesystem paths are never stored in manifest source identifiers.
+enum YouziSkillPackageLocation: Codable, Equatable, Sendable {
+    case bundled(resourcePath: String)
+    case appManaged(relativePath: String)
+    case securityScopedBookmark(data: Data, displayPath: String)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, resourcePath, relativePath, data, displayPath
+    }
+
+    private enum Kind: String, Codable { case bundled, appManaged, securityScopedBookmark }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .bundled:
+            self = .bundled(resourcePath: try container.decode(String.self, forKey: .resourcePath))
+        case .appManaged:
+            self = .appManaged(relativePath: try container.decode(String.self, forKey: .relativePath))
+        case .securityScopedBookmark:
+            self = .securityScopedBookmark(
+                data: try container.decode(Data.self, forKey: .data),
+                displayPath: try container.decode(String.self, forKey: .displayPath)
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .bundled(resourcePath):
+            try container.encode(Kind.bundled, forKey: .kind)
+            try container.encode(resourcePath, forKey: .resourcePath)
+        case let .appManaged(relativePath):
+            try container.encode(Kind.appManaged, forKey: .kind)
+            try container.encode(relativePath, forKey: .relativePath)
+        case let .securityScopedBookmark(data, displayPath):
+            try container.encode(Kind.securityScopedBookmark, forKey: .kind)
+            try container.encode(data, forKey: .data)
+            try container.encode(displayPath, forKey: .displayPath)
+        }
+    }
+}
+
+struct YouziSkillPackageRecord: Identifiable, Codable, Equatable, Sendable {
+    /// The package record deliberately shares the skill UUID. Cross-collection
+    /// UUID reuse is valid; uniqueness is enforced within each collection.
+    let id: UUID
+    var location: YouziSkillPackageLocation
+    var packageVersion: String
+    var contentSHA256: String
+    var recoveryCode: YouziRecoveryCode?
+    let installedAt: Date
+    var verifiedAt: Date?
+    var updatedAt: Date
+
+    init(
+        id: UUID,
+        location: YouziSkillPackageLocation,
+        packageVersion: String,
+        contentSHA256: String,
+        recoveryCode: YouziRecoveryCode? = nil,
+        installedAt: Date = Date(),
+        verifiedAt: Date? = nil,
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.location = location
+        self.packageVersion = packageVersion
+        self.contentSHA256 = contentSHA256
+        self.recoveryCode = recoveryCode
+        self.installedAt = installedAt
+        self.verifiedAt = verifiedAt
+        self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, location, packageVersion, contentSHA256, recoveryCode
+        case installedAt, verifiedAt, updatedAt
+    }
 }
 
 enum YouziConnectorAdapter: String, Codable, Equatable, Sendable {
@@ -358,6 +605,82 @@ enum YouziConnectorAuthentication: String, Codable, Equatable, Sendable {
     case apiKey
     case localSession
     case custom
+}
+
+/// Stable, non-secret mapping from a product account to its runtime adapter.
+enum YouziConnectorRuntimeBinding: Codable, Equatable, Sendable {
+    case mcp(serverName: String)
+    case builtIn(capabilityIdentifier: String)
+    case native(adapterIdentifier: String)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, serverName, capabilityIdentifier, adapterIdentifier
+    }
+
+    private enum Kind: String, Codable { case mcp, builtIn, native }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .mcp:
+            self = .mcp(serverName: try container.decode(String.self, forKey: .serverName))
+        case .builtIn:
+            self = .builtIn(
+                capabilityIdentifier: try container.decode(
+                    String.self, forKey: .capabilityIdentifier
+                )
+            )
+        case .native:
+            self = .native(
+                adapterIdentifier: try container.decode(String.self, forKey: .adapterIdentifier)
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .mcp(serverName):
+            try container.encode(Kind.mcp, forKey: .kind)
+            try container.encode(serverName, forKey: .serverName)
+        case let .builtIn(capabilityIdentifier):
+            try container.encode(Kind.builtIn, forKey: .kind)
+            try container.encode(capabilityIdentifier, forKey: .capabilityIdentifier)
+        case let .native(adapterIdentifier):
+            try container.encode(Kind.native, forKey: .kind)
+            try container.encode(adapterIdentifier, forKey: .adapterIdentifier)
+        }
+    }
+}
+
+struct YouziConnectorBinding: Identifiable, Codable, Equatable, Sendable {
+    /// The binding shares the connection-account UUID.
+    let id: UUID
+    var runtime: YouziConnectorRuntimeBinding
+    var configurationRevision: Int
+    var recoveryCode: YouziRecoveryCode?
+    let createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID,
+        runtime: YouziConnectorRuntimeBinding,
+        configurationRevision: Int = 1,
+        recoveryCode: YouziRecoveryCode? = nil,
+        createdAt: Date = Date(),
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.runtime = runtime
+        self.configurationRevision = configurationRevision
+        self.recoveryCode = recoveryCode
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, runtime, configurationRevision, recoveryCode, createdAt, updatedAt
+    }
 }
 
 struct YouziConnector: Identifiable, Codable, Equatable, Sendable {
@@ -398,6 +721,11 @@ struct YouziConnector: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, summary, adapter, authentication, declaredScopes, toolNames
+        case source, state, createdAt, updatedAt
+    }
 }
 
 enum YouziConnectionState: String, Codable, Equatable, Sendable {
@@ -418,6 +746,7 @@ struct YouziConnectionAccount: Identifiable, Codable, Equatable, Sendable {
     var state: YouziConnectionState
     var lastCheckedAt: Date?
     var lastErrorSummary: String?
+    var recoveryCode: YouziRecoveryCode?
     let createdAt: Date
     var updatedAt: Date
 
@@ -430,6 +759,7 @@ struct YouziConnectionAccount: Identifiable, Codable, Equatable, Sendable {
         state: YouziConnectionState = .notConnected,
         lastCheckedAt: Date? = nil,
         lastErrorSummary: String? = nil,
+        recoveryCode: YouziRecoveryCode? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -441,8 +771,14 @@ struct YouziConnectionAccount: Identifiable, Codable, Equatable, Sendable {
         self.state = state
         self.lastCheckedAt = lastCheckedAt
         self.lastErrorSummary = lastErrorSummary
+        self.recoveryCode = recoveryCode
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, connectorID, displayName, credentialReference, grantedScopes
+        case state, lastCheckedAt, lastErrorSummary, recoveryCode, createdAt, updatedAt
     }
 }
 
@@ -496,6 +832,11 @@ struct YouziArtifact: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, taskID, projectID, title, kind, previewText, fileID
+        case state, createdAt, updatedAt
+    }
 }
 
 struct YouziTemplate: Identifiable, Codable, Equatable, Sendable {
@@ -548,14 +889,60 @@ struct YouziTemplate: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, category, summary, samplePreview, prefilledRequest
+        case recommendedHelperID, recommendedSkillIDs, recommendedConnectorIDs
+        case requiredInputs, source, state, isFavorite, createdAt, updatedAt
+    }
 }
 
 // MARK: - Automations
 
 enum YouziAutomationTrigger: Codable, Equatable, Sendable {
     case manual
-    case interval(seconds: TimeInterval)
+    case interval(seconds: TimeInterval, anchorAt: Date)
     case schedule(cronExpression: String, timeZoneIdentifier: String)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, seconds, anchorAt, cronExpression, timeZoneIdentifier
+    }
+
+    private enum Kind: String, Codable { case manual, interval, schedule }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .manual:
+            self = .manual
+        case .interval:
+            self = .interval(
+                seconds: try container.decode(TimeInterval.self, forKey: .seconds),
+                anchorAt: try container.decode(Date.self, forKey: .anchorAt)
+            )
+        case .schedule:
+            self = .schedule(
+                cronExpression: try container.decode(String.self, forKey: .cronExpression),
+                timeZoneIdentifier: try container.decode(String.self, forKey: .timeZoneIdentifier)
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .manual:
+            try container.encode(Kind.manual, forKey: .kind)
+        case let .interval(seconds, anchorAt):
+            try container.encode(Kind.interval, forKey: .kind)
+            try container.encode(seconds, forKey: .seconds)
+            try container.encode(anchorAt, forKey: .anchorAt)
+        case let .schedule(cronExpression, timeZoneIdentifier):
+            try container.encode(Kind.schedule, forKey: .kind)
+            try container.encode(cronExpression, forKey: .cronExpression)
+            try container.encode(timeZoneIdentifier, forKey: .timeZoneIdentifier)
+        }
+    }
 }
 
 struct YouziAutomationAction: Codable, Equatable, Sendable {
@@ -565,13 +952,39 @@ struct YouziAutomationAction: Codable, Equatable, Sendable {
     var helperID: UUID?
     var skillIDs: [UUID]
     var connectionAccountIDs: [UUID]
+
+    private enum CodingKeys: String, CodingKey {
+        case request, projectID, workspaceID, helperID, skillIDs, connectionAccountIDs
+    }
 }
 
 enum YouziAutomationState: String, Codable, Equatable, Sendable {
+    case draft
     case active
     case paused
     case needsAttention
     case archived
+}
+
+enum YouziAutomationMissedRunPolicy: String, Codable, Equatable, Sendable {
+    case runOnce
+    case skip
+}
+
+enum YouziAutomationOverlapPolicy: String, Codable, Equatable, Sendable {
+    case skipWhileActive
+}
+
+struct YouziAutomationRetryPolicy: Codable, Equatable, Sendable {
+    var maximumAttempts: Int
+    var baseDelaySeconds: TimeInterval
+
+    init(maximumAttempts: Int = 1, baseDelaySeconds: TimeInterval = 1) {
+        self.maximumAttempts = maximumAttempts
+        self.baseDelaySeconds = baseDelaySeconds
+    }
+
+    private enum CodingKeys: String, CodingKey { case maximumAttempts, baseDelaySeconds }
 }
 
 struct YouziAutomation: Identifiable, Codable, Equatable, Sendable {
@@ -582,10 +995,16 @@ struct YouziAutomation: Identifiable, Codable, Equatable, Sendable {
     var trigger: YouziAutomationTrigger
     var action: YouziAutomationAction
     var permissionRecordIDs: [UUID]
+    var permissionGrantIDs: [UUID]
+    var missedRunPolicy: YouziAutomationMissedRunPolicy
+    var overlapPolicy: YouziAutomationOverlapPolicy
+    var retryPolicy: YouziAutomationRetryPolicy
     var notificationEnabled: Bool
     var state: YouziAutomationState
+    var confirmedAt: Date?
     var nextRunAt: Date?
     var lastRunAt: Date?
+    var lastScheduledFor: Date?
     let createdAt: Date
     var updatedAt: Date
 
@@ -596,10 +1015,16 @@ struct YouziAutomation: Identifiable, Codable, Equatable, Sendable {
         trigger: YouziAutomationTrigger,
         action: YouziAutomationAction,
         permissionRecordIDs: [UUID] = [],
+        permissionGrantIDs: [UUID] = [],
+        missedRunPolicy: YouziAutomationMissedRunPolicy = .runOnce,
+        overlapPolicy: YouziAutomationOverlapPolicy = .skipWhileActive,
+        retryPolicy: YouziAutomationRetryPolicy = .init(),
         notificationEnabled: Bool = true,
         state: YouziAutomationState = .active,
+        confirmedAt: Date? = nil,
         nextRunAt: Date? = nil,
         lastRunAt: Date? = nil,
+        lastScheduledFor: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -609,48 +1034,162 @@ struct YouziAutomation: Identifiable, Codable, Equatable, Sendable {
         self.trigger = trigger
         self.action = action
         self.permissionRecordIDs = permissionRecordIDs
+        self.permissionGrantIDs = permissionGrantIDs
+        self.missedRunPolicy = missedRunPolicy
+        self.overlapPolicy = overlapPolicy
+        self.retryPolicy = retryPolicy
         self.notificationEnabled = notificationEnabled
         self.state = state
+        self.confirmedAt = confirmedAt ?? (state == .active ? createdAt : nil)
         self.nextRunAt = nextRunAt
         self.lastRunAt = lastRunAt
+        self.lastScheduledFor = lastScheduledFor
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, revision, trigger, action, permissionRecordIDs, permissionGrantIDs
+        case missedRunPolicy, overlapPolicy, retryPolicy, notificationEnabled, state
+        case confirmedAt, nextRunAt, lastRunAt, lastScheduledFor, createdAt, updatedAt
     }
 }
 
 enum YouziAutomationRunStatus: String, Codable, Equatable, Sendable {
+    case queued
     case running
     case awaitingConfirmation
+    case retryScheduled
     case completed
     case failed
     case cancelled
+    case skipped
 }
 
 struct YouziAutomationRun: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
-    var automationID: UUID
+    let automationID: UUID
+    let automationRevision: Int
     var taskID: UUID?
+    let scheduledFor: Date?
+    let permissionGrantIDs: [UUID]
+    let retryPolicy: YouziAutomationRetryPolicy
+    var attemptCount: Int
     var status: YouziAutomationRunStatus
+    var recoveryCode: YouziRecoveryCode?
     var summary: String?
-    let startedAt: Date
+    let createdAt: Date
+    var startedAt: Date?
+    var nextRetryAt: Date?
     var finishedAt: Date?
 
     init(
         id: UUID = UUID(),
         automationID: UUID,
+        automationRevision: Int = 1,
         taskID: UUID? = nil,
+        scheduledFor: Date? = nil,
+        permissionGrantIDs: [UUID] = [],
+        retryPolicy: YouziAutomationRetryPolicy = .init(),
+        attemptCount: Int = 1,
         status: YouziAutomationRunStatus = .running,
+        recoveryCode: YouziRecoveryCode? = nil,
         summary: String? = nil,
-        startedAt: Date = Date(),
+        createdAt: Date? = nil,
+        startedAt: Date? = Date(),
+        nextRetryAt: Date? = nil,
         finishedAt: Date? = nil
     ) {
         self.id = id
         self.automationID = automationID
+        self.automationRevision = automationRevision
         self.taskID = taskID
+        self.scheduledFor = scheduledFor
+        self.permissionGrantIDs = permissionGrantIDs
+        self.retryPolicy = retryPolicy
+        self.attemptCount = attemptCount
         self.status = status
+        self.recoveryCode = recoveryCode
         self.summary = summary
+        self.createdAt = createdAt ?? startedAt ?? Date()
         self.startedAt = startedAt
+        self.nextRetryAt = nextRetryAt
         self.finishedAt = finishedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, automationID, automationRevision, taskID, scheduledFor
+        case permissionGrantIDs, retryPolicy, attemptCount, status, recoveryCode
+        case summary, createdAt, startedAt, nextRetryAt, finishedAt
+    }
+}
+
+enum YouziExecutionAuditKind: String, Codable, Equatable, Sendable {
+    case executionStarted
+    case permissionChecked
+    case toolRequested
+    case toolCompleted
+    case externalAction
+    case executionCompleted
+    case executionFailed
+    case executionCancelled
+}
+
+enum YouziExecutionAuditOutcome: String, Codable, Equatable, Sendable {
+    case allowed
+    case denied
+    case succeeded
+    case failed
+    case cancelled
+    case unavailable
+}
+
+struct YouziExecutionAuditEvent: Identifiable, Codable, Equatable, Sendable {
+    let id: UUID
+    let sequence: Int
+    let taskID: UUID
+    let automationRunID: UUID?
+    let permissionRecordID: UUID?
+    let permissionGrantID: UUID?
+    let connectionAccountID: UUID?
+    let capabilityIdentifier: String?
+    let kind: YouziExecutionAuditKind
+    let outcome: YouziExecutionAuditOutcome
+    let recoveryCode: YouziRecoveryCode?
+    let occurredAt: Date
+
+    init(
+        id: UUID = UUID(),
+        sequence: Int,
+        taskID: UUID,
+        automationRunID: UUID? = nil,
+        permissionRecordID: UUID? = nil,
+        permissionGrantID: UUID? = nil,
+        connectionAccountID: UUID? = nil,
+        capabilityIdentifier: String? = nil,
+        kind: YouziExecutionAuditKind,
+        outcome: YouziExecutionAuditOutcome,
+        recoveryCode: YouziRecoveryCode? = nil,
+        occurredAt: Date = Date()
+    ) {
+        self.id = id
+        self.sequence = sequence
+        self.taskID = taskID
+        self.automationRunID = automationRunID
+        self.permissionRecordID = permissionRecordID
+        self.permissionGrantID = permissionGrantID
+        self.connectionAccountID = connectionAccountID
+        self.capabilityIdentifier = capabilityIdentifier
+        self.kind = kind
+        self.outcome = outcome
+        self.recoveryCode = recoveryCode
+        self.occurredAt = occurredAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, sequence, taskID, automationRunID, permissionRecordID
+        case permissionGrantID, connectionAccountID, capabilityIdentifier
+        case kind, outcome, recoveryCode, occurredAt
     }
 }
 
@@ -661,6 +1200,37 @@ enum YouziMemoryScope: Codable, Equatable, Sendable {
     case project(UUID)
     case workspace(UUID)
     case sensitiveSealed
+
+    private enum CodingKeys: String, CodingKey { case kind, projectID, workspaceID }
+    private enum Kind: String, Codable { case personal, project, workspace, sensitiveSealed }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .personal: self = .personal
+        case .project:
+            self = .project(try container.decode(UUID.self, forKey: .projectID))
+        case .workspace:
+            self = .workspace(try container.decode(UUID.self, forKey: .workspaceID))
+        case .sensitiveSealed: self = .sensitiveSealed
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .personal:
+            try container.encode(Kind.personal, forKey: .kind)
+        case let .project(id):
+            try container.encode(Kind.project, forKey: .kind)
+            try container.encode(id, forKey: .projectID)
+        case let .workspace(id):
+            try container.encode(Kind.workspace, forKey: .kind)
+            try container.encode(id, forKey: .workspaceID)
+        case .sensitiveSealed:
+            try container.encode(Kind.sensitiveSealed, forKey: .kind)
+        }
+    }
 }
 
 enum YouziMemoryNodeKind: String, Codable, Equatable, Sendable {
@@ -740,6 +1310,11 @@ struct YouziMemoryNode: Identifiable, Codable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.lastConfirmedAt = lastConfirmedAt
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, label, content, kind, confidence, scope, citationIDs, creationMethod
+        case state, validFrom, validUntil, createdAt, updatedAt, lastConfirmedAt
+    }
 }
 
 enum YouziMemoryRelation: String, Codable, Equatable, Sendable {
@@ -799,6 +1374,11 @@ struct YouziMemoryEdge: Identifiable, Codable, Equatable, Sendable {
         self.validUntil = validUntil
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, sourceNodeID, targetNodeID, relation, explanation, confidence
+        case scope, citationIDs, state, validFrom, validUntil, createdAt, updatedAt
     }
 }
 
@@ -860,6 +1440,11 @@ struct YouziMemoryCitation: Identifiable, Codable, Equatable, Sendable {
         self.authorizationState = authorizationState
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, sourceType, sourceID, scopeID, title, stableLocator, sourceTimestamp
+        case excerpt, contentChecksum, authorizationState, createdAt, updatedAt
     }
 }
 
@@ -933,5 +1518,11 @@ struct YouziVoiceSession: Identifiable, Codable, Equatable, Sendable {
         self.startedAt = startedAt
         self.endedAt = endedAt
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, dimension, taskID, conversationID, helperID, transcriptMessageIDs
+        case permissionRecordIDs, state, localeIdentifier, inputDeviceID, outputDeviceID
+        case audioWasPersisted, startedAt, endedAt, updatedAt
     }
 }

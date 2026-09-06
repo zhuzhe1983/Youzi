@@ -53,7 +53,7 @@ enum PortAllocator {
     /// — it collides with rapid-mlx's own ``--port`` CLI semantics;
     /// ``RAPID_DESKTOP_PORT`` is the disambiguated name.
     static var candidatePorts: [Int] {
-        resolveCandidatePorts(environment: ProcessInfo.processInfo.environment)
+        ModelServicePreference.candidatePorts(environment: ProcessInfo.processInfo.environment)
     }
 
     /// Test seam — resolve the candidate window from an injected

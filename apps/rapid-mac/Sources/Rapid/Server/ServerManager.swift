@@ -416,7 +416,8 @@ final class ServerManager {
         return await ensureServing(
             alias: alias,
             hfPath: hfPath,
-            residencyEligible: false
+            residencyEligible: true,
+            requestIsMedia: true
         )
     }
 
@@ -774,7 +775,36 @@ final class ServerManager {
 
     /// Issue #2599: how the next ``start()`` materializes the embedded
     /// bearer. The default deliberately remains per-launch rotation.
-    private(set) var embeddedBearerLifetime: EmbeddedBearerLifetime = .perLaunch
+    private(set) var embeddedBearerLifetime: EmbeddedBearerLifetime = .explicit
+    private(set) var embeddedBearerRotationPending = false
+    private(set) var activeAnonymousInferenceAllowed = false
+    private var activeSessionGeneration: UInt64 = 0
+    private var applyingAuthentication = false
+
+    /// Save acknowledges the running process. Never call start/stop/load here.
+    func applySavedAuthentication(client: ModelServiceAuthClient = .init()) async throws {
+        let desired = ModelServicePreference.allowsAnonymousInference(in: sessionDefaults ?? .standard)
+        guard !applyingAuthentication else { throw ModelServiceAuthClient.Failure.unavailable }
+        switch state {
+        case .missing, .idle, .stopped, .crashed:
+            guard activeBearer == nil else { throw ModelServiceAuthClient.Failure.unavailable }
+            return // Persisted for next launch, no model started as a side effect.
+        case .starting:
+            throw ModelServiceAuthClient.Failure.unavailable
+        case .ready: break
+        }
+        guard let bearer = activeBearer else { throw ModelServiceAuthClient.Failure.unavailable }
+        let generation = activeSessionGeneration
+        let port = activePort
+        applyingAuthentication = true
+        defer { applyingAuthentication = false }
+        let applied = try await client.apply(anonymous: desired, port: port, bearer: bearer)
+        guard generation == activeSessionGeneration, activePort == port, activeBearer == bearer
+        else { throw ModelServiceAuthClient.Failure.staleSession }
+        activeAnonymousInferenceAllowed = applied
+        guard desired == ModelServicePreference.allowsAnonymousInference(in: sessionDefaults ?? .standard)
+        else { throw ModelServiceAuthClient.Failure.staleSession }
+    }
 
     /// Non-secret presentation state for the last materialized credential.
     /// The bearer itself stays in ``activeBearer`` and, when persisted, in
@@ -831,6 +861,7 @@ final class ServerManager {
     /// to the bearer-authenticated process that returned them and must never
     /// survive a process replacement on the same alias and port.
     private func setActiveServerSession(bearer: String?) {
+        activeSessionGeneration &+= 1
         activeBearer = bearer
         activeModelProfile = nil
     }
@@ -1216,14 +1247,16 @@ final class ServerManager {
         }
     }
 
-    private static func loadBearerLifetime(
-        from defaults: UserDefaults
-    ) -> EmbeddedBearerLifetime {
-        guard let raw = defaults.string(forKey: "rapid.embeddedBearer.lifetime.v1"),
-              let lifetime = EmbeddedBearerLifetime(rawValue: raw) else {
-            return .perLaunch
+    private static func loadBearerLifetime(from defaults: UserDefaults) -> EmbeddedBearerLifetime {
+        // Youzi service keys are persistent by default. Migrate the old
+        // automatic-rotation UI once; secrets remain in the Keychain only.
+        let migrationKey = "youzi.models.service.manualKey.v1"
+        if !defaults.bool(forKey: migrationKey) {
+            defaults.set(EmbeddedBearerLifetime.explicit.rawValue, forKey: "rapid.embeddedBearer.lifetime.v1")
+            defaults.set(true, forKey: migrationKey)
         }
-        return lifetime
+        return defaults.string(forKey: "rapid.embeddedBearer.lifetime.v1")
+            .flatMap(EmbeddedBearerLifetime.init(rawValue:)) ?? .explicit
     }
 
     func setEmbeddedBearerLifetime(_ lifetime: EmbeddedBearerLifetime) {
@@ -1288,6 +1321,7 @@ final class ServerManager {
             isPersisted: true,
             issue: nil
         )
+        embeddedBearerRotationPending = true
         return true
     }
 
@@ -1633,14 +1667,16 @@ final class ServerManager {
     func ensureServing(
         alias: String,
         hfPath: String?,
-        residencyEligible: Bool
+        residencyEligible: Bool,
+        requestIsMedia: Bool = false
     ) async -> Bool {
         await ensureServing(
             alias: alias,
             hfPath: hfPath,
             estimatedMemoryGB: nil,
             replacementGroup: nil,
-            residencyEligible: residencyEligible
+            residencyEligible: residencyEligible,
+            requestIsMedia: requestIsMedia
         )
     }
 
@@ -1652,7 +1688,8 @@ final class ServerManager {
         imageMode: ResidentImageMode? = nil,
         residencyEligible: Bool = true,
         catalogEntryHint: CatalogEntryHint? = nil,
-        videoOutputDirectory: String? = nil
+        videoOutputDirectory: String? = nil,
+        requestIsMedia: Bool = false
     ) async -> Bool {
         let trimmed = alias.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
@@ -1932,6 +1969,9 @@ final class ServerManager {
         // ``start(alias:)``.
         var replacementMemoryAdmission: MemoryAdmissionContext?
         if child != nil {
+            if requestIsMedia {
+                return false
+            }
             // `ensureServing` can re-enter while a dialog or residency refresh
             // is awaiting. Repeat until the alias we validated is still the
             // live child; a stale A→C answer must never authorize stopping B.
@@ -2752,6 +2792,7 @@ final class ServerManager {
         // Authorization header. SecRandomCopyBytes failing is
         // pathological (kernel-level RNG starvation); we surface as
         // .crashed rather than silently spawning unauthenticated.
+        let allowAnonymousInference = ModelServicePreference.allowsAnonymousInference(in: sessionDefaults ?? .standard)
         let bearerMaterial = EmbeddedBearerMaterialResolver.resolve(
             lifetime: embeddedBearerLifetime,
             store: bearerCredentialStore,
@@ -2936,6 +2977,7 @@ final class ServerManager {
                 // never enter the sidecar's address space.
                 environmentAdditions: Self.serveEnvironmentAdditions(
                     bearer: bearerMaterial.secret,
+                    allowAnonymousInference: allowAnonymousInference,
                     ambient: ProcessInfo.processInfo.environment,
                     // Issue #1412: the engine's server-oriented default may
                     // retain up to 20% of RAM in prefix-cache entries. The
@@ -3004,6 +3046,8 @@ final class ServerManager {
         // Codex r1 P3 (#17): only publish the bearer after the spawn
         // has succeeded — see comment at the bearer guard above.
         setActiveServerSession(bearer: bearerMaterial.secret)
+        activeAnonymousInferenceAllowed = allowAnonymousInference
+        embeddedBearerRotationPending = false
         self.stdoutPipe = stdoutPipe
         self.stderrPipe = stderrPipe
         // #20: persist ownership before startMonitor() so a crash
@@ -4638,6 +4682,7 @@ final class ServerManager {
     /// value back to ``nil`` when the drive is unplugged.
     nonisolated internal static func serveEnvironmentAdditions(
         bearer: String,
+        allowAnonymousInference: Bool = false,
         ambient: [String: String],
         physicalRAMBytes: UInt64 = 0,
         availableRAMBytes: UInt64 = 0,
@@ -4683,6 +4728,9 @@ final class ServerManager {
         if !bearer.isEmpty {
             env["RAPID_MLX_API_KEY"] = bearer
         }
+        // Never remove the internal bearer: management endpoints remain
+        // authenticated even when explicitly allowing local inference clients.
+        if allowAnonymousInference { env["YOUZI_ALLOW_ANONYMOUS_INFERENCE"] = "1" }
         // Prefix-cache restore is a best-effort server warm-start optimization,
         // but the engine performs it on the same single MLX step thread used by
         // generation. A large or slow on-disk cache can therefore leave the

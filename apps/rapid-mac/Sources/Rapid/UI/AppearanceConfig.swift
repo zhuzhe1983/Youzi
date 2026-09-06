@@ -86,6 +86,24 @@ enum AppearanceMode: String, CaseIterable, Identifiable, Sendable {
 
     /// Picker label — human-friendly, matches the macOS System
     /// Settings → Appearance row text.
+    func localizedDisplayName(isChinese: Bool) -> String {
+        if isChinese { return displayName }
+        switch self {
+        case .system: return "System Default"
+        case .light:  return "Light"
+        case .dark:   return "Dark"
+        }
+    }
+
+    func localizedShortDisplayName(isChinese: Bool) -> String {
+        if isChinese { return shortDisplayName }
+        switch self {
+        case .system: return "Auto"
+        case .light:  return "Light"
+        case .dark:   return "Dark"
+        }
+    }
+
     var displayName: String {
         switch self {
         case .system: return "跟随系统"

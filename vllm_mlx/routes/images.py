@@ -10,7 +10,7 @@ import secrets
 import tempfile
 import time
 
-from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from starlette.responses import JSONResponse
 
 from ..api.models import ImageGenerationRequest, parse_image_size
@@ -18,7 +18,9 @@ from ._async_utils import run_to_completion
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+from ..middleware.auth import _verify_api_key_values, allows_anonymous_inference, verify_api_key
+
+router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 # Cap the uploaded init image so a single edit request can't buffer an
 # unbounded body into memory before the size validators run.
@@ -58,6 +60,16 @@ class ImageBodyLimitMiddleware:
             return await self.app(scope, receive, send)
 
         headers = {name.lower(): value for name, value in scope.get("headers", ())}
+        # Reject unauthorized uploads before multipart parsing/spooling.
+        authorization = headers.get(b"authorization", b"").decode("latin-1")
+        scheme, _, token = authorization.partition(" ")
+        bearer = token if scheme.lower() == "bearer" and token else None
+        try:
+            if not allows_anonymous_inference(Request(scope)):
+                _verify_api_key_values(bearer)
+        except HTTPException as exc:
+            return await JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})(scope, receive, send)
+
         advertised = headers.get(b"content-length")
         if advertised is not None:
             try:

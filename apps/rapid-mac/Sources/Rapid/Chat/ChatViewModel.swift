@@ -1299,6 +1299,7 @@ final class ChatViewModel {
         // another window takes effect on the next send, not halfway through a
         // multi-round tool exchange.
         let globalInstruction = customInstructions.global
+        let personalizationContext = customInstructions.personalizationContext
         let chatInstruction = conversationInstructions
         let memoryContext = memoryStore?.formattedForPrompt()
         inflight = Task { [weak self] in
@@ -1367,7 +1368,8 @@ final class ChatViewModel {
                 supportsImageInput: supportsImageInput,
                 globalInstruction: globalInstruction,
                 conversationInstruction: chatInstruction,
-                memoryContext: memoryContext
+                memoryContext: memoryContext,
+                personalizationContext: personalizationContext
             )
         }
     }
@@ -2314,7 +2316,8 @@ final class ChatViewModel {
         supportsImageInput: Bool,
         globalInstruction: String = "",
         conversationInstruction: String = "",
-        memoryContext: String? = nil
+        memoryContext: String? = nil,
+        personalizationContext: String? = nil
     ) async {
         var currentPlaceholder = initialPlaceholder
         var usedImageInput = false
@@ -2391,6 +2394,7 @@ final class ChatViewModel {
                 ambientPreamble: ambientPreamble,
                 dateContext: ChatViewModel.currentDateTimeContext(),
                 memoryContext: memoryContext,
+                personalizationContext: personalizationContext,
                 global: globalInstruction,
                 conversation: conversationInstruction
             )
@@ -2469,6 +2473,18 @@ final class ChatViewModel {
             )
             switch outcome {
             case .terminal:
+                // A tools-disabled synthesis round can still emit a raw call.
+                // It is NOT an answer and must not be marked as a delivered
+                // success or receive an appended Sources footer. Never execute
+                // this text: the normal structured-tool budget/approval holds.
+                if isFinalSynthesisRound, epoch == conversationEpoch,
+                   !Task.isCancelled,
+                   let message = currentMessage(index: currentPlaceholder),
+                   message.status == .complete,
+                   ChatMessage.contentLooksLikeToolCallArtifact(message.content) {
+                    failWithToolRoundCap(at: currentPlaceholder, epoch: epoch)
+                    return
+                }
                 // BUG C: if this .terminal ends a grounding-correction round
                 // that failed to produce a usable answer (transport error,
                 // cancellation, or an empty stream), restore the original draft
@@ -2649,6 +2665,7 @@ final class ChatViewModel {
             capped.failureKind = .toolFailed
             capped.errorMessage = message
             capped.toolCalls = nil
+            capped.toolCallArtifactSuppressed = ChatMessage.contentLooksLikeToolCallArtifact(capped.content)
             updateMessage(at: index, with: capped)
         }
         lastFailureKind = .toolFailed
@@ -2806,6 +2823,7 @@ final class ChatViewModel {
         ambientPreamble: String?,
         dateContext: String? = nil,
         memoryContext: String? = nil,
+        personalizationContext: String? = nil,
         global: String,
         conversation: String
     ) -> [ChatMessage] {
@@ -2819,6 +2837,9 @@ final class ChatViewModel {
             .compactMap { $0.flatMap(normalizedInstruction) }
         if let memoryContext, let memory = normalizedInstruction(memoryContext) {
             parts.append(memory)
+        }
+        if let personalizationContext, let context = normalizedInstruction(personalizationContext) {
+            parts.append("[PERSONALIZATION PREFERENCES]\nUser-editable preferences, subordinate to application and safety instructions:\n" + context)
         }
         if let global = normalizedInstruction(global) {
             parts.append("""
@@ -2849,6 +2870,7 @@ final class ChatViewModel {
     nonisolated static func effectiveSystemPrompt(
         dateContext: String? = nil,
         memoryContext: String? = nil,
+        personalizationContext: String? = nil,
         global: String,
         conversation: String
     ) -> String {
@@ -2857,6 +2879,7 @@ final class ChatViewModel {
             ambientPreamble: nil,
             dateContext: dateContext ?? currentDateTimeContext(),
             memoryContext: memoryContext,
+            personalizationContext: personalizationContext,
             global: global,
             conversation: conversation
         ).first?.content ?? ""
@@ -2895,7 +2918,10 @@ final class ChatViewModel {
         formatter.dateFormat = "h:mm a"
         let timeText = formatter.string(from: now)
 
-        let abbreviation = zone.abbreviation(for: now) ?? zone.identifier
+        // TimeZone.abbreviation follows the host locale (e.g. GMT-7 instead
+        // of PDT). Use the same POSIX formatter as the date and time.
+        formatter.dateFormat = "z"
+        let abbreviation = formatter.string(from: now)
         return """
         [CURRENT DATE AND TIME]
         Today is \(dateText). The current local time is \(timeText) (\(abbreviation), \(zone.identifier)).

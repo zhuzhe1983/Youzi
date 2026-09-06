@@ -5,16 +5,22 @@ import SwiftUI
 @MainActor
 struct SettingsMemoryPanel: View {
     @Environment(MemoryStore.self) private var memoryStore
+    @Environment(YouziI18nConfig.self) private var i18n
     @State private var editingEntry: MemoryEntry?
     @State private var editDraft = ""
     @State private var confirmingClear = false
+
+    private var isZh: Bool { i18n.isChinese }
 
     var body: some View {
         @Bindable var store = memoryStore
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
-                "记忆",
-                subtitle: "助手会跨对话记住你的偏好。数据不会离开这台 Mac。",
+                i18n.text(zh: "记忆", en: "Memory"),
+                subtitle: i18n.text(
+                    zh: "助手会跨对话记住你的偏好。数据不会离开这台 Mac。",
+                    en: "The assistant remembers your preferences across conversations. Data never leaves this Mac."
+                ),
                 emphasis: .page
             )
 
@@ -23,9 +29,12 @@ struct SettingsMemoryPanel: View {
                 set: { memoryStore.isEnabled = $0 }
             )) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("自动记忆")
+                    Text(i18n.text(zh: "自动记忆", en: "Automatic memory"))
                         .font(.body)
-                    Text("回顾已完成的对话并保存长期偏好。默认关闭。")
+                    Text(i18n.text(
+                        zh: "回顾已完成的对话并保存长期偏好。默认关闭。",
+                        en: "Review completed conversations and retain long-term preferences. Off by default."
+                    ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -35,11 +44,13 @@ struct SettingsMemoryPanel: View {
 
             if memoryStore.isEnabled && !memoryStore.entries.isEmpty {
                 HStack {
-                    Text("\(memoryStore.entries.count) saved memor\(memoryStore.entries.count == 1 ? "y" : "ies")")
+                    Text(isZh
+                        ? "\(memoryStore.entries.count) 条已保存记忆"
+                        : "\(memoryStore.entries.count) saved memor\(memoryStore.entries.count == 1 ? "y" : "ies")")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Button("Clear All", role: .destructive) {
+                    Button(i18n.text(zh: "清空全部", en: "Clear All"), role: .destructive) {
                         confirmingClear = true
                     }
                     .buttonStyle(.borderless)
@@ -56,7 +67,10 @@ struct SettingsMemoryPanel: View {
                 }
                 .frame(minHeight: 200)
             } else if memoryStore.isEnabled {
-                Text("No memories yet. They appear here after the assistant completes a conversation.")
+                Text(i18n.text(
+                    zh: "暂无记忆。助手完成对话后会在这里显示记忆项。",
+                    en: "No memories yet. They appear here after the assistant completes a conversation."
+                ))
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -64,15 +78,21 @@ struct SettingsMemoryPanel: View {
             Spacer()
         }
         .padding()
-        .alert("Clear all memories?", isPresented: $confirmingClear) {
-            Button("Cancel", role: .cancel) {}
+        .alert(
+            i18n.text(zh: "清空全部记忆？", en: "Clear all memories?"),
+            isPresented: $confirmingClear
+        ) {
+            Button(i18n.text(zh: "取消", en: "Cancel"), role: .cancel) {}
                 .accessibilityIdentifier("Settings.Memory.ClearAlert.Cancel")
-            Button("Clear", role: .destructive) {
+            Button(i18n.text(zh: "清空", en: "Clear"), role: .destructive) {
                 memoryStore.removeAll()
             }
             .accessibilityIdentifier("Settings.Memory.ClearAlert.Confirm")
         } message: {
-            Text("This removes every learned fact. It cannot be undone.")
+            Text(i18n.text(
+                zh: "这将删除所有已学习到的偏好信息，无法撤销。",
+                en: "This removes every learned fact. It cannot be undone."
+            ))
         }
         .sheet(item: $editingEntry) { entry in
             editSheet(entry)
@@ -85,12 +105,14 @@ struct SettingsMemoryPanel: View {
                 Text(entry.content)
                     .font(.callout)
                     .textSelection(.enabled)
-                Text("\(entry.evidenceCount)× seen · \(entry.updatedAt, style: .relative)")
+                Text(isZh
+                    ? "\(entry.evidenceCount) 次提及 · \(entry.updatedAt, style: .relative)"
+                    : "\(entry.evidenceCount)× seen · \(entry.updatedAt, style: .relative)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
             Spacer()
-            Button("Edit") {
+            Button(i18n.text(zh: "编辑", en: "Edit")) {
                 editDraft = entry.content
                 editingEntry = entry
             }
@@ -112,18 +134,18 @@ struct SettingsMemoryPanel: View {
     private func editSheet(_ entry: MemoryEntry) -> some View {
         NavigationStack {
             Form {
-                TextField("Memory", text: $editDraft, axis: .vertical)
+                TextField(i18n.text(zh: "记忆内容", en: "Memory"), text: $editDraft, axis: .vertical)
                     .lineLimit(3...10)
                     .accessibilityIdentifier("Settings.Memory.EditSheet.Field")
             }
-            .navigationTitle("Edit Memory")
+            .navigationTitle(i18n.text(zh: "编辑记忆", en: "Edit Memory"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { editingEntry = nil }
+                    Button(i18n.text(zh: "取消", en: "Cancel")) { editingEntry = nil }
                         .accessibilityIdentifier("Settings.Memory.EditSheet.Cancel")
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button(i18n.text(zh: "保存", en: "Save")) {
                         memoryStore.update(id: entry.id, content: editDraft)
                         editingEntry = nil
                     }

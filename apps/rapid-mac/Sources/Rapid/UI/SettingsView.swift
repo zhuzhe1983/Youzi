@@ -43,10 +43,10 @@ struct SettingsView: View {
     @Environment(DockVisibilityPromptStore.self) private var dockPromptStore
     @Environment(QuickstartCoordinator.self) private var quickstart
     @Environment(DeferredTelemetryConsentCoordinator.self) private var deferredTelemetryConsent
+    @Environment(YouziI18nConfig.self) private var i18n
+    @Environment(YouziFontSizeConfig.self) private var fontSizeConfig: YouziFontSizeConfig?
     @State private var confirmingSetupRestart = false
     @State private var restartingSetup = false
-    @AppStorage(VideoFeatureConfig.enabledKey)
-    private var videoGenerationEnabled = VideoFeatureConfig.defaultEnabled
 
     /// Stable reference shared by the sidebar and detail canvas. Keeping the
     /// frequently-mutated category outside this large view's value state means
@@ -54,6 +54,7 @@ struct SettingsView: View {
     /// rather than rebuilding the entire Settings shell and all environment
     /// lookups on every click.
     @State private var categorySelection = CategorySelection()
+    @AppStorage("youzi.settings.models.tab.v1") private var modelTab: ModelSettingsTab = .service
     // v0.6.7's NavigationSplitView-with-locked-Binding shape kept the
     // sidebar visible but couldn't kill the title-bar sidebar-toggle
     // pictogram on macOS 14 — `.toolbar(removing: .sidebarToggle)`
@@ -95,6 +96,7 @@ struct SettingsView: View {
         /// persistent, and take effect immediately without restarting.
         case experimentalFeatures
         case appearance
+        case dataManagement
         case privacy
         /// Rapid-MLX Desktop app updates. The .app self-update is the
         /// only correct way to bump the bundled engine.
@@ -118,12 +120,17 @@ struct SettingsView: View {
             case .performance: return "性能"
             case .experimentalFeatures: return "实验功能"
             case .appearance: return "通用"
-            case .privacy: return "数据与安全"
+            case .dataManagement: return "数据管理"
+            case .privacy: return "安全中心"
             case .app: return "关于"
             #if DEBUG
             case .developer: return "开发者"
             #endif
             }
+        }
+
+        func localizedTitle(isChinese: Bool) -> String {
+            YouziLocalization.localized(title, isChinese: isChinese)
         }
 
         /// Visible Settings rail. Hidden cases stay in ``allCases`` for
@@ -136,7 +143,7 @@ struct SettingsView: View {
             var sections: [(title: String?, categories: [Category])] = [
                 ("设置", [.appearance]),
                 ("功能", [.instructions, .memory, .tools, .modelManagement]),
-                ("数据与安全", [.privacy]),
+                ("数据与安全", [.dataManagement, .privacy]),
                 ("关于", [.app]),
             ]
             #if DEBUG
@@ -147,7 +154,7 @@ struct SettingsView: View {
 
         static func railDestination(for category: Category) -> Category {
             switch category {
-            case .experimentalFeatures: return .appearance
+            case .experimentalFeatures: return .modelManagement
             case .connectors: return .tools
             case .performance: return .modelManagement
             default: return category
@@ -164,6 +171,7 @@ struct SettingsView: View {
             case .performance: return "speedometer"
             case .experimentalFeatures: return "flask.fill"
             case .appearance: return "paintpalette.fill"
+            case .dataManagement: return "externaldrive"
             case .privacy: return "lock.shield.fill"
             case .app: return "app.badge.fill"
             #if DEBUG
@@ -184,6 +192,7 @@ struct SettingsView: View {
     }
 
     private struct CategoryRail: View {
+        @Environment(YouziI18nConfig.self) private var i18n: YouziI18nConfig?
         let selection: CategorySelection
         @State private var hoveredCategory: Category?
 
@@ -218,8 +227,9 @@ struct SettingsView: View {
         private func railSection(
             _ section: (title: String?, categories: [Category])
         ) -> some View {
+            let isZh = i18n?.isChinese ?? YouziI18nConfig.shared.isChinese
             if let title = section.title {
-                Section(title) {
+                Section(YouziLocalization.localized(title, isChinese: isZh)) {
                     ForEach(section.categories) { cat in
                         categoryButton(cat)
                     }
@@ -275,19 +285,21 @@ struct SettingsView: View {
         /// unless the rendering mode is pinned.
         @ViewBuilder
         private func categoryRowContent(_ cat: Category, isSelected: Bool) -> some View {
+            let isZh = i18n?.isChinese ?? YouziI18nConfig.shared.isChinese
+            let displayTitle = cat.localizedTitle(isChinese: isZh)
             let tint = isSelected ? RapidTheme.brandPrimaryDeep : RapidTheme.textPrimary
             HStack(spacing: RapidTheme.Space.sm) {
                 Image(systemName: cat.iconName)
                     .symbolRenderingMode(.monochrome)
                     .font(.system(size: 13, weight: .medium))
                     .frame(width: RapidTheme.Layout.iconSlot, alignment: .center)
-                Text(cat.title)
+                Text(displayTitle)
                     .font(RapidFont.body)
                     .fontWeight(isSelected ? .semibold : .regular)
                     // Reserve the selected weight so the row does not
                     // reflow as the selection moves.
                     .background(
-                        Text(cat.title)
+                        Text(displayTitle)
                             .font(RapidFont.body)
                             .fontWeight(.semibold)
                             .hidden()
@@ -367,8 +379,16 @@ struct SettingsView: View {
     static let minWindowHeight: CGFloat = 480
 
     private struct DetailCanvas<Content: View>: View {
+        @Environment(ServerManager.self) private var server: ServerManager?
+        @Environment(AppearanceConfig.self) private var appearance: AppearanceConfig?
+        @Environment(YouziI18nConfig.self) private var i18n: YouziI18nConfig?
         let selection: CategorySelection
         let content: (Category) -> Content
+
+        @State private var hasSavedRecently = false
+        @State private var isSaving = false
+        @State private var saveFailed = false
+        @State private var saveRevision = UUID()
 
         init(
             selection: CategorySelection,
@@ -380,22 +400,90 @@ struct SettingsView: View {
 
         var body: some View {
             let selected = selection.selected
-            // The column reads its own width and publishes a compact
-            // flag, so a panel adapts to the space it actually has
-            // instead of to a guess about the window. Long pages scroll;
-            // nothing is solved by raising the window floor.
+            let isZh = i18n?.isChinese ?? YouziI18nConfig.shared.isChinese
             GeometryReader { proxy in
                 let available = proxy.size.width - RapidTheme.Space.xl * 2
                 let column = max(0, min(available, RapidTheme.Layout.pageMaxWidth))
-                ScrollView {
-                    content(selected)
-                        .frame(maxWidth: column, alignment: .leading)
-                        .padding(RapidTheme.Space.xl)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                VStack(spacing: 0) {
+                    ScrollView {
+                        content(selected)
+                            .frame(maxWidth: column, alignment: .leading)
+                            .padding(RapidTheme.Space.xl)
+                            .padding(.bottom, 24)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    .environment(\.settingsContentIsCompact, column < SettingsView.compactContentWidth)
+
+                    Divider()
+
+                    HStack(spacing: RapidTheme.Space.md) {
+                        if saveFailed {
+                            Text(isZh ? "偏好已保留，但服务尚未确认生效。请稍后重试保存。" : "Preferences kept, but the service has not confirmed the change. Retry Save shortly.")
+                                .font(RapidFont.secondary)
+                                .foregroundStyle(RapidTheme.statusWarning)
+                                .accessibilityIdentifier("Settings.SaveError")
+                        }
+                        if hasSavedRecently {
+                            HStack(spacing: RapidTheme.Space.xs) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(RapidTheme.statusReady)
+                                Text(isZh ? "已保存设置" : "Settings Saved")
+                                    .font(RapidFont.bodyEmphasis)
+                                    .foregroundStyle(RapidTheme.statusReady)
+                            }
+                            .transition(.opacity.combined(with: .scale))
+                        }
+                        Spacer()
+                        Button {
+                            Task { await performSave() }
+                        } label: {
+                            HStack(spacing: RapidTheme.Space.xs) {
+                                Image(systemName: hasSavedRecently ? "checkmark" : "square.and.arrow.down")
+                                Text(isSaving ? (isZh ? "正在保存…" : "Saving…") : hasSavedRecently
+                                    ? (isZh ? "已保存" : "Saved")
+                                    : (isZh ? "保存设置" : "Save Settings"))
+                            }
+                            .font(RapidFont.bodyEmphasis)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.rapidPrimary)
+                        .disabled(isSaving)
+                        .accessibilityIdentifier("Settings.SaveButton")
+                    }
+                    .padding(.horizontal, RapidTheme.Space.xl)
+                    .padding(.vertical, RapidTheme.Space.sm)
+                    .background(RapidTheme.surfaceSidebar.opacity(0.85))
                 }
-                .environment(\.settingsContentIsCompact, column < SettingsView.compactContentWidth)
             }
             .background(RapidTheme.surfaceCanvas)
+        }
+
+        @MainActor
+        private func performSave() async {
+            guard !isSaving else { return }
+            isSaving = true
+            hasSavedRecently = false
+            saveFailed = false
+            let revision = UUID()
+            saveRevision = revision
+            defer { isSaving = false }
+            UserDefaults.standard.synchronize()
+            appearance?.apply()
+            NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: nil)
+            do {
+                if selection.selected == .modelManagement {
+                    try await server?.applySavedAuthentication()
+                }
+                withAnimation { hasSavedRecently = true }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2.5))
+                    guard saveRevision == revision else { return }
+                    withAnimation { hasSavedRecently = false }
+                }
+            } catch {
+                saveFailed = true
+            }
         }
     }
 
@@ -500,6 +588,9 @@ struct SettingsView: View {
         .onChange(of: router.requestedCategory) { _, _ in
             consumeRouterRequest()
         }
+        .onChange(of: router.requestedModelTab) { _, _ in
+            consumeRouterRequest()
+        }
         .onDisappear {
             // onDisappear fires while AppKit is still closing the window.
             // Restoring the onboarding sheet synchronously would start a new
@@ -535,6 +626,16 @@ struct SettingsView: View {
     /// tab the user was last on.
     private func consumeRouterRequest() {
         if let target = router.requestedCategory {
+            if let requestedTab = router.requestedModelTab {
+                modelTab = requestedTab
+            } else if target == .performance {
+                modelTab = .chat
+            } else if target == .modelManagement {
+                modelTab = .files
+            } else if target == .experimentalFeatures {
+                modelTab = .video
+            }
+            router.requestedModelTab = nil
             categorySelection.selected = Category.railDestination(for: target)
             router.requestedCategory = nil
         }
@@ -555,8 +656,13 @@ struct SettingsView: View {
             EmptyView()
         case .appearance:
             appearancePanel
+        case .dataManagement:
+            SettingsDataManagementPanel()
         case .privacy:
-            privacyPanel
+            VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
+                SettingsSecurityPanel()
+                privacyPanel
+            }
         case .app:
             appPanel
         #if DEBUG
@@ -579,61 +685,11 @@ struct SettingsView: View {
     }
 
     private var modelsPanel: some View {
-        VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
-            SectionHeader(
-                Category.modelManagement.title,
-                subtitle: "管理本机模型缓存，以及每个模型的引擎性能。",
-                emphasis: .page
-            )
-            SettingsModelManagementPanel(showsPageHeader: false)
-            SettingsPerformancePanel(embedsInParentScroll: true, showsPageHeader: false)
-        }
-    }
-
-    private var experimentalFeaturesPanel: some View {
-        SettingsSection(
-            "实验功能",
-            subtitle: "这些能力还在不同 Mac 上验证。打开后立即生效，不用重启。"
-        ) {
-            Toggle(isOn: $videoGenerationEnabled) {
-                SettingsRowLabel(
-                    title: "启用视频生成",
-                    description: "显示视频标签。视频模型需要 Apple 芯片、较大下载，通常还需要 24 GB 及以上统一内存。在你选择模型之前，不会开始下载或启动。"
-                )
-            }
-            .toggleStyle(TrailingSettingsToggleStyle())
-            .accessibilityIdentifier("Settings.Experimental.VideoGenerationToggle")
-        }
-        .accessibilityIdentifier("Settings.Experimental.Panel")
+        SettingsModelsPanel(selection: $modelTab)
     }
 
     private var instructionsPanel: some View {
-        @Bindable var config = customInstructions
-        return VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
-            SectionHeader(
-                Category.instructions.title,
-                subtitle: "作为系统消息发送到每段对话。对话里的提示可以覆盖它。",
-                emphasis: .page
-            )
-            InstructionEditorSection(
-                "全局默认",
-                subtitle: "对话没有单独提示时使用。只保存在这台 Mac 上。",
-                clearEnabled: CustomInstructionsConfig.normalized(config.global) != nil,
-                onClear: { config.global = "" }
-            ) {
-                InstructionTextEditor(
-                    text: $config.global,
-                    placeholder: "For example: Answer concisely, use plain language, and include code examples when useful.",
-                    height: 172,
-                    accessibilityIdentifier: "Settings.Instructions.GlobalEditor"
-                )
-            }
-            EffectiveSystemPromptDisclosure(
-                global: config.global,
-                conversation: "",
-                accessibilityIdentifier: "Settings.SystemPrompt.EffectivePreview"
-            )
-        }
+        SettingsPersonalizationPanel()
     }
 
     /// v0.4.25: 3-way appearance override panel. The radio-style
@@ -642,13 +698,36 @@ struct SettingsView: View {
     /// Light / Dark force the override and persist across launches.
     private var appearancePanel: some View {
         @Bindable var a = appearance
+        @Bindable var i18nConfig = i18n
         return VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
                 Category.appearance.title,
-                subtitle: "覆盖系统外观。自动跟随 macOS；浅色和深色会固定应用外观。",
+                subtitle: i18n.text(
+                    zh: "覆盖系统外观与语言设置。可自由切换深浅色主题与界面语言。",
+                    en: "Customize appearance and language settings. Switch themes and display language."
+                ),
                 emphasis: .page
             )
-            SettingsSection {
+            SettingsSection(
+                i18n.text(zh: "语言", en: "Language"),
+                subtitle: i18n.text(zh: "选择应用界面的显示语言。修改后即时生效。", en: "Choose the display language for the application.")
+            ) {
+                Picker("Language", selection: $i18nConfig.language) {
+                    ForEach(AppLanguage.allCases) { lang in
+                        Text(lang.displayName)
+                            .accessibilityLabel(lang.displayName)
+                            .accessibilityIdentifier("Settings.Appearance.Language.\(lang.rawValue)")
+                            .tag(lang)
+                    }
+                }
+                .compactRadioGroup()
+                .labelsHidden()
+                .accessibilityIdentifier("Settings.Appearance.LanguagePicker")
+            }
+            SettingsSection(
+                i18n.text(zh: "外观主题", en: "Theme"),
+                subtitle: i18n.text(zh: "覆盖系统外观。自动跟随 macOS；浅色和深色会固定应用外观。", en: "Override system appearance. Follow macOS, or lock to Light or Dark appearance.")
+            ) {
                 Picker("Theme", selection: $a.mode) {
                     ForEach(AppearanceMode.allCases) { mode in
                         Text(mode.displayName)
@@ -657,11 +736,35 @@ struct SettingsView: View {
                             .tag(mode)
                     }
                 }
-                .pickerStyle(.radioGroup)
+                .compactRadioGroup()
                 .labelsHidden()
                 .accessibilityIdentifier("Settings.Appearance.ThemePicker")
             }
-            experimentalFeaturesPanel
+            SettingsSection(
+                i18n.text(zh: "字体大小", en: "Font Size"),
+                subtitle: i18n.text(
+                    zh: "选中后立即应用到所有窗口，无需保存。支持 Ctrl+- / Ctrl++ 快速缩放。",
+                    en: "Applies immediately across windows, without saving. Use Ctrl+- / Ctrl++ to resize."
+                )
+            ) {
+                let currentConfig = fontSizeConfig ?? YouziFontSizeConfig.shared
+                RapidSegmentedControl(
+                    selection: Binding(
+                        get: { currentConfig.size },
+                        set: { currentConfig.size = $0 }
+                    ),
+                    options: [YouziFontSize.extraLarge, .large, .medium, .small].map { size in
+                        .init(
+                            value: size,
+                            title: size.localizedDisplayName(isChinese: i18n.isChinese),
+                            identifier: "Settings.Appearance.FontSize.\(size.rawValue)"
+                        )
+                    },
+                    accessibilityLabel: i18n.text(zh: "字体大小", en: "Font Size")
+                )
+                .accessibilityIdentifier("Settings.Appearance.FontSizePicker")
+
+            }
             dockVisibilitySection
         }
     }
@@ -670,8 +773,11 @@ struct SettingsView: View {
     private var privacyPanel: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
-                Category.privacy.title,
-                subtitle: "Youzi is local-first. Prompts, attachments, and model responses never leave your Mac. Anonymous usage data is sent only after you opt in.",
+                i18n.text(zh: "隐私与诊断", en: "Privacy & Diagnostics"),
+                subtitle: i18n.text(
+                    zh: "柚子遵循本地优先原则。远程模型、联网工具与主动分享可能向外部发送数据。匿名使用数据仅在您同意后发送。",
+                    en: "Youzi is local-first. Remote models, online tools, and explicit sharing may send data externally. Anonymous usage data is sent only after you opt in."
+                ),
                 emphasis: .page
             )
 
@@ -802,12 +908,15 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(
                 Category.app.title,
-                subtitle: "Self-update for Youzi. New releases bundle the latest models, performance improvements, and bug fixes.",
+                subtitle: i18n.text(
+                    zh: "柚子自带的自动更新。新版本会包含最新模型适配、性能改进与问题修复。",
+                    en: "Self-update for Youzi. New releases bundle the latest models, performance improvements, and bug fixes."
+                ),
                 emphasis: .page
             )
-            SettingsSection("Version") {
+            SettingsSection(i18n.text(zh: "版本", en: "Version")) {
                 versionRow(
-                    label: "Installed",
+                    label: i18n.text(zh: "已安装版本", en: "Installed"),
                     value: "v\(appUpdater.currentVersion)",
                     monospaced: true
                 )
@@ -826,16 +935,16 @@ struct SettingsView: View {
                    !UpdateChecker.isNewer(appUpdater.currentVersion, than: release.version) {
                     SettingsRowDivider()
                     versionRow(
-                        label: "Latest release",
+                        label: i18n.text(zh: "最新可用版本", en: "Latest release"),
                         value: "v\(release.version)",
                         monospaced: true
                     )
                 }
             }
 
-            SettingsSection("Updates") {
+            SettingsSection(i18n.text(zh: "应用更新", en: "Updates")) {
                 Toggle(isOn: automaticUpdateBinding) {
-                    Text("Automatically download updates")
+                    Text(i18n.text(zh: "自动下载更新", en: "Automatically download updates"))
                 }
                 .accessibilityIdentifier("Settings.App.AutomaticUpdatesToggle")
                     .disabled(!sparkleUpdater.isEnabled)
@@ -877,12 +986,15 @@ struct SettingsView: View {
     @ViewBuilder
     private var setupSection: some View {
         SettingsSection(
-            "Setup",
-            subtitle: "Run the guided model setup again. Your settings, conversations, downloaded models, and telemetry choice stay untouched."
+            i18n.text(zh: "重置初始化", en: "Setup"),
+            subtitle: i18n.text(
+                zh: "重新运行引导式模型设置。您的偏好设置、对话记录、已下载模型及数据统计选项均不受影响。",
+                en: "Run the guided model setup again. Your settings, conversations, downloaded models, and telemetry choice stay untouched."
+            )
         ) {
             HStack {
                 Spacer(minLength: 0)
-                Button("Run setup again…") { confirmingSetupRestart = true }
+                Button(i18n.text(zh: "重新运行引导设置…", en: "Run setup again…")) { confirmingSetupRestart = true }
                     .buttonStyle(.rapidSecondaryCompact)
                     .disabled(restartingSetup)
                     .accessibilityIdentifier("Settings.App.RunSetupAgain")
@@ -908,8 +1020,11 @@ struct SettingsView: View {
         // moves into the section subtitle (where every other panel puts
         // it) and the button keeps its exact original label.
         SettingsSection(
-            "Diagnostics",
-            subtitle: "Save a support report to share if something goes wrong. Includes your app version, Mac model, and recent logs — no prompts, files, or personal data."
+            i18n.text(zh: "诊断信息", en: "Diagnostics"),
+            subtitle: i18n.text(
+                zh: "在遇到异常时导出支持报告。报告包含应用版本、Mac 型号及最近日志，不包含任何提示词、文件或个人数据。",
+                en: "Save a support report to share if something goes wrong. Includes your app version, Mac model, and recent logs — no prompts, files, or personal data."
+            )
         ) {
             HStack {
                 Button {

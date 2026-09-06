@@ -10,10 +10,14 @@ struct YouziSimpleTaskView: View {
     @Environment(ChatViewModel.self) private var chat
     @Environment(ServerManager.self) private var server
     @Environment(YouziProductModel.self) private var productModel
+    @Environment(\.openWindow) private var openWindow
+    @Environment(SettingsRouter.self) private var settingsRouter: SettingsRouter?
+    @Environment(YouziI18nConfig.self) private var i18n
 
     let taskID: UUID?
     let projectID: UUID?
-    let assistantAlias: String
+    @Binding var assistantAlias: String
+    var catalogEntries: [ModelEntry] = []
     let onPrepareAssistant: () -> Void
     let onOpenProfessional: () -> Void
     let onShowTemplates: () -> Void
@@ -29,17 +33,7 @@ struct YouziSimpleTaskView: View {
     @State private var selectedArtifactID: UUID?
     @State private var fileImportError: String?
 
-    private struct Suggestion: Identifiable {
-        let id: String
-        let title: String
-    }
 
-    private let suggestions = [
-        Suggestion(id: "summarize-a-document", title: "整理一份文档"),
-        Suggestion(id: "plan-my-week", title: "规划我的一周"),
-        Suggestion(id: "draft-a-thoughtful-message", title: "帮我写一条用心的消息"),
-        Suggestion(id: "help-me-explore-an-idea", title: "和我一起理清一个想法"),
-    ]
 
     var body: some View {
         HStack(spacing: 0) {
@@ -52,9 +46,9 @@ struct YouziSimpleTaskView: View {
                     welcome
                 } else {
                     transcript
+                    Divider()
+                    composer
                 }
-                Divider()
-                composer
             }
 
             if currentProject != nil, let artifact = selectedArtifact {
@@ -66,15 +60,24 @@ struct YouziSimpleTaskView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(RapidTheme.surfaceCanvas)
         .accessibilityIdentifier("YouziSimple.Surface.newTask")
-        .onAppear(perform: loadTaskContext)
+        .onAppear {
+            loadTaskContext()
+            resolveAssistantAliasIfNeeded()
+        }
         .onChange(of: taskID) { _, _ in loadTaskContext() }
         .onChange(of: projectID) { _, newValue in
             selectedProjectID = newValue
         }
-        .alert("没有添加文件", isPresented: fileImportAlertBinding) {
-            Button("好", role: .cancel) {}
+        .onChange(of: catalogEntries) { _, _ in
+            resolveAssistantAliasIfNeeded()
+        }
+        .onChange(of: server.state) { _, _ in
+            resolveAssistantAliasIfNeeded()
+        }
+        .alert(i18n.text(zh: "没有添加文件", en: "No files added"), isPresented: fileImportAlertBinding) {
+            Button(i18n.text(zh: "好", en: "OK"), role: .cancel) {}
         } message: {
-            Text(fileImportError ?? "请重试。")
+            Text(fileImportError ?? i18n.text(zh: "请重试。", en: "Please try again."))
         }
     }
 
@@ -97,14 +100,14 @@ struct YouziSimpleTaskView: View {
 
     private func projectBreadcrumb(_ project: YouziProject) -> some View {
         HStack(spacing: RapidTheme.Space.sm) {
-            Label("工作空间", systemImage: "folder")
+            Label(i18n.text(zh: "工作空间", en: "Workspaces"), systemImage: "folder")
             Image(systemName: "chevron.right")
                 .foregroundStyle(RapidTheme.textSecondary)
             Text(project.name)
                 .font(RapidFont.bodyEmphasis)
             Spacer(minLength: 0)
             if !projectFiles.isEmpty {
-                Menu("项目资料") {
+                Menu(i18n.text(zh: "项目资料", en: "Project Files")) {
                     ForEach(projectFiles) { file in
                         Button(file.displayName) { openProjectFile(file) }
                     }
@@ -113,7 +116,7 @@ struct YouziSimpleTaskView: View {
                 .accessibilityIdentifier("YouziSimple.Project.Files")
             }
             if !projectArtifacts.isEmpty {
-                Menu("项目成果") {
+                Menu(i18n.text(zh: "项目成果", en: "Project Deliverables")) {
                     ForEach(projectArtifacts) { artifact in
                         Button(artifact.title) { selectedArtifactID = artifact.id }
                     }
@@ -131,7 +134,7 @@ struct YouziSimpleTaskView: View {
     private func projectArtifactPreview(_ artifact: YouziArtifact) -> some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.md) {
             HStack {
-                Text("成果预览")
+                Text(i18n.text(zh: "成果预览", en: "Deliverable Preview"))
                     .font(RapidFont.sectionTitle)
                 Spacer(minLength: 0)
                 Button {
@@ -140,7 +143,7 @@ struct YouziSimpleTaskView: View {
                     Image(systemName: "xmark")
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("关闭成果预览")
+                .accessibilityLabel(i18n.text(zh: "关闭成果预览", en: "Close preview"))
             }
             Text(artifact.title)
                 .font(RapidFont.bodyEmphasis)
@@ -152,7 +155,7 @@ struct YouziSimpleTaskView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else {
-                Text("这份成果没有可显示的文本预览。")
+                Text(i18n.text(zh: "这份成果没有可显示的文本预览。", en: "This deliverable does not have a text preview."))
                     .font(RapidFont.secondary)
                     .foregroundStyle(RapidTheme.textSecondary)
             }
@@ -165,86 +168,52 @@ struct YouziSimpleTaskView: View {
     private var welcome: some View {
         ScrollView {
             VStack(spacing: RapidTheme.Space.xl) {
-                YouziLogo(size: 92)
+                Spacer(minLength: RapidTheme.Space.md)
 
-                VStack(spacing: RapidTheme.Space.sm) {
-                    Text("今天想让我帮你做什么？")
+                YouziLogo(size: 80)
+
+                VStack(spacing: RapidTheme.Space.xs) {
+                    Text(i18n.text(zh: "今天想让我帮你做什么？", en: "What would you like to do today?"))
                         .font(RapidFont.displayTitle)
                         .tracking(RapidFont.displayTitleTracking)
                         .multilineTextAlignment(.center)
-                    Text("告诉柚子你想完成什么。你的内容会留在这台 Mac 上。")
+                    Text(i18n.text(zh: "告诉柚子你想完成什么。你的内容会留在这台 Mac 上。", en: "Tell Youzi what you'd like to do. Your content stays on this Mac."))
                         .font(RapidFont.displaySubtitle)
                         .foregroundStyle(RapidTheme.textSecondary)
                         .multilineTextAlignment(.center)
                 }
 
-                Button {
-                    onShowTemplates()
-                } label: {
-                    Label("从模板开始", systemImage: "doc.on.doc")
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("YouziSimple.NewTask.ShowTemplates")
+                composer
+                    .frame(maxWidth: 680)
 
-                LazyVGrid(
-                    columns: [
-                        GridItem(.flexible(), spacing: RapidTheme.Space.md),
-                        GridItem(.flexible(), spacing: RapidTheme.Space.md),
-                    ],
-                    spacing: RapidTheme.Space.md
-                ) {
-                    ForEach(suggestions) { suggestion in
-                        Button {
-                            draft = suggestion.title
-                            focusRequest &+= 1
-                        } label: {
-                            HStack(spacing: RapidTheme.Space.sm) {
-                                Text(suggestion.title)
-                                    .font(RapidFont.bodyEmphasis)
-                                    .foregroundStyle(RapidTheme.textPrimary)
-                                    .multilineTextAlignment(.leading)
-                                Spacer(minLength: 0)
-                                Image(systemName: "arrow.up.right")
-                                    .foregroundStyle(RapidTheme.textSecondary)
-                            }
-                            .padding(RapidTheme.Space.lg)
-                            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-                            .background(
-                                RoundedRectangle(
-                                    cornerRadius: RapidTheme.Radius.card,
-                                    style: .continuous
-                                )
-                                .fill(RapidTheme.surfaceRaised)
-                            )
-                            .overlay(
-                                RoundedRectangle(
-                                    cornerRadius: RapidTheme.Radius.card,
-                                    style: .continuous
-                                )
-                                .strokeBorder(RapidTheme.hairline, lineWidth: 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier(
-                            "YouziSimple.NewTask.Suggestion.\(suggestion.id)"
-                        )
-                    }
-                }
-                .frame(maxWidth: 620)
+                Spacer(minLength: RapidTheme.Space.lg)
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, RapidTheme.Space.xl)
-            .padding(.vertical, RapidTheme.Space.huge)
+            .padding(.vertical, RapidTheme.Space.lg)
         }
     }
 
+    private var toolResults: [String: ChatMessage] {
+        Dictionary(chat.messages.compactMap { message in
+            guard message.role == .tool, let id = message.toolCallID else { return nil }
+            return (id, message)
+        }, uniquingKeysWith: { _, last in last })
+    }
+
+    private var artifactIDs: Set<UUID> {
+        SimpleTranscriptPresentation.artifactIDs(in: chat.messages)
+    }
+
     private var transcript: some View {
-        ScrollViewReader { proxy in
+        let artifactIDs = artifactIDs
+        let toolResults = toolResults
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
                     ForEach(chat.messages) { message in
-                        if message.role != .tool {
-                            simpleMessage(message)
+                        if SimpleTranscriptPresentation.isVisible(message) {
+                            simpleMessage(message, artifactIDs: artifactIDs, toolResults: toolResults)
                                 .id(message.id)
                         }
                     }
@@ -263,7 +232,7 @@ struct YouziSimpleTaskView: View {
     }
 
     @ViewBuilder
-    private func simpleMessage(_ message: ChatMessage) -> some View {
+    private func simpleMessage(_ message: ChatMessage, artifactIDs: Set<UUID>, toolResults: [String: ChatMessage]) -> some View {
         switch message.role {
         case .user:
             HStack {
@@ -275,7 +244,7 @@ struct YouziSimpleTaskView: View {
                             .textSelection(.enabled)
                     }
                     if !message.imageAttachments.isEmpty || !message.fileAttachments.isEmpty {
-                        Label("已添加资料", systemImage: "paperclip")
+                        Label(i18n.text(zh: "已添加资料", en: "Attachments added"), systemImage: "paperclip")
                             .font(RapidFont.caption)
                             .foregroundStyle(RapidTheme.textSecondary)
                     }
@@ -293,16 +262,14 @@ struct YouziSimpleTaskView: View {
                 YouziLogo(size: 24)
                     .padding(.top, 1)
                 VStack(alignment: .leading, spacing: RapidTheme.Space.sm) {
-                    if message.content.isEmpty && message.status == .streaming {
-                        HStack(spacing: RapidTheme.Space.sm) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("正在处理…")
-                                .font(RapidFont.secondary)
-                                .foregroundStyle(RapidTheme.textSecondary)
-                        }
+                    if message.toolCallArtifactSuppressed || artifactIDs.contains(message.id) {
+                        Label(i18n.text(zh: "工具调用未完成，模型没有给出有效回答。可以重试或更换模型。", en: "Tool use did not finish and the model produced no usable answer. Retry or choose another model."), systemImage: "exclamationmark.bubble")
+                            .font(RapidFont.body).foregroundStyle(RapidTheme.textSecondary)
+                    } else if message.content.isEmpty && message.status == .streaming
+                                && (message.toolCalls?.isEmpty ?? true) {
+                        ChatWaitingHint()
                     } else if message.wireVisibility == .transcriptOnly {
-                        Text("已经准备好了，今天想让我帮你做什么？")
+                        Text(i18n.text(zh: "已经准备好了，今天想让我帮你做什么？", en: "I'm ready! What would you like to do today?"))
                             .font(RapidFont.body)
                     } else if message.status == .streaming {
                         Text(message.content)
@@ -313,8 +280,27 @@ struct YouziSimpleTaskView: View {
                             .textSelection(.enabled)
                     }
 
+                    if let calls = message.toolCalls, !calls.isEmpty {
+                        ForEach(calls) { call in
+                            ToolCallChip(call: call, result: toolResults[call.id])
+                            if let result = toolResults[call.id],
+                               SimpleTranscriptPresentation.hasFakeIPFailure(result) {
+                                Text(i18n.text(zh: "域名返回代理 Fake-IP，当前安全策略阻止了访问。若使用可信本机代理，请在「安全中心」开启「兼容本机代理」后重试。", en: "DNS returned a proxy Fake-IP blocked by the current policy. For a trusted local proxy, enable Local Proxy Compatibility in Security and retry."))
+                                    .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
+                            }
+                        }
+                    }
+                    if !message.reasoning.isEmpty {
+                        DisclosureGroup(i18n.text(zh: "思考过程", en: "Reasoning")) {
+                            Text(message.reasoning).font(RapidFont.secondary).textSelection(.enabled)
+                        }
+                        .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
+                    }
+                    if let error = message.errorMessage, !error.isEmpty, message.status != .failed {
+                        Text(error).font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
+                    }
                     if message.status == .failed {
-                        Label("这次没有完成，可以再试一次。", systemImage: "arrow.clockwise")
+                        Label(i18n.text(zh: "这次没有完成，可以再试一次。", en: "Could not complete this turn. Please try again."), systemImage: "arrow.clockwise")
                             .font(RapidFont.caption)
                             .foregroundStyle(RapidTheme.textSecondary)
                     }
@@ -343,9 +329,9 @@ struct YouziSimpleTaskView: View {
             if needsAttention {
                 HStack(spacing: RapidTheme.Space.sm) {
                     Image(systemName: "exclamationmark.circle")
-                    Text("柚子需要处理一个问题后才能继续。")
+                    Text(i18n.text(zh: "柚子需要处理一个问题后才能继续。", en: "Youzi needs to resolve an issue before continuing."))
                     Spacer(minLength: 0)
-                    Button("在专业模式中处理", action: onOpenProfessional)
+                    Button(i18n.text(zh: "在专业模式中处理", en: "Resolve in Professional Mode"), action: onOpenProfessional)
                         .buttonStyle(.link)
                         .accessibilityIdentifier("YouziSimple.NewTask.OpenProfessional")
                 }
@@ -354,62 +340,92 @@ struct YouziSimpleTaskView: View {
                 .frame(maxWidth: RapidTheme.Layout.contentMaxWidth)
             }
 
+            YouziSimpleSkillBar(draft: $draft)
+                .frame(maxWidth: RapidTheme.Layout.contentMaxWidth)
+
             VStack(spacing: RapidTheme.Space.sm) {
                 ComposeField(
                     text: $draft,
                     focusToken: focusRequest,
                     isStreaming: chat.isStreaming,
-                    placeholder: "想让柚子帮你做什么？",
+                    placeholder: i18n.text(zh: "想让柚子帮你做什么？", en: "What would you like Youzi to do?"),
                     onSubmit: submit,
                     onCancel: { chat.stop() },
                     onRecallLastUser: {
                         chat.messages.last(where: { $0.role == .user })?.content
                     },
                     axIdentifier: "YouziSimple.NewTask.Input",
-                    axLabel: "新任务请求",
-                    axRoleDescription: "任务请求输入框"
+                    axLabel: i18n.text(zh: "新任务请求", en: "New task request"),
+                    axRoleDescription: i18n.text(zh: "任务请求输入框", en: "Task request input")
                 )
 
                 HStack(spacing: RapidTheme.Space.sm) {
                     Menu {
-                        Menu("工作空间") {
-                            Button("由柚子在开始时管理") {
+                        Menu(i18n.text(zh: "引用专家", en: "Reference Expert")) {
+                            ForEach(productModel.document.helpers) { helper in
+                                Button(helper.name) {
+                                    insertReference("@\(helper.name) ")
+                                }
+                            }
+                        }
+
+                        Menu(i18n.text(zh: "引用技能", en: "Reference Skill")) {
+                            ForEach(productModel.document.skills) { skill in
+                                Button(skill.name) {
+                                    insertReference("/\(skill.name) ")
+                                    productModel.markSkillUsed(skill.id)
+                                }
+                            }
+                        }
+
+                        Menu(i18n.text(zh: "引用连接器", en: "Reference Connector")) {
+                            ForEach(productModel.document.connectors) { connector in
+                                Button(connector.name) {
+                                    insertReference("#\(connector.name) ")
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        Menu(i18n.text(zh: "工作空间", en: "Workspaces")) {
+                            Button(i18n.text(zh: "由柚子在开始时管理", en: "Managed by Youzi at start")) {
                                 selectWorkspace(nil)
                             }
                             ForEach(activeWorkspaces) { workspace in
                                 Button(workspace.name) { selectWorkspace(workspace.id) }
                             }
                             Divider()
-                            Button("管理工作空间…") { onNavigate(.workspaces) }
+                            Button(i18n.text(zh: "管理工作空间…", en: "Manage Workspaces…")) { onNavigate(.workspaces) }
                         }
 
-                        Menu("项目") {
-                            Button("不放入项目") { selectProject(nil) }
+                        Menu(i18n.text(zh: "项目", en: "Projects")) {
+                            Button(i18n.text(zh: "不放入项目", en: "No Project")) { selectProject(nil) }
                             ForEach(activeProjects) { project in
                                 Button(project.name) { selectProject(project.id) }
                             }
                             Divider()
-                            Button("管理项目…") { onNavigate(.workspaces) }
+                            Button(i18n.text(zh: "管理项目…", en: "Manage Projects…")) { onNavigate(.workspaces) }
                         }
 
                         Divider()
-                        Button("导入文件副本…") {
+                        Button(i18n.text(zh: "导入文件副本…", en: "Import File Copy…")) {
                             importFile(mode: .copy, target: .task)
                         }
-                        Button("引用本地文件…") {
+                        Button(i18n.text(zh: "引用本地文件…", en: "Reference Local File…")) {
                             importFile(mode: .reference, target: .task)
                         }
 
                         if currentProject != nil {
                             Divider()
-                            Button("向项目添加资料副本…") {
+                            Button(i18n.text(zh: "向项目添加资料副本…", en: "Add File Copy to Project…")) {
                                 importFile(mode: .copy, target: .project)
                             }
-                            Button("向项目引用本地资料…") {
+                            Button(i18n.text(zh: "向项目引用本地资料…", en: "Reference Local File in Project…")) {
                                 importFile(mode: .reference, target: .project)
                             }
                             if !readableProjectFiles.isEmpty {
-                                Menu("使用已有项目资料") {
+                                Menu(i18n.text(zh: "使用已有项目资料", en: "Use Existing Project Files")) {
                                     ForEach(readableProjectFiles) { file in
                                         Button(file.displayName) { attachProjectFileToTask(file) }
                                     }
@@ -418,10 +434,10 @@ struct YouziSimpleTaskView: View {
                         }
 
                         Divider()
-                        Button("从模板开始…", action: onShowTemplates)
-                        Button("选择帮手…") { onNavigate(.helpers) }
+                        Button(i18n.text(zh: "从模板开始…", en: "Start from Template…"), action: onShowTemplates)
+                        Button(i18n.text(zh: "选择帮手…", en: "Choose Helper…")) { onNavigate(.helpers) }
                     } label: {
-                        Label("添加", systemImage: "plus")
+                        Label(i18n.text(zh: "添加", en: "Add"), systemImage: "plus")
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
@@ -435,7 +451,7 @@ struct YouziSimpleTaskView: View {
                     }
 
                     if !currentTaskFiles.isEmpty {
-                        Label("\(currentTaskFiles.count) 份资料", systemImage: "paperclip")
+                        Label(i18n.text(zh: "\(currentTaskFiles.count) 份资料", en: "\(currentTaskFiles.count) files"), systemImage: "paperclip")
                             .font(RapidFont.caption)
                             .foregroundStyle(RapidTheme.textSecondary)
                     }
@@ -447,6 +463,10 @@ struct YouziSimpleTaskView: View {
 
                     Spacer(minLength: 0)
 
+                    modelQuickPicker
+
+                    YouziContextUsageRing(messages: chat.messages, alias: assistantAlias)
+
                     if chat.isStreaming {
                         Button(action: { chat.stop() }) {
                             Image(systemName: "stop.fill")
@@ -454,8 +474,8 @@ struct YouziSimpleTaskView: View {
                                 .frame(width: 44, height: 44)
                         }
                         .buttonStyle(.bordered)
-                        .help("停止")
-                        .accessibilityLabel("停止任务")
+                        .help(i18n.text(zh: "停止", en: "Stop"))
+                        .accessibilityLabel(i18n.text(zh: "停止任务", en: "Stop task"))
                         .accessibilityIdentifier("YouziSimple.NewTask.SendOrStop")
                     } else {
                         Button(action: submit) {
@@ -480,8 +500,8 @@ struct YouziSimpleTaskView: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(!canSubmit)
-                        .help(assistantAlias.isEmpty ? "完成本地设置" : "开始任务")
-                        .accessibilityLabel("开始任务")
+                        .help(assistantAlias.isEmpty ? i18n.text(zh: "完成本地设置", en: "Complete local setup") : i18n.text(zh: "开始任务", en: "Start task"))
+                        .accessibilityLabel(i18n.text(zh: "开始任务", en: "Start task"))
                         .accessibilityIdentifier("YouziSimple.NewTask.SendOrStop")
                     }
                 }
@@ -506,6 +526,244 @@ struct YouziSimpleTaskView: View {
 
     private var canSubmit: Bool {
         !chat.isStreaming && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var currentOccupancy: YouziModelOccupancy {
+        let voiceResident = server.residency.audioLanes.contains { $0.state == "resident" }
+        return YouziModelOccupancy.resolve(
+            residency: server.residency,
+            host: MemoryProbe.snapshot(),
+            voiceLaneResident: voiceResident
+        )
+    }
+
+    private var downloadedChatModels: [ModelEntry] {
+        catalogEntries.filter { $0.kind == .chat && $0.cached }
+    }
+
+    private var downloadedImageModels: [ModelEntry] {
+        catalogEntries.filter { $0.kind == .image && $0.cached }
+    }
+
+    private var downloadedVoiceModels: [ModelEntry] {
+        catalogEntries.filter { $0.kind == .audio && $0.cached }
+    }
+
+    private var downloadedVideoModels: [ModelEntry] {
+        catalogEntries.filter { $0.kind == .video && $0.cached }
+    }
+
+    private func modelMemoryDisplaySize(for entry: ModelEntry) -> String {
+        if let resident = server.residency.models.first(where: { $0.id == entry.alias }), resident.displayBytes > 0 {
+            return formatGigabytes(resident.displayBytes)
+        }
+        if let size = entry.sizeOnDisk, !size.isEmpty {
+            return size
+        }
+        let est = ModelSizing.estimate(alias: entry.alias).totalGB
+        if est > 0.5 {
+            return String(format: "%.1f GB", est)
+        }
+        return ""
+    }
+
+    private var modelQuickPicker: some View {
+        Menu {
+            Text(i18n.text(zh: "场景模型选择 (可用: \(formatGigabytes(currentOccupancy.remainingBytes)))", en: "Scenario Models (Available: \(formatGigabytes(currentOccupancy.remainingBytes)))"))
+
+            Divider()
+
+            Menu(i18n.text(zh: "聊天", en: "Chat")) {
+                if downloadedChatModels.isEmpty {
+                    Text(i18n.text(zh: "暂无已下载模型", en: "No downloaded models"))
+                } else {
+                    ForEach(downloadedChatModels) { entry in
+                        let size = modelMemoryDisplaySize(for: entry)
+                        Button {
+                            assistantAlias = entry.alias
+                            Task {
+                                await server.ensureServing(
+                                    alias: entry.alias,
+                                    hfPath: entry.hfRepo,
+                                    residencyEligible: true,
+                                    requestIsMedia: false
+                                )
+                            }
+                        } label: {
+                            HStack {
+                                Text(entry.alias + (size.isEmpty ? "" : " (\(size))"))
+                                if entry.alias == assistantAlias {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Menu(i18n.text(zh: "图形", en: "Images")) {
+                if downloadedImageModels.isEmpty {
+                    Text(i18n.text(zh: "暂无已下载模型", en: "No downloaded models"))
+                } else {
+                    ForEach(downloadedImageModels) { entry in
+                        let size = modelMemoryDisplaySize(for: entry)
+                        Button {
+                            Task {
+                                await server.ensureServing(
+                                    alias: entry.alias,
+                                    hfPath: entry.hfRepo,
+                                    residencyEligible: true,
+                                    requestIsMedia: true
+                                )
+                            }
+                        } label: {
+                            HStack {
+                                Text(entry.alias + (size.isEmpty ? "" : " (\(size))"))
+                                if server.residency.contains(entry.alias) {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Menu(i18n.text(zh: "语音", en: "Audio")) {
+                if downloadedVoiceModels.isEmpty {
+                    Text(i18n.text(zh: "暂无已下载模型", en: "No downloaded models"))
+                } else {
+                    ForEach(downloadedVoiceModels) { entry in
+                        let size = modelMemoryDisplaySize(for: entry)
+                        Button {
+                            Task {
+                                await server.ensureServing(
+                                    alias: entry.alias,
+                                    hfPath: entry.hfRepo,
+                                    residencyEligible: true,
+                                    requestIsMedia: true
+                                )
+                            }
+                        } label: {
+                            HStack {
+                                Text(entry.alias + (size.isEmpty ? "" : " (\(size))"))
+                                if server.residency.contains(entry.alias) || server.isVoiceLaneResident(for: entry.alias, modelPath: nil) {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Menu(i18n.text(zh: "视频", en: "Video")) {
+                if downloadedVideoModels.isEmpty {
+                    Text(i18n.text(zh: "暂无已下载模型", en: "No downloaded models"))
+                } else {
+                    ForEach(downloadedVideoModels) { entry in
+                        let size = modelMemoryDisplaySize(for: entry)
+                        Button {
+                            Task {
+                                await server.ensureServing(
+                                    alias: entry.alias,
+                                    hfPath: entry.hfRepo,
+                                    residencyEligible: true,
+                                    requestIsMedia: true
+                                )
+                            }
+                        } label: {
+                            HStack {
+                                Text(entry.alias + (size.isEmpty ? "" : " (\(size))"))
+                                if server.residency.contains(entry.alias) {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Button(i18n.text(zh: "更多模型设置…", en: "More model settings…")) {
+                if let settingsRouter {
+                    settingsRouter.route(to: SettingsView.Category.modelManagement) {
+                        openWindow(id: "settings")
+                    }
+                } else {
+                    openWindow(id: "settings")
+                }
+            }
+        } label: {
+            HStack(spacing: RapidTheme.Space.xxs) {
+                HStack(spacing: 3) {
+                    Circle().fill(YouziModelLane.chat.occupancyColor).frame(width: 5, height: 5)
+                    Circle().fill(YouziModelLane.image.occupancyColor).frame(width: 5, height: 5)
+                    Circle().fill(YouziModelLane.voice.occupancyColor).frame(width: 5, height: 5)
+                    Circle().fill(YouziModelLane.video.occupancyColor).frame(width: 5, height: 5)
+                }
+                Text(selectedModelDisplayName)
+                    .font(RapidFont.caption)
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9))
+            }
+            .padding(.horizontal, RapidTheme.Space.sm)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(RapidTheme.surfaceCanvas)
+            )
+            .foregroundStyle(RapidTheme.textSecondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityIdentifier("YouziSimple.NewTask.ModelSelector")
+    }
+
+    private var selectedModelDisplayName: String {
+        if let match = catalogEntries.first(where: { $0.alias == assistantAlias }) {
+            return match.alias
+        }
+        return assistantAlias.isEmpty ? i18n.text(zh: "选择模型", en: "Select Model") : assistantAlias
+    }
+
+    private func insertReference(_ text: String) {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            draft = text
+        } else {
+            draft = "\(trimmed) \(text)"
+        }
+        focusRequest &+= 1
+    }
+
+    private func resolveAssistantAliasIfNeeded() {
+        if !assistantAlias.isEmpty,
+           downloadedChatModels.contains(where: { $0.alias == assistantAlias }) {
+            return
+        }
+        if let serving = server.servingAlias, !serving.isEmpty,
+           downloadedChatModels.contains(where: { $0.alias == serving }) {
+            assistantAlias = serving
+            return
+        }
+        if let cached = downloadedChatModels.first?.alias {
+            assistantAlias = cached
+            return
+        }
+        if let lastServed = ServerManager.lastServedAlias(),
+           downloadedChatModels.contains(where: { $0.alias == lastServed }) {
+            assistantAlias = lastServed
+            return
+        }
+        if let firstChat = downloadedChatModels.first?.alias {
+            assistantAlias = firstChat
+            return
+        }
+        if let firstAny = catalogEntries.first(where: { $0.kind == .chat })?.alias {
+            assistantAlias = firstAny
+            return
+        }
     }
 
     private enum FileImportTarget: Equatable {
@@ -575,13 +833,13 @@ struct YouziSimpleTaskView: View {
             return task
         }
         let request = (request ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
-        let title = request.isEmpty ? "未命名任务" : taskTitle(from: request)
+        let title = request.isEmpty ? i18n.text(zh: "未命名任务", en: "Untitled Task") : taskTitle(from: request)
         guard let task = productModel.createTaskDraft(
             title: title,
             request: request,
             projectID: selectedProjectID
         ) else {
-            fileImportError = "无法创建任务草稿。"
+            fileImportError = i18n.text(zh: "无法创建任务草稿。", en: "Could not create task draft.")
             return nil
         }
         if let selectedWorkspaceID {
@@ -596,7 +854,7 @@ struct YouziSimpleTaskView: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.prompt = mode == .copy ? "导入副本" : "引用文件"
+        panel.prompt = mode == .copy ? i18n.text(zh: "导入副本", en: "Import Copy") : i18n.text(zh: "引用文件", en: "Reference File")
         if target == .task {
             panel.allowedContentTypes = [.pdf, .commaSeparatedText, .plainText]
         }
@@ -609,13 +867,13 @@ struct YouziSimpleTaskView: View {
             attachmentTarget = .task(task.id)
         case .project:
             guard let selectedProjectID else {
-                fileImportError = "请先选择项目。"
+                fileImportError = i18n.text(zh: "请先选择项目。", en: "Please select a project first.")
                 return
             }
             attachmentTarget = .project(selectedProjectID)
         }
         if productModel.importFile(at: URL, mode: mode, attachingTo: attachmentTarget) == nil {
-            fileImportError = "无法添加这个文件。"
+            fileImportError = i18n.text(zh: "无法添加这个文件。", en: "Could not add this file.")
         }
     }
 
@@ -623,7 +881,7 @@ struct YouziSimpleTaskView: View {
         guard let task = ensureTaskDraft() else { return }
         productModel.referenceProjectFile(file.id, toTask: task.id)
         if productModel.lastPersistenceError != nil {
-            fileImportError = "无法把这份项目资料添加到任务。"
+            fileImportError = i18n.text(zh: "无法把这份项目资料添加到任务。", en: "Could not add this project file to task.")
         }
     }
 
@@ -635,7 +893,7 @@ struct YouziSimpleTaskView: View {
                 }
             }
         } catch {
-            fileImportError = "无法打开这份项目资料。"
+            fileImportError = i18n.text(zh: "无法打开这份项目资料。", en: "Could not open this project file.")
         }
     }
 
@@ -670,12 +928,12 @@ struct YouziSimpleTaskView: View {
     }
 
     private var runtimeStatus: String {
-        if assistantAlias.isEmpty { return "需要完成本地设置" }
+        if assistantAlias.isEmpty { return i18n.text(zh: "需要完成本地设置", en: "Local setup needed") }
         return switch server.state {
-        case .starting: "正在本地准备…"
-        case .ready: "已在本机就绪"
-        case .missing, .crashed: "需要处理"
-        case .idle, .stopped: "随时可以开始"
+        case .starting: i18n.text(zh: "正在本地准备…", en: "Preparing locally…")
+        case .ready: i18n.text(zh: "已在本机就绪", en: "Ready locally")
+        case .missing, .crashed: i18n.text(zh: "需要处理", en: "Action needed")
+        case .idle, .stopped: i18n.text(zh: "随时可以开始", en: "Ready to start")
         }
     }
 
@@ -691,12 +949,13 @@ struct YouziSimpleTaskView: View {
     private func submit() {
         let request = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !request.isEmpty, !chat.isStreaming else { return }
+        resolveAssistantAliasIfNeeded()
         guard !assistantAlias.isEmpty else {
             onPrepareAssistant()
             return
         }
         guard var task = ensureTaskDraft(request: request) else { return }
-        task.title = task.title == "未命名任务" ? taskTitle(from: request) : task.title
+        task.title = (task.title == "未命名任务" || task.title == "Untitled Task") ? taskTitle(from: request) : task.title
         task.request = request
         task.updatedAt = Date()
         productModel.save(task)
@@ -706,14 +965,14 @@ struct YouziSimpleTaskView: View {
         do {
             attachments = try chatAttachments(for: productModel.task(id: task.id) ?? task)
         } catch {
-            fileImportError = "无法读取已添加的任务资料。"
+            fileImportError = i18n.text(zh: "无法读取已添加的任务资料。", en: "Could not read added task files.")
             return
         }
         guard productModel.beginTaskExecution(
             taskID: task.id,
             conversationID: chat.activeConversationID
         ) != nil else {
-            fileImportError = "无法准备任务的工作空间。"
+            fileImportError = i18n.text(zh: "无法准备任务的工作空间。", en: "Could not prepare workspace for task.")
             return
         }
         draft = ""

@@ -12,6 +12,28 @@ struct ImageClientTests {
         return ImageClient(session: URLSession(configuration: config))
     }
 
+    @Test("Generation requests read saved dimensions at call time; explicit size wins")
+    func persistedGenerationSize() async throws {
+        let name = "ImageDefaultsWire.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        var client = makeClient()
+        client.generationDefaults = ModelGenerationDefaults(defaults: defaults)
+        ImageStubProtocol.response = (200, Data(#"{"data":[{"b64_json":"cG5n"}]}"#.utf8))
+        defaults.set(1024, forKey: ModelGenerationDefaults.Key.imageResolution)
+        defaults.set("landscape", forKey: ModelGenerationDefaults.Key.imageAspect)
+        _ = try await client.generate(prompt: "cup", model: "image", count: 1, seed: nil, port: 8123, bearer: nil)
+        var body = try JSONSerialization.jsonObject(with: ImageStubProtocol.bodies.last!) as? [String: Any]
+        #expect(body?["size"] as? String == "1024x768")
+        defaults.set(512, forKey: ModelGenerationDefaults.Key.imageResolution)
+        _ = try await client.generate(prompt: "cup", model: "image", count: 1, seed: nil, port: 8123, bearer: nil)
+        body = try JSONSerialization.jsonObject(with: ImageStubProtocol.bodies.last!) as? [String: Any]
+        #expect(body?["size"] as? String == "512x384")
+        _ = try await client.generate(prompt: "cup", model: "image", size: "768x768", count: 1, seed: nil, port: 8123, bearer: nil)
+        body = try JSONSerialization.jsonObject(with: ImageStubProtocol.bodies.last!) as? [String: Any]
+        #expect(body?["size"] as? String == "768x768")
+    }
+
     @Test("Request timeout leaves headroom for cold image model loads")
     func editTimeout() {
         #expect(ImageClient.requestTimeout >= 30 * 60)

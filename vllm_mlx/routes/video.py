@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..middleware.auth import _verify_api_key_values, verify_api_key
@@ -106,7 +106,10 @@ class VideoBodyLimitMiddleware:
         scheme, _, token = authorization.partition(" ")
         bearer = token if scheme.lower() == "bearer" and token else None
         try:
-            _verify_api_key_values(bearer)
+            from ..middleware.auth import allows_anonymous_inference
+
+            if not allows_anonymous_inference(Request(scope)):
+                _verify_api_key_values(bearer)
         except HTTPException as exc:
             response = JSONResponse(
                 status_code=exc.status_code, content={"detail": exc.detail}

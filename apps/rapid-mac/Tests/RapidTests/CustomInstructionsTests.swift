@@ -52,6 +52,33 @@ struct CustomInstructionsTests {
         #expect(defaults.string(forKey: CustomInstructionsConfig.storageKey)?.count == 4_000)
     }
 
+    @Test("Personalization persists without altering custom instructions")
+    func personalizationPersistence() {
+        let (defaults, name) = freshDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let config = CustomInstructionsConfig(defaults: defaults)
+        #expect(config.resolvedAssistantName == "柚子")
+        #expect(config.userAddress.isEmpty)
+        #expect(config.showsWaitingHints)
+        config.global = String(repeating: "g", count: 4_000)
+        config.userAddress = "小林\n"
+        config.assistantName = String(repeating: "柚", count: 100)
+        config.replyStyle = .friendly
+        config.showsWaitingHints = false
+        config.waitingText = String(repeating: "w", count: 200)
+        let loaded = CustomInstructionsConfig(defaults: defaults)
+        #expect(!loaded.userAddress.contains("\n"))
+        #expect(loaded.assistantName.count == 60)
+        #expect(loaded.waitingText.count == 160)
+        #expect(loaded.global.count == 4_000)
+        #expect(loaded.replyStyle == .friendly)
+        #expect(!loaded.showsWaitingHints)
+        loaded.assistantName = "  "
+        #expect(loaded.resolvedAssistantName == "柚子")
+        #expect(ChatWaitingHint.hint(custom: "  ", chinese: true).contains("还在等待"))
+        #expect(ChatWaitingHint.hint(custom: "My hint", chinese: false) == "My hint")
+    }
+
     @Test("Blank instruction layers are ignored")
     func blankLayersAreIgnored() {
         let user = ChatMessage(role: .user, content: "Hello", status: .complete)
@@ -138,9 +165,9 @@ struct CustomInstructionsTests {
         )
 
         #expect(before.contains("Tuesday, August 25, 2026"))
-        #expect(before.contains("11:59 PM (GMT, GMT)"))
+        #expect(before.contains("11:59 PM (GMT, GMT)") || before.contains("11:59 PM (GMT+0, GMT)"))
         #expect(after.contains("Wednesday, August 26, 2026"))
-        #expect(after.contains("12:01 AM (GMT, GMT)"))
+        #expect(after.contains("12:01 AM (GMT, GMT)") || after.contains("12:01 AM (GMT+0, GMT)"))
 
         var tokyo = utc
         tokyo.timeZone = try #require(TimeZone(identifier: "Asia/Tokyo"))
@@ -159,15 +186,16 @@ struct CustomInstructionsTests {
     func systemPromptTerminologyAndPreviewWiring() throws {
         let settings = try Self.source("Sources/Rapid/UI/SettingsView.swift")
         #expect(settings.contains("case .instructions: return \"个性化\""))
-        #expect(settings.contains("\"全局默认\""))
-        #expect(settings.contains("作为系统消息发送到每段对话。对话里的提示可以覆盖它。"))
-        #expect(settings.contains("Settings.SystemPrompt.EffectivePreview"))
+        #expect(settings.contains("SettingsPersonalizationPanel()"))
+        let panel = try Self.source("Sources/Rapid/UI/SettingsPersonalizationPanel.swift")
+        #expect(panel.contains("对话中的明确要求优先"))
+        #expect(panel.contains("Settings.SystemPrompt.EffectivePreview"))
 
         let editor = try Self.source("Sources/Rapid/UI/InstructionTextEditor.swift")
         #expect(editor.contains("Text(\"Conversation System Prompt\")"))
         #expect(editor.contains("this prompt wins."))
-        #expect(editor.contains("DisclosureGroup(\"Effective System Prompt\""))
-        #expect(editor.contains("Tool and attachment context may be added when you send."))
+        #expect(editor.contains("\"Effective System Prompt\""))
+        #expect(editor.contains("Tools and attachments may add context when you send."))
         #expect(editor.contains("TimelineView(.periodic(from: .now, by: 60))"))
         #expect(editor.contains("at: context.date"))
         #expect(editor.contains("calendar: .autoupdatingCurrent"))
@@ -209,6 +237,10 @@ struct CustomInstructionsTests {
         defer { defaults.removePersistentDomain(forName: name) }
         let config = CustomInstructionsConfig(defaults: defaults)
         config.global = "Reply only in Simplified Chinese."
+        config.userAddress = "小林"
+        config.assistantName = "小柚"
+        config.replyStyle = .concise
+        config.waitingText = "UI_ONLY_WAIT_HINT"
         let model = ChatViewModel(
             client: ChatStreamClient(
                 baseURL: URL(string: "fake://custom-instructions")!,
@@ -234,6 +266,11 @@ struct CustomInstructionsTests {
         let system = try #require(messages.first?["content"] as? String)
         #expect(system.contains("Reply only in Simplified Chinese."))
         #expect(system.contains("Reply only in English."))
+        #expect(system.contains("小林"))
+        #expect(system.contains("小柚"))
+        #expect(system.contains("Prefer concise"))
+        #expect(!system.contains("UI_ONLY_WAIT_HINT"))
+        #expect(system.components(separatedBy: "[PERSONALIZATION PREFERENCES]").count == 2)
         #expect(
             system.contains(
                 "If they conflict with the global user instructions above, follow THESE conversation instructions."

@@ -80,8 +80,33 @@ struct YouziConversationBridgeTests {
         #expect(document.projects.isEmpty) // A conversation folder is never a project.
 
         let workspaceID = UUID()
+        let workspace = YouziWorkspace(
+            id: workspaceID,
+            name: "Default",
+            location: .managed(relativePath: "ws"),
+            createdAt: initial.createdAt,
+            updatedAt: initial.updatedAt,
+            lastAccessedAt: initial.updatedAt
+        )
+        let fileID = UUID()
+        let file = YouziFile(
+            id: fileID,
+            displayName: "input.txt",
+            contentTypeIdentifier: "public.plain-text",
+            byteCount: 10,
+            sha256: String(repeating: "0", count: 64),
+            role: .taskInput,
+            originTaskID: initial.id,
+            projectID: nil,
+            location: .workspace(workspaceID: workspaceID, relativePath: "input.txt"),
+            createdAt: initial.createdAt,
+            updatedAt: initial.updatedAt,
+            lastVerifiedAt: initial.updatedAt
+        )
+        document.workspaces.append(workspace)
+        document.files.append(file)
         document.tasks[0].workspaceID = workspaceID
-        document.tasks[0].inputFileIDs = [UUID()]
+        document.tasks[0].inputFileIDs = [fileID]
         try store.save(document)
         let renamed = conversation(id: initial.id, title: "Renamed")
         let updated = try bridge.reconcile([renamed])

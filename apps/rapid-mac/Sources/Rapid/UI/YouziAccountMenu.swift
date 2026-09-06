@@ -8,6 +8,7 @@ import SwiftUI
 struct YouziAccountMenu: View {
     static let helpURL = URL(string: "https://github.com/zhuzhe1983/Youzi/issues")!
 
+    var catalogEntries: [ModelEntry] = []
     var arrowEdge: Edge = .bottom
 
     @Environment(YouziExperienceModeConfig.self) private var experienceMode
@@ -16,10 +17,20 @@ struct YouziAccountMenu: View {
     @Environment(UpdateChecker.self) private var updater
     @Environment(SparkleUpdateController.self) private var sparkleUpdater
     @Environment(SettingsRouter.self) private var settingsRouter
+    @Environment(YouziI18nConfig.self) private var i18n
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openURL) private var openURL
 
     @State private var isPresented = false
+
+    private var currentOccupancy: YouziModelOccupancy {
+        let voiceResident = server.residency.audioLanes.contains { $0.state == "resident" }
+        return YouziModelOccupancy.resolve(
+            residency: server.residency,
+            host: MemoryProbe.snapshot(),
+            voiceLaneResident: voiceResident
+        )
+    }
 
     var body: some View {
         Button {
@@ -44,7 +55,7 @@ struct YouziAccountMenu: View {
                 Text("柚子")
                     .font(RapidFont.bodyEmphasis)
                     .foregroundStyle(RapidTheme.textPrimary)
-                Text(experienceMode.mode.displayName)
+                Text(experienceMode.mode.localizedDisplayName(isChinese: i18n.isChinese))
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
             }
@@ -64,44 +75,16 @@ struct YouziAccountMenu: View {
 
             Divider()
 
-            menuRowButton(
-                title: "设置",
-                systemImage: "gearshape",
-                identifier: "Youzi.AccountMenu.Settings"
-            ) {
-                isPresented = false
-                openWindow(id: "settings")
-            }
-
-            appearanceRow
-
-            systemStatusRow
-
-            menuRowButton(
-                title: "检查更新",
-                systemImage: "arrow.triangle.2.circlepath",
-                identifier: "Youzi.AccountMenu.CheckForUpdates",
-                action: checkForUpdates
-            )
-
-            menuRowButton(
-                title: "帮助与反馈",
-                systemImage: "questionmark.circle",
-                identifier: "Youzi.AccountMenu.Help"
-            ) {
-                isPresented = false
-                openURL(Self.helpURL)
-            }
-
-            Divider()
-
             Button {
                 let next = experienceMode.mode.other
                 isPresented = false
                 experienceMode.mode = next
             } label: {
                 Label(
-                    "切换到\(experienceMode.mode.other.displayName)",
+                    i18n.text(
+                        zh: "切换到\(experienceMode.mode.other.localizedDisplayName(isChinese: true))",
+                        en: "Switch to \(experienceMode.mode.other.localizedDisplayName(isChinese: false))"
+                    ),
                     systemImage: "arrow.left.arrow.right"
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -109,6 +92,39 @@ struct YouziAccountMenu: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier(experienceMode.mode.other.accessibilityIdentifier)
+
+            Divider()
+
+            systemStatusRow
+
+            Divider()
+
+            appearanceRow
+
+            menuRowButton(
+                title: i18n.text(zh: "设置", en: "Settings"),
+                systemImage: "gearshape",
+                identifier: "Youzi.AccountMenu.Settings"
+            ) {
+                isPresented = false
+                openWindow(id: "settings")
+            }
+
+            menuRowButton(
+                title: i18n.text(zh: "检查更新", en: "Check for Updates"),
+                systemImage: "arrow.triangle.2.circlepath",
+                identifier: "Youzi.AccountMenu.CheckForUpdates",
+                action: checkForUpdates
+            )
+
+            menuRowButton(
+                title: i18n.text(zh: "帮助与反馈", en: "Help & Feedback"),
+                systemImage: "questionmark.circle",
+                identifier: "Youzi.AccountMenu.Help"
+            ) {
+                isPresented = false
+                openURL(Self.helpURL)
+            }
         }
         .padding(RapidTheme.Space.md)
         .frame(width: 292, alignment: .leading)
@@ -117,16 +133,15 @@ struct YouziAccountMenu: View {
     private var identityHeader: some View {
         HStack(spacing: RapidTheme.Space.sm) {
             YouziLogo(size: 32)
-            VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text("柚子")
                     .font(RapidFont.bodyEmphasis)
-                Text(experienceMode.mode.displayName)
+                Text(i18n.text(zh: "本机单机运行", en: "Runs 100% locally on your Mac"))
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
             }
             Spacer(minLength: 0)
         }
-        .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("Youzi.AccountMenu.Identity")
     }
@@ -134,14 +149,14 @@ struct YouziAccountMenu: View {
     private var appearanceRow: some View {
         @Bindable var appearance = appearance
         return HStack(spacing: RapidTheme.Space.sm) {
-            Label("外观", systemImage: "circle.lefthalf.filled")
+            Label(i18n.text(zh: "外观", en: "Theme"), systemImage: "circle.lefthalf.filled")
                 .labelStyle(.titleAndIcon)
             Spacer(minLength: RapidTheme.Space.xs)
-            Picker("外观", selection: $appearance.mode) {
+            Picker(i18n.text(zh: "外观", en: "Theme"), selection: $appearance.mode) {
                 ForEach(AppearanceMode.accountMenuOrder) { mode in
-                    Text(mode.shortDisplayName)
+                    Text(mode.localizedShortDisplayName(isChinese: i18n.isChinese))
                         .tag(mode)
-                        .accessibilityLabel(mode.displayName)
+                        .accessibilityLabel(mode.localizedDisplayName(isChinese: i18n.isChinese))
                         .accessibilityIdentifier("Youzi.AccountMenu.Appearance.\(mode.rawValue)")
                 }
             }
@@ -155,24 +170,26 @@ struct YouziAccountMenu: View {
 
     private var systemStatusRow: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xs) {
-            Label("系统状态", systemImage: "heart.text.clipboard")
-                .font(RapidFont.body)
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: RapidTheme.Space.xs) {
-                    ServerStatusPill(state: server.state)
-                    CPUPill()
-                    GPUPill()
-                    MemoryPill()
-                }
-                VStack(alignment: .leading, spacing: RapidTheme.Space.xs) {
-                    ServerStatusPill(state: server.state)
-                    HStack(spacing: RapidTheme.Space.xs) {
-                        CPUPill()
-                        GPUPill()
-                    }
-                    MemoryPill()
-                }
+            HStack(spacing: RapidTheme.Space.xs) {
+                Label(i18n.text(zh: "系统状态", en: "System Status"), systemImage: "heart.text.clipboard")
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(RapidTheme.textSecondary)
+                MemoryPill()
+                CPUPill()
+                GPUPill()
+                Spacer(minLength: 2)
+                Text(currentOccupancy.mode.label)
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(RapidTheme.brandPrimary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule().fill(RapidTheme.brandPrimary.opacity(0.12))
+                    )
             }
+            .lineLimit(1)
+
+            YouziModelOccupancyBar(occupancy: currentOccupancy)
         }
         .accessibilityIdentifier("Youzi.AccountMenu.SystemStatus")
     }

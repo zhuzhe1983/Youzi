@@ -218,7 +218,7 @@ struct SettingsPerformancePanel: View {
                     }
                 }
                 .labelsHidden()
-                .pickerStyle(.radioGroup)
+                .compactRadioGroup()
                 .accessibilityLabel("KV cache precision")
                 .accessibilityIdentifier("Settings.Performance.KVMode")
 

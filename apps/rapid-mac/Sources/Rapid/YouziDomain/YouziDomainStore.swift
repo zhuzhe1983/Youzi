@@ -3,7 +3,7 @@ import Foundation
 
 enum YouziDomainSchema {
     static let formatIdentifier = "com.rapidmlx.youzi.domain"
-    static let currentVersion = 2
+    static let currentVersion = 3
 }
 
 struct YouziDomainEnvelope: Codable, Equatable, Sendable {
@@ -20,6 +20,10 @@ struct YouziDomainEnvelope: Codable, Equatable, Sendable {
         self.schemaVersion = schemaVersion
         self.document = document
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case formatIdentifier, schemaVersion, document
+    }
 }
 
 enum YouziDomainStoreError: Error, Equatable, Sendable {
@@ -27,6 +31,7 @@ enum YouziDomainStoreError: Error, Equatable, Sendable {
     case corruptFile(originalURL: URL, recoveryURL: URL?)
     case readFailed(url: URL, description: String)
     case writeFailed(url: URL, description: String)
+    case invalidDocument(issues: [YouziDomainIntegrityIssue])
 }
 
 extension YouziDomainStoreError: LocalizedError {
@@ -43,6 +48,9 @@ extension YouziDomainStoreError: LocalizedError {
             return "Could not read Youzi data at \(url.path): \(description)"
         case let .writeFailed(url, description):
             return "Could not save Youzi data at \(url.path): \(description)"
+        case let .invalidDocument(issues):
+            let codes = issues.map(\.code.rawValue).sorted().joined(separator: ",")
+            return "Youzi data failed integrity validation: \(codes)."
         }
     }
 }
@@ -89,7 +97,7 @@ final class YouziDomainStore: @unchecked Sendable {
     func save(_ document: YouziDomainDocument) throws {
         lock.lock()
         defer { lock.unlock() }
-        try saveUnlocked(document)
+        _ = try saveUnlocked(document)
     }
 
     @discardableResult
@@ -101,8 +109,7 @@ final class YouziDomainStore: @unchecked Sendable {
 
         var document = try loadUnlocked()
         try mutation(&document)
-        try saveUnlocked(document)
-        return document
+        return try saveUnlocked(document)
     }
 
     private func loadUnlocked() throws -> YouziDomainDocument {
@@ -143,11 +150,19 @@ final class YouziDomainStore: @unchecked Sendable {
             } catch {
                 throw quarantineCorruptFile()
             }
-            // Atomic replacement is the migration commit point. If writing v2
+            // Atomic replacement is the migration commit point. If writing v3
             // fails, the original v1 inode is still present and the next load
             // can retry the same deterministic conversion.
-            try saveUnlocked(migrated)
-            return migrated
+            return try saveUnlocked(migrated)
+        }
+        if probe.schemaVersion == 2 {
+            let migrated: YouziDomainDocument
+            do {
+                migrated = try YouziDomainV2Migration.decode(data, decoder: decoder)
+            } catch {
+                throw quarantineCorruptFile()
+            }
+            return try saveUnlocked(migrated)
         }
         guard probe.schemaVersion == YouziDomainSchema.currentVersion else {
             throw YouziDomainStoreError.unsupportedSchemaVersion(
@@ -156,14 +171,18 @@ final class YouziDomainStore: @unchecked Sendable {
             )
         }
 
+        let document: YouziDomainDocument
         do {
-            return try decoder.decode(YouziDomainEnvelope.self, from: data).document
+            document = try decoder.decode(YouziDomainEnvelope.self, from: data).document
         } catch {
             throw quarantineCorruptFile()
         }
+        return try validatedCanonicalDocument(document)
     }
 
-    private func saveUnlocked(_ document: YouziDomainDocument) throws {
+    @discardableResult
+    private func saveUnlocked(_ document: YouziDomainDocument) throws -> YouziDomainDocument {
+        let document = try validatedCanonicalDocument(document)
         let envelope = YouziDomainEnvelope(document: document)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -187,6 +206,7 @@ final class YouziDomainStore: @unchecked Sendable {
             )
             try beforeAtomicReplace?()
             try replaceAtomicallyWithOwnerOnlyFile(data, in: directory)
+            return document
         } catch let error as YouziDomainStoreError {
             throw error
         } catch {
@@ -195,6 +215,19 @@ final class YouziDomainStore: @unchecked Sendable {
                 description: error.localizedDescription
             )
         }
+    }
+
+    private func validatedCanonicalDocument(_ document: YouziDomainDocument) throws
+        -> YouziDomainDocument
+    {
+        do {
+            try YouziDomainIntegrityValidator.validate(document)
+        } catch let error as YouziDomainIntegrityError {
+            throw YouziDomainStoreError.invalidDocument(issues: error.issues)
+        }
+        var canonical = document
+        canonical.canonicalizeRecordOrder()
+        return canonical
     }
 
     /// Create a private temporary file beside the destination, fsync it, then

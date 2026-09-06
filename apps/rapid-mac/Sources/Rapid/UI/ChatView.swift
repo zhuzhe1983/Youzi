@@ -2056,9 +2056,7 @@ private struct MessageRow: View {
     }
 
     private var typingIndicator: some View {
-        ProgressView()
-            .controlSize(.small)
-            .padding(.vertical, 2)
+        ChatWaitingHint()
     }
 
     private var failureCaption: some View {
@@ -2114,7 +2112,7 @@ private struct MessageRow: View {
 /// the user sees what is happening; auto-collapses on success so a long
 /// transcript stays skimmable, and stays expanded on failure because the
 /// error detail is the useful part.
-private struct ToolCallChip: View {
+struct ToolCallChip: View {
     let call: ToolCall
     let result: ChatMessage?
 
@@ -2645,6 +2643,20 @@ final class AutosizingTextView: NSTextView {
 /// code-heavy enough that auto-quoting / dash substitution corrupts
 /// snippets the user pastes.
 struct ComposeTextEditor: NSViewRepresentable {
+    @Environment(YouziFontSizeConfig.self) private var fontSizeConfig: YouziFontSizeConfig?
+    private var fontScale: CGFloat { (fontSizeConfig ?? .shared).scale }
+
+    /// Update typography in place, never replace the draft or the editor. Defer
+    /// while the IME owns marked text; its commit triggers the next view update.
+    static func applyFontScale(_ scale: CGFloat, to view: AutosizingTextView) {
+        let size = max(9, round(15 * scale))
+        guard !view.hasMarkedText(), view.font?.pointSize != size else { return }
+        let selection = view.selectedRanges
+        view.font = NSFont.systemFont(ofSize: size)
+        view.typingAttributes[.font] = view.font
+        view.selectedRanges = selection
+        view.remeasure()
+    }
     @Binding var text: String
     var focusToken: Int
     var isStreaming: Bool
@@ -2701,7 +2713,7 @@ struct ComposeTextEditor: NSViewRepresentable {
         // sweep) — was NSFont.systemFontSize (13). NSTextView ignores
         // Dynamic Type either way (documented in DynamicTypeClamp);
         // this only aligns the default-size look with the chat.
-        tv.font = NSFont.systemFont(ofSize: 15)
+        tv.font = NSFont.systemFont(ofSize: max(9, round(15 * fontScale)))
         // Width tracks the view (so wrapping matches the visible width),
         // height is unbounded so ``usedRect`` reflects every line. This
         // is what lets us measure the true content height below.
@@ -2744,6 +2756,7 @@ struct ComposeTextEditor: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let view = scroll.documentView as? AutosizingTextView else { return }
+        Self.applyFontScale(fontScale, to: view)
         // Never write over an in-flight IME composition. While marked
         // text is up, ``view.string`` holds the pre-edit run and ``text``
         // is still empty (AppKit posts no text-did-change until the user

@@ -54,6 +54,7 @@ final class VideoGenViewModel {
 
     private let server: ServerManager
     private let physicalRAMGB: Double
+    private let generationDefaults: ModelGenerationDefaults
     @ObservationIgnored private let client: any VideoClientProtocol
     @ObservationIgnored private let catalogLoader: (URL) async -> [ModelEntry]
     @ObservationIgnored private var catalogRefreshGeneration: UInt = 0
@@ -71,6 +72,7 @@ final class VideoGenViewModel {
 
     init(
         server: ServerManager,
+        generationDefaults: ModelGenerationDefaults = ModelGenerationDefaults(),
         client: any VideoClientProtocol = VideoClient(),
         physicalRAMGB: Double = MacHardware.detect().physicalRAMGB,
         pollingInterval: Duration = .seconds(1),
@@ -79,6 +81,7 @@ final class VideoGenViewModel {
         }
     ) {
         self.server = server
+        self.generationDefaults = generationDefaults
         self.client = client
         self.physicalRAMGB = physicalRAMGB
         self.pollingInterval = pollingInterval
@@ -232,7 +235,7 @@ final class VideoGenViewModel {
         guard size != value else { return }
         size = value
         if !durationPresets.contains(seconds) {
-            seconds = durationPresets.first ?? 0
+            seconds = generationDefaults.resolveVideoSeconds(available: durationPresets)
         }
     }
 
@@ -497,9 +500,9 @@ final class VideoGenViewModel {
             mode = modes.first ?? supportedModes.first ?? .text
             if mode == .text { referenceImage = nil }
         }
-        if !sizePresets.contains(size) { size = sizePresets.first ?? "" }
+        if !sizePresets.contains(size) { size = generationDefaults.resolveVideoSize(available: sizePresets) }
         if !durationPresets.contains(seconds) {
-            seconds = durationPresets.first ?? 0
+            seconds = generationDefaults.resolveVideoSeconds(available: durationPresets)
         }
     }
 

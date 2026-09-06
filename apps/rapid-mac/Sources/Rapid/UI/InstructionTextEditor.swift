@@ -162,6 +162,8 @@ struct ConversationInstructionsPopover: View {
 /// which the explanatory copy states instead of pretending the preview owns
 /// those dynamic layers.
 struct EffectiveSystemPromptDisclosure: View {
+    @Environment(CustomInstructionsConfig.self) private var personalization: CustomInstructionsConfig?
+    @Environment(YouziI18nConfig.self) private var i18n: YouziI18nConfig?
     let global: String
     let conversation: String
     let accessibilityIdentifier: String
@@ -174,6 +176,7 @@ struct EffectiveSystemPromptDisclosure: View {
     nonisolated static func prompt(
         at now: Date,
         calendar: Calendar,
+        personalizationContext: String? = nil,
         global: String,
         conversation: String
     ) -> String {
@@ -182,15 +185,16 @@ struct EffectiveSystemPromptDisclosure: View {
                 now: now,
                 calendar: calendar
             ),
+            personalizationContext: personalizationContext,
             global: global,
             conversation: conversation
         )
     }
 
     var body: some View {
-        DisclosureGroup("Effective System Prompt", isExpanded: $expanded) {
+        DisclosureGroup(i18n?.text(zh: "查看实际系统指令", en: "Effective System Prompt") ?? "Effective System Prompt", isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: RapidTheme.Space.sm) {
-                Text("Preview includes current automatic context. Tool and attachment context may be added when you send.")
+                Text(i18n?.text(zh: "包含当前个性化和自动上下文。发送时还可能加入工具及附件信息。", en: "Includes personalization and automatic context. Tools and attachments may add context when you send.") ?? "Includes current context; tools and attachments may add more.")
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
                 TimelineView(.periodic(from: .now, by: 60)) { context in
@@ -198,6 +202,7 @@ struct EffectiveSystemPromptDisclosure: View {
                         Text(Self.prompt(
                             at: context.date,
                             calendar: .autoupdatingCurrent,
+                            personalizationContext: personalization?.personalizationContext,
                             global: global,
                             conversation: conversation
                         ))

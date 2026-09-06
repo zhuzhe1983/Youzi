@@ -122,11 +122,25 @@ final class ImageGenViewModel {
 
     // MARK: - Composed input
     var prompt: String = ""
-    var aspect: Aspect = .square
+    private var aspectOverride: Aspect?
+    private var resolutionOverride: Resolution?
+    private let generationSettings: ModelGenerationSettings
+    var aspect: Aspect {
+        get { aspectOverride ?? Aspect(rawValue: generationSettings.imageAspect) ?? .square }
+        set { aspectOverride = newValue }
+    }
     /// Defaults to the smallest preset: on-device diffusion cost scales with
     /// pixel count, so 512² is the fastest first render and the least likely
     /// to swap on a small-memory Mac. Users who want detail step up explicitly.
-    var resolution: Resolution = .compact
+    var resolution: Resolution {
+        get { resolutionOverride ?? Resolution(rawValue: generationSettings.imageResolution) ?? .compact }
+        set { resolutionOverride = newValue }
+    }
+
+    func useGenerationDefaults() {
+        aspectOverride = nil
+        resolutionOverride = nil
+    }
 
     var outputSize: String {
         aspect.size(for: resolution)
@@ -228,11 +242,13 @@ final class ImageGenViewModel {
 
     init(
         server: ServerManager,
+        generationSettings: ModelGenerationSettings = .shared,
         catalogLoader: @escaping (URL) async -> [ModelEntry] = {
             await ModelCatalog.imageEntries(binary: $0)
         }
     ) {
         self.server = server
+        self.generationSettings = generationSettings
         self.catalogLoader = catalogLoader
     }
 
@@ -359,7 +375,8 @@ final class ImageGenViewModel {
                 hfPath: target.hfPath,
                 estimatedMemoryGB: target.estimatedMemoryGB,
                 imageMode: .generation,
-                residencyEligible: false
+                residencyEligible: true,
+                requestIsMedia: true
             ) else {
                 throw ImageClientError.notReady
             }
@@ -394,7 +411,8 @@ final class ImageGenViewModel {
                 hfPath: target.hfPath,
                 estimatedMemoryGB: target.estimatedMemoryGB,
                 imageMode: .editing,
-                residencyEligible: false
+                residencyEligible: true,
+                requestIsMedia: true
             ) else {
                 throw ImageClientError.notReady
             }

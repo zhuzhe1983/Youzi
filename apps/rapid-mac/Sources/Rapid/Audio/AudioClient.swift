@@ -62,6 +62,7 @@ struct AudioClient {
     }()
 
     var session: URLSession = AudioClient.sharedSession
+    var generationDefaults = ModelGenerationDefaults()
 
     private struct TranscriptionWire: Decodable {
         let text: String
@@ -262,11 +263,23 @@ struct AudioClient {
     func synthesize(
         text: String,
         model: String,
-        voice: String,
-        speed: Double,
+        voice: String? = nil,
+        speed: Double? = nil,
         port: Int,
         bearer: String?
     ) async throws -> SynthesizedAudio {
+        // Resolve against the actual selected model, not a hardcoded speaker
+        // from another engine. Explicit voice/speed bypass defaults.
+        let resolvedVoice: String
+        if let voice, !voice.isEmpty {
+            resolvedVoice = voice
+        } else {
+            let available = try await voices(model: model, port: port, bearer: bearer)
+            guard let preferred = generationDefaults.voice(for: model, available: available) else {
+                throw AudioClientError.invalidResponse
+            }
+            resolvedVoice = preferred
+        }
         var request = URLRequest(
             url: Self.loopbackURL(port: port).appendingPathComponent("v1/audio/speech")
         )
@@ -276,7 +289,7 @@ struct AudioClient {
         request.setValue("audio/wav", forHTTPHeaderField: "Accept")
         applyBearer(&request, bearer)
         request.httpBody = try JSONEncoder().encode(
-            SpeechBody(model: model, input: text, voice: voice, speed: speed)
+            SpeechBody(model: model, input: text, voice: resolvedVoice, speed: speed ?? generationDefaults.speed)
         )
         let (data, response) = try await send(request)
         try validate(response: response, data: data)

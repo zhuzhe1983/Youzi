@@ -47,6 +47,7 @@ final class SettingsRouter {
     /// ``SettingsView`` on appear / on change. Nil means "no override —
     /// land on the user's last selected tab."
     var requestedCategory: SettingsView.Category?
+    var requestedModelTab: ModelSettingsTab?
 
     /// One-shot handoff used by Quickstart's Browse all round trip. The
     /// onboarding sheet must be lowered before opening a separate Settings
@@ -118,7 +119,18 @@ final class SettingsRouter {
     /// rather than deriving it from a failure (the version pill → Settings →
     /// App). Pass `nil` for "just open Settings, leave the tab alone."
     func route(to category: SettingsView.Category?, open: () -> Void) {
+        switch category {
+        case .performance: requestedModelTab = .chat
+        case .modelManagement: requestedModelTab = .files
+        case .experimentalFeatures: requestedModelTab = .video
+        default: requestedModelTab = nil
+        }
         requestedCategory = category
+        open()
+    }
+    func route(toModelTab tab: ModelSettingsTab, open: () -> Void) {
+        requestedModelTab = tab
+        requestedCategory = .modelManagement
         open()
     }
 }

@@ -90,6 +90,8 @@ struct SettingsEnvironmentInjectionTests {
         var panels = [
             "Sources/Rapid/UI/SettingsView.swift",
             "Sources/Rapid/UI/SettingsToolsPanel.swift",
+            "Sources/Rapid/UI/SettingsDataManagementPanel.swift",
+            "Sources/Rapid/UI/SettingsSecurityPanel.swift",
             "Sources/Rapid/UI/SettingsConnectorsPanel.swift",
             "Sources/Rapid/UI/SettingsModelManagementPanel.swift",
             "Sources/Rapid/UI/SettingsPerformancePanel.swift",

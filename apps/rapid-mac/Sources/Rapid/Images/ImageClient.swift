@@ -56,6 +56,7 @@ struct ImageClient {
     }()
 
     var session: URLSession = ImageClient.sharedSession
+    var generationDefaults = ModelGenerationDefaults()
 
     static func loopbackURL(port: Int) -> URL {
         URL(string: "http://127.0.0.1:\(port)")!
@@ -93,7 +94,7 @@ struct ImageClient {
     func generate(
         prompt: String,
         model: String,
-        size: String,
+        size: String? = nil,
         count: Int,
         seed: Int?,
         port: Int,
@@ -107,7 +108,7 @@ struct ImageClient {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         applyBearer(&req, bearer)
         req.httpBody = try JSONEncoder().encode(
-            GenerationBody(model: model, prompt: prompt, n: count, size: size, seed: seed)
+            GenerationBody(model: model, prompt: prompt, n: count, size: size ?? generationDefaults.imageSize, seed: seed)
         )
         let images = try await sendAndDecode(req)
         return images.map { GeneratedImage(pngData: $0, prompt: prompt, isEdit: false) }

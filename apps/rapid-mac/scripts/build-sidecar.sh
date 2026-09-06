@@ -463,15 +463,17 @@ echo "==> bundling mlx-vlm --no-deps + Pillow (gemma-4 + DiffusionGemma loader p
 #
 # mflux declares torch (363 MB installed), opencv-python and matplotlib.
 # Bundling torch alone would blow BUNDLE_SIZE_CAP_MB (500) on its own, and
-# none of the three is reachable from the two families we wire:
+# none of the three is needed for plain generation in the two families we wire:
 #   * every component of Flux2KleinWeightDefinition / ZImageWeightDefinition
 #     takes ComponentDefinition's default ``loading_mode="mlx_native"``,
 #     which loads through ``mx.load``;
 #   * torch is only touched by the "torch_checkpoint" / "torch_convert" /
 #     "torch_bfloat16" modes, which belong to families we do not wire
 #     (fibo, fibo_vlm, depth_pro);
-#   * cv2 lives in flux/variants/controlnet and matplotlib in
-#     flux/variants/concept_attention — neither on our path.
+#   * cv2 is used by ControlNet, not plain generation. Z-Image parent
+#     packages eagerly re-export ControlNet in mflux 0.19.0; defer those
+#     exports below so even importing Z-Image does not require OpenCV.
+#     matplotlib is used by the separate concept-attention path.
 # The only thing in the way is a module-level ``import torch`` in
 # weight_loader.py that runs on EVERY load; the patch below defers it into
 # the three functions that actually use it. Verified end to end on a
@@ -565,6 +567,11 @@ target.write_text(src)
 print("==> mflux PiD torch import deferred behind checkpoint conversion")
 PY
 
+# Plain Z-Image must not import its optional ControlNet/OpenCV stack merely
+# because Python initializes its parent packages. Keep explicit ControlNet
+# exports available lazily, and fail closed when the pinned layout changes.
+"$STAGE/python/bin/python3.12" "$REPO_ROOT/scripts/patch-mflux-image-imports.py" "$STAGE/site-packages"
+
 # Fail closed: with no torch in the stage, importing mflux's weight loader
 # is itself the proof that the image lane no longer needs a 363 MB
 # dependency. A regression here means every Images-tab generation 500s.
@@ -573,10 +580,16 @@ import importlib
 import sys
 
 importlib.import_module("mflux.models.common.weights.loading.weight_loader")
-importlib.import_module("mflux.models.qwen.variants.txt2img.qwen_image")
-if "torch" in sys.modules:
-    raise SystemExit("ERR: mflux still pulls torch at import time")
-print("==> mflux image lane imports without torch: OK")
+for module in (
+    "mflux.models.qwen.variants.txt2img.qwen_image",
+    "mflux.models.flux2.variants.txt2img.flux2_klein",
+    "mflux.models.flux2.variants.edit.flux2_klein_edit",
+    "mflux.models.z_image.variants.z_image",
+):
+    importlib.import_module(module)
+if any(name in sys.modules for name in ("torch", "cv2", "matplotlib")):
+    raise SystemExit("ERR: plain image generation imports optional torch/cv2/matplotlib")
+print("==> all desktop image lane imports without torch/cv2/matplotlib: OK")
 PY
 
 # ----- step 2.7: bundle minimal video runtime --no-deps ---------------

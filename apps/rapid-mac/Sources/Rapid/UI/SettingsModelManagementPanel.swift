@@ -35,6 +35,7 @@ import SwiftUI
 struct SettingsModelManagementPanel: View {
     @Environment(ServerManager.self) private var server
     @Environment(DownloadManager.self) private var downloads
+    @Environment(YouziI18nConfig.self) private var i18n
 
     // Seeded from the process-wide cache rather than starting empty: an
     // empty start re-rendered the spinner on every visit regardless of
@@ -47,7 +48,7 @@ struct SettingsModelManagementPanel: View {
     @State private var modelsVolumeFreeBytes: Int64?
 
     @State private var query: String = ""
-    /// Which capability tab is showing (Chat vs Image vs Audio vs future Video). Model
+    /// Which file category is showing (Chat / Audio / Image / Video). Model
     /// Management manages every kind, but never mixes them in one list.
     @State private var capability: ModelKind = .chat
     @State private var filterMode: ModelCacheActions.FilterMode = .all
@@ -76,24 +77,6 @@ struct SettingsModelManagementPanel: View {
     /// "All models" table regardless of sort. Seeded from defaults;
     /// toggled in-row via the star.
     @State private var favorites: Set<String> = ModelFavorites.load()
-
-    /// Power-user override for the picker's sub-1B filter (cycle-7).
-    /// Defaults OFF so first-time users don't meet `qwen3-0.6b-*` in the
-    /// dropdown — those tinies hallucinate within 1-2 turns and read as
-    /// broken during evaluation. Lives here, alongside the cache it
-    /// governs, rather than in a second "Models" tab.
-    @AppStorage(ModelPickerVisibility.showAllStorageKey) private var showAllModels: Bool = false
-
-    /// Launch-time auto-start opt-out (FU-1). Defaults ON (the v0.7.x
-    /// behaviour) so upgrades see no change; flipping OFF skips the
-    /// next-launch spawn while leaving every manual start path untouched.
-    @AppStorage(AutoStartPreference.storageKey) private var autoStartOnLaunch: Bool = AutoStartPreference.defaultValue
-
-    /// Safety prompt for interactive model switches that would interrupt
-    /// active API or streaming requests. Automation can opt out explicitly;
-    /// the safe default remains on for existing and new installations.
-    @AppStorage(ModelSwitchConfirmationPreference.storageKey)
-    private var confirmActiveRequestSwitch = ModelSwitchConfirmationPreference.defaultValue
 
     /// codex r1 P2 (#210): without this we'd ride the stale catalog
     /// snapshot after a background download finishes — the row
@@ -142,7 +125,6 @@ struct SettingsModelManagementPanel: View {
             modelsFolderSection
             linkedModelsSection
             storageOverviewSection
-            preferencesSection
             capabilityTabs
             controlsRow
             if capability == .chat {
@@ -244,8 +226,11 @@ struct SettingsModelManagementPanel: View {
     @ViewBuilder
     private var header: some View {
         SectionHeader(
-            "Model Management",
-            subtitle: "Manage the on-disk model cache. Download what you need in the background; delete what you don't to reclaim space.",
+            i18n.text(zh: "模型", en: "Model Management"),
+            subtitle: i18n.text(
+                zh: "管理本地磁盘上的模型缓存。在后台下载所需模型，删除不需要的模型以释放空间。",
+                en: "Manage the on-disk model cache. Download what you need in the background; delete what you don't to reclaim space."
+            ),
             emphasis: .page
         )
     }
@@ -292,11 +277,11 @@ struct SettingsModelManagementPanel: View {
                 }
 
                 HStack(spacing: RapidTheme.Space.sm) {
-                    Button("Choose…") { chooseModelsFolder() }
+                    Button(i18n.text(zh: "选择…", en: "Choose…")) { chooseModelsFolder() }
                         .buttonStyle(.rapidSecondaryCompact)
                         .accessibilityIdentifier("Settings.ModelManagement.ChooseFolder")
                     if customFolderPath != nil {
-                        Button("Use default") { resetModelsFolder() }
+                        Button(i18n.text(zh: "恢复默认", en: "Use default")) { resetModelsFolder() }
                             .buttonStyle(.rapidTertiary)
                             .accessibilityIdentifier("Settings.ModelManagement.UseDefaultFolder")
                     }
@@ -334,7 +319,7 @@ struct SettingsModelManagementPanel: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                Button("Link model…") { chooseModelToLink() }
+                Button(i18n.text(zh: "链接模型…", en: "Link model…")) { chooseModelToLink() }
                     .buttonStyle(.rapidSecondaryCompact)
                     .accessibilityIdentifier("Settings.ModelManagement.LinkModel")
 
@@ -356,11 +341,11 @@ struct SettingsModelManagementPanel: View {
                                 )
                         }
                         Spacer(minLength: RapidTheme.Space.sm)
-                        Button("Forget") { forgetLinkedModel(record) }
+                        Button(i18n.text(zh: "取消链接", en: "Forget")) { forgetLinkedModel(record) }
                             .buttonStyle(.rapidTertiary)
-                            .help("Remove only Youzi's link. The original model and all of its weights stay untouched.")
+                            .help(i18n.text(zh: "仅移除柚子的链接关系。原始模型及其所有权重文件均保持不变。", en: "Remove only Youzi's link. The original model and all of its weights stay untouched."))
                             .accessibilityLabel("Forget linked model \(record.alias)")
-                            .accessibilityHint("Removes only Youzi's link and keeps every source file.")
+                            .accessibilityHint(i18n.text(zh: "仅移除柚子的链接关系并保留所有源文件。", en: "Removes only Youzi's link and keeps every source file."))
                             .accessibilityIdentifier(
                                 "Settings.ModelManagement.ForgetLinkedModel.\(record.alias)"
                             )
@@ -384,53 +369,6 @@ struct SettingsModelManagementPanel: View {
     /// ones. Styled to match ``modelsFolderSection`` above: a secondary
     /// section label over a hairline card, with dividers keeping the controls
     /// distinct without creating several floating boxes.
-    @ViewBuilder
-    private var preferencesSection: some View {
-        SettingsSection("Preferences") {
-                Toggle(isOn: $showAllModels) {
-                    SettingsRowLabel(
-                        title: "Show small (<1B) models in the picker",
-                        description: "Sub-1B models (qwen3-0.6b-*) are hidden from the model picker by default — they hallucinate within 1-2 turns and are intended for unit tests, not chat. Turn on to see every model, including the tiny ones."
-                    )
-                }
-                .toggleStyle(TrailingSettingsToggleStyle())
-                .accessibilityLabel("Show small models in the picker")
-                .accessibilityHint("Sub-1B models are hidden by default — they hallucinate within 1-2 turns and are intended for unit tests, not chat.")
-                // Identifier intentionally KEPT as `Settings.Models.*` after
-                // the move from the old Models tab: it is a stable AX hook, so
-                // relocating the control shouldn't rename it out from under any
-                // VoiceOver/automation client that already targets it.
-                .accessibilityIdentifier("Settings.Models.ShowAllModelsToggle")
-
-                SettingsRowDivider()
-
-                Toggle(isOn: $autoStartOnLaunch) {
-                    SettingsRowLabel(
-                        title: "Auto-start model on launch",
-                        description: "On launch, Youzi loads your last-used model into memory so the chat is interactive immediately. Nothing loads while first-run setup is still open. Turn off if you sometimes open Youzi just to browse past conversations — you can still start a model manually by picking one in the message box and sending."
-                    )
-                }
-                .toggleStyle(TrailingSettingsToggleStyle())
-                .accessibilityLabel("Auto-start model on launch")
-                .accessibilityHint("When off, opening Youzi will not load a model until you start one manually from the picker.")
-                // Stable AX hook kept as `Settings.Models.*` across the move.
-                .accessibilityIdentifier("Settings.Models.AutoStartOnLaunchToggle")
-
-                SettingsRowDivider()
-
-                Toggle(isOn: $confirmActiveRequestSwitch) {
-                    SettingsRowLabel(
-                        title: "Confirm before interrupting active requests",
-                        description: "Ask before switching models when the current model is still serving API or streaming requests. Turn this off only for unattended automation."
-                    )
-                }
-                .toggleStyle(TrailingSettingsToggleStyle())
-                .accessibilityLabel("Confirm before interrupting active requests")
-                .accessibilityHint("When off, model switches may interrupt active API or streaming requests without asking.")
-                .accessibilityIdentifier("Settings.Models.ConfirmActiveRequestSwitchToggle")
-        }
-    }
-
     /// The path shown in the folder row. When the user picked a custom
     /// folder we show exactly what they picked (even while unavailable,
     /// so the warning has context); otherwise we resolve + show the
@@ -598,21 +536,20 @@ struct SettingsModelManagementPanel: View {
         linkedModels = (try? ExternalModelRegistry.records()) ?? []
     }
 
-    /// Capability tabs — Chat / Image / Audio (/ Video, once it has aliases). Only
-    /// shown when there's more than one kind installed, so a chat-only setup
-    /// looks exactly as it did before image models existed.
-    @ViewBuilder
+    /// Stable file categories, including Video even before its first download.
     private var capabilityTabs: some View {
-        if availableKinds.count > 1 {
+        ScrollView(.horizontal, showsIndicators: false) {
             RapidSegmentedControl(
                 selection: $capability,
-                options: availableKinds.map {
-                    .init(value: $0, title: "\($0.tabLabel) models")
+                options: ModelFileCategory.kinds.map {
+                    .init(value: $0,
+                          title: ModelFileCategory.title($0, isChinese: i18n.isChinese),
+                          identifier: "Settings.ModelManagement.Kind.\($0.rawValue)")
                 },
-                accessibilityLabel: "Model type"
+                accessibilityLabel: i18n.text(zh: "模型类型", en: "Model type")
             )
-            .accessibilityIdentifier("Settings.ModelManagement.CapabilityTabs")
         }
+        .accessibilityIdentifier("Settings.ModelManagement.CapabilityTabs")
     }
 
     @ViewBuilder
@@ -1225,10 +1162,9 @@ struct SettingsModelManagementPanel: View {
     /// retry, delete) stays reachable at every supported window size.
     private var showsMeters: Bool { !isCompact }
 
-    /// Kinds that actually have models to manage — the tab bar only offers
-    /// these (Video stays hidden until the video lane surfaces aliases).
+    /// Categories stay visible with an empty catalog or after deletion.
     private var availableKinds: [ModelKind] {
-        ModelKind.allCases.filter { kind in catalog.contains { $0.kind == kind } }
+        ModelFileCategory.kinds
     }
 
     @ViewBuilder
@@ -1263,7 +1199,9 @@ struct SettingsModelManagementPanel: View {
         if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             switch filterMode {
             case .all:
-                return "No models found. Restart Youzi to try again."
+                return capability == .video
+                    ? i18n.text(zh: "当前运行时未提供可管理的视频模型。刷新目录或更新运行时后重试。", en: "This runtime has no manageable video models. Refresh the catalog or update the runtime.")
+                    : i18n.text(zh: "此分类暂无模型。请刷新目录后重试。", en: "No models in this category. Refresh the catalog to retry.")
             case .cached:
                 return "Nothing cached on disk yet. Pick a row from \"Not cached\" and hit Download."
             case .notCached:
@@ -1328,6 +1266,13 @@ struct SettingsModelManagementPanel: View {
                     .foregroundStyle(RapidTheme.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if entry.kind == .video {
+                    Text(entry.videoCapabilities.map {
+                        $0 == .textToVideo ? i18n.text(zh: "文生视频", en: "Text to video")
+                            : i18n.text(zh: "图生视频", en: "Image to video")
+                    }.joined(separator: " · "))
+                        .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
+                }
                 if entry.kind == .audio, let audioCapability = entry.audioCapability {
                     Text(audioCapabilityLabel(audioCapability))
                         .font(RapidFont.caption)
@@ -1590,7 +1535,8 @@ struct SettingsModelManagementPanel: View {
         ) {
             async let image = ModelCatalog.imageEntries(binary: binary)
             async let audio = ModelCatalog.audioEntries(binary: binary)
-            catalog = hit + (await image) + (await audio)
+            async let video = ModelCatalog.videoEntries(binary: binary)
+            catalog = hit + (await image) + (await audio) + (await video)
             reconcileCapability()
             loading = false
             return
@@ -1605,15 +1551,12 @@ struct SettingsModelManagementPanel: View {
         )
         async let image = ModelCatalog.imageEntries(binary: binary)
         async let audio = ModelCatalog.audioEntries(binary: binary)
-        catalog = chat + (await image) + (await audio)
+        async let video = ModelCatalog.videoEntries(binary: binary)
+        catalog = chat + (await image) + (await audio) + (await video)
         reconcileCapability()
     }
 
-    /// Keep the selected capability tab valid after the catalog changes.
-    /// Deleting the last image model while the Image tab is active (the tab bar
-    /// then collapses because only one kind remains) would otherwise strand the
-    /// panel on an empty, un-switchable ``.image`` view even though chat models
-    /// exist — so fall back to an available kind.
+    /// All four file categories remain available, including empty catalogs.
     private func reconcileCapability() {
         let kinds = availableKinds
         if !kinds.isEmpty, !kinds.contains(capability) {
@@ -1624,6 +1567,11 @@ struct SettingsModelManagementPanel: View {
     private func deleteAlias(_ entry: ModelEntry) async {
         lastError = nil
         lastFreed = nil
+        if server.servingAlias != entry.alias,
+           server.isModelResident(entry.alias) || (entry.hfRepo.map { server.isModelResident($0) } ?? false) {
+            lastError = i18n.text(zh: "模型仍在使用中，请先停止该模型后再删除文件。", en: "This model is still loaded. Stop it before deleting its files.")
+            return
+        }
         if server.servingAlias == entry.alias {
             await server.stop()
             guard server.servingAlias != entry.alias else {

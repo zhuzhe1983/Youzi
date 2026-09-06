@@ -53,7 +53,7 @@ final class YouziExperienceModeTests {
     func destinationContract() {
         #expect(
             YouziSimpleDestination.allCases.map(\.title)
-                == ["新任务", "工作空间", "帮手", "知我", "成果"]
+                == ["新任务", "工作空间", "专家·技能·连接", "知我", "成果"]
         )
         #expect(
             YouziSimpleDestination.allCases.map(\.accessibilityIdentifier)

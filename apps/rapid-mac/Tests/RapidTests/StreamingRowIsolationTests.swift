@@ -24,7 +24,7 @@ struct StreamingRowIsolationTests {
         #expect(source.contains("StreamingTextKitMarkdownView("))
 
         let messageRowStart = try #require(source.range(of: "private struct MessageRow"))
-        let toolChipStart = try #require(source.range(of: "private struct ToolCallChip"))
+        let toolChipStart = try #require(source.range(of: "struct ToolCallChip: View"))
         let messageRow = String(source[messageRowStart.lowerBound..<toolChipStart.lowerBound])
 
         #expect(messageRow.contains("var streamingMarkdown: StreamingMarkdownStore?"))

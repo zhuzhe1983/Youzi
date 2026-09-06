@@ -71,6 +71,7 @@ struct RapidApp: App {
     /// keeping a process-wide instance is fine.
     @State private var chatViewModel: ChatViewModel
     /// Single durable Youzi product graph shared by every presentation.
+    @State private var youziSharingCenter: YouziSharingCenter = YouziSharingCenter()
     @State private var youziProductModel: YouziProductModel
     /// Images-tab controller — text→image / image-edit against an image-gen
     /// alias. It keeps its own UI state while sharing the resident-model
@@ -105,6 +106,8 @@ struct RapidApp: App {
     /// Persisted presentation choice. Both presentations continue to use all
     /// of the app-owned runtime objects above and below this preference.
     @State private var experienceMode: YouziExperienceModeConfig
+    @State private var i18n: YouziI18nConfig
+    @State private var fontSizeConfig: YouziFontSizeConfig = YouziFontSizeConfig.shared
     /// Deep-link channel into the Settings window.
     @State private var settingsRouter: SettingsRouter
     @State private var commandPaletteRequest = CommandPaletteRequestCoordinator()
@@ -190,6 +193,7 @@ struct RapidApp: App {
         let memoryStore = MemoryStore()
         let appearanceConfig = AppearanceConfig()
         let experienceModeConfig = YouziExperienceModeConfig()
+        let i18nConfig = YouziI18nConfig.shared
         // Apply the persisted theme override before the first window
         // renders so the user doesn't see a flash of the wrong mode.
         appearanceConfig.apply()
@@ -363,6 +367,7 @@ struct RapidApp: App {
         _memoryStore = State(initialValue: memoryStore)
         _appearance = State(initialValue: appearanceConfig)
         _experienceMode = State(initialValue: experienceModeConfig)
+        _i18n = State(initialValue: i18nConfig)
         _settingsRouter = State(initialValue: SettingsRouter())
         _deferredTelemetryConsent = State(initialValue: consentCoordinator)
         _githubStarPrompt = State(initialValue: starPromptCoordinator)
@@ -389,6 +394,7 @@ struct RapidApp: App {
                 .environment(downloads)
                 .environment(chatViewModel)
                 .environment(youziProductModel)
+                .environment(youziSharingCenter)
                 .environment(imageGen)
                 .environment(audio)
                 .environment(video)
@@ -400,6 +406,10 @@ struct RapidApp: App {
                 .environment(memoryStore)
                 .environment(appearance)
                 .environment(experienceMode)
+                .environment(i18n)
+                .environment(fontSizeConfig)
+                .dynamicTypeSize(fontSizeConfig.size.dynamicTypeSize)
+                .environment(\.locale, i18n.locale)
                 .environment(settingsRouter)
                 .environment(commandPaletteRequest)
                 .environment(deferredTelemetryConsent)
@@ -501,7 +511,7 @@ struct RapidApp: App {
         .commands {
             // Replace the system-default "About" item with our own.
             CommandGroup(replacing: .appInfo) {
-                Button("About Youzi") {
+                Button(i18n.text(zh: "关于柚子", en: "About Youzi")) {
                     AboutPanel.show(server: server)
                 }
             }
@@ -521,7 +531,7 @@ struct RapidApp: App {
             // ⌘, → our Window-based Settings (replaces the default that
             // targeted the removed ``Settings`` scene).
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…") {
+                Button(i18n.text(zh: "设置…", en: "Settings…")) {
                     openWindow(id: "settings")
                 }
                 .keyboardShortcut(",", modifiers: .command)
@@ -540,13 +550,41 @@ struct RapidApp: App {
                 Toggle("Show Server Log", isOn: $showLogs)
                     .keyboardShortcut("l", modifiers: [.command, .shift])
             }
-            CommandMenu("Go") {
+            CommandMenu(i18n.text(zh: "前往", en: "Go")) {
                 Button("Command Palette…") {
                     NSApp.activate(ignoringOtherApps: true)
                     commandPaletteRequest.open()
                     openWindow(id: "main")
                 }
                 .keyboardShortcut("p", modifiers: .command)
+            }
+            CommandMenu(i18n.text(zh: "显示", en: "View")) {
+                Button(i18n.text(zh: "放大字体 (Ctrl+=)", en: "Zoom In (Ctrl+=)")) {
+                    fontSizeConfig.zoomIn()
+                }
+                .keyboardShortcut("=", modifiers: .control)
+
+                Button(i18n.text(zh: "缩小字体 (Ctrl+-)", en: "Zoom Out (Ctrl+-)")) {
+                    fontSizeConfig.zoomOut()
+                }
+                .keyboardShortcut("-", modifiers: .control)
+
+                Button(i18n.text(zh: "默认大小 (Ctrl+0)", en: "Actual Size (Ctrl+0)")) {
+                    fontSizeConfig.reset()
+                }
+                .keyboardShortcut("0", modifiers: .control)
+
+                Divider()
+
+                Button(i18n.text(zh: "放大字体 (⌘+)", en: "Zoom In (⌘+)")) {
+                    fontSizeConfig.zoomIn()
+                }
+                .keyboardShortcut("=", modifiers: .command)
+
+                Button(i18n.text(zh: "缩小字体 (⌘-)", en: "Zoom Out (⌘-)")) {
+                    fontSizeConfig.zoomOut()
+                }
+                .keyboardShortcut("-", modifiers: .command)
             }
             CommandMenu("体验") {
                 ForEach(YouziExperienceMode.allCases) { mode in
@@ -574,6 +612,7 @@ struct RapidApp: App {
                 .tint(RapidTheme.brandAmber)
                 .environment(chatViewModel)
                 .environment(youziProductModel)
+                .environment(youziSharingCenter)
                 .environment(sampling)
                 .environment(customInstructions)
                 .environment(memoryStore)
@@ -597,6 +636,10 @@ struct RapidApp: App {
                 .environment(mcpTools)
                 .environment(perfConfig)
                 .environment(deferredTelemetryConsent)
+                .environment(i18n)
+                .environment(fontSizeConfig)
+                .dynamicTypeSize(fontSizeConfig.size.dynamicTypeSize)
+                .environment(\.locale, i18n.locale)
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 900, height: 720)

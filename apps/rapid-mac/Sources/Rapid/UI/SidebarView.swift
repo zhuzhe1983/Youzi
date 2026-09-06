@@ -47,6 +47,9 @@ struct SidebarView: View {
     /// Optional in isolated snapshot fixtures; the shipping ContentView passes
     /// it so residency and the enforced memory ceiling remain visible globally.
     var server: ServerManager? = nil
+    @Environment(YouziI18nConfig.self) private var i18n: YouziI18nConfig?
+
+    private var isZh: Bool { i18n?.isChinese ?? true }
 
     /// The "now" the date buckets are computed against. Rolled forward by
     /// ``dayBoundaryTicker`` at each midnight so an open, untouched sidebar
@@ -220,13 +223,6 @@ struct SidebarView: View {
             }
 
             Spacer(minLength: 0)
-
-            if let server, !server.residency.models.isEmpty {
-                residencyFooter(
-                    server.residency,
-                    preferredAlias: server.servingAlias
-                )
-            }
         }
         .padding(.horizontal, RapidTheme.Space.sm)
         .padding(.vertical, RapidTheme.Space.md)
@@ -249,7 +245,9 @@ struct SidebarView: View {
         // mirrors the cached-model delete dialog. ``confirmationDialog`` over
         // ``alert`` so the cancel-role button is Return-bound.
         .confirmationDialog(
-            Self.deleteConfirmationTitle(for: pendingDeletion),
+            isZh
+                ? (pendingDeletion.map { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "删除此对话？" : "删除“\($0.title)”？" } ?? "删除此对话？")
+                : Self.deleteConfirmationTitle(for: pendingDeletion),
             isPresented: Binding(
                 get: { pendingDeletion != nil },
                 set: { if !$0 { pendingDeletion = nil } }
@@ -264,24 +262,24 @@ struct SidebarView: View {
             // `AXSheet` (description "alert") whose two `AXButton` children
             // report these identifiers. Keep that in mind if the deployment
             // target ever moves — the guarantee is empirical, not documented.
-            Button("Delete", role: .destructive) {
+            Button(isZh ? "删除" : "Delete", role: .destructive) {
                 chat.deleteConversation(conv.id)
                 pendingDeletion = nil
             }
             .accessibilityIdentifier("Sidebar.DeleteConversation.Confirm")
-            Button("Keep", role: .cancel) {
+            Button(isZh ? "保留" : "Keep", role: .cancel) {
                 pendingDeletion = nil
             }
             .accessibilityIdentifier("Sidebar.DeleteConversation.Keep")
         } message: { _ in
-            Text("This permanently deletes the conversation. It can't be undone.")
+            Text(isZh ? "这会永久删除此对话，且无法恢复。" : "This permanently deletes the conversation. It can't be undone.")
         }
         // Deleting a folder is NOT destructive to transcripts, so it gets a
         // plainly-worded confirmation rather than the destructive-delete
         // treatment above — the dialog's job here is to say what will happen
         // to the conversations, which is the only thing the user is unsure of.
         .confirmationDialog(
-            pendingFolderDeletion.map { "Delete “\($0.name)”?" } ?? "Delete folder?",
+            pendingFolderDeletion.map { isZh ? "删除文件夹“\($0.name)”？" : "Delete “\($0.name)”?" } ?? (isZh ? "删除文件夹？" : "Delete folder?"),
             isPresented: Binding(
                 get: { pendingFolderDeletion != nil },
                 set: { if !$0 { pendingFolderDeletion = nil } }
@@ -289,17 +287,17 @@ struct SidebarView: View {
             titleVisibility: .visible,
             presenting: pendingFolderDeletion
         ) { folder in
-            Button("Delete Folder", role: .destructive) {
+            Button(isZh ? "删除文件夹" : "Delete Folder", role: .destructive) {
                 chat.deleteFolder(folder.id)
                 pendingFolderDeletion = nil
             }
             .accessibilityIdentifier("Sidebar.DeleteFolder.Confirm")
-            Button("Keep", role: .cancel) {
+            Button(isZh ? "保留" : "Keep", role: .cancel) {
                 pendingFolderDeletion = nil
             }
             .accessibilityIdentifier("Sidebar.DeleteFolder.Keep")
         } message: { _ in
-            Text("The conversations in it are kept and move back into the date list.")
+            Text(isZh ? "文件夹中的对话会被保留，并移回日期列表中。" : "The conversations in it are kept and move back into the date list.")
         }
         .sheet(
             isPresented: Binding(
@@ -325,16 +323,16 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.lg) {
             Text(folderPromptTitle)
                 .font(RapidFont.bodyEmphasis)
-            TextField("Folder name", text: $folderNameDraft)
+            TextField(isZh ? "文件夹名称" : "Folder name", text: $folderNameDraft)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("Sidebar.Folder.NameField")
                 .onSubmit { if canCommitFolderPrompt { commitFolderPrompt() } }
             HStack(spacing: RapidTheme.Space.sm) {
                 Spacer()
-                Button("Cancel", role: .cancel) { folderPrompt = nil }
+                Button(isZh ? "取消" : "Cancel", role: .cancel) { folderPrompt = nil }
                     .keyboardShortcut(.cancelAction)
                     .accessibilityIdentifier("Sidebar.Folder.Prompt.Cancel")
-                Button("Save") { commitFolderPrompt() }
+                Button(isZh ? "保存" : "Save") { commitFolderPrompt() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canCommitFolderPrompt)
                     .accessibilityIdentifier("Sidebar.Folder.Prompt.Confirm")
@@ -346,8 +344,8 @@ struct SidebarView: View {
 
     private var folderPromptTitle: String {
         switch folderPrompt {
-        case .rename: return "Rename Folder"
-        case .create, .none: return "New Folder"
+        case .rename: return isZh ? "重命名文件夹" : "Rename Folder"
+        case .create, .none: return isZh ? "新建文件夹" : "New Folder"
         }
     }
 
@@ -743,7 +741,7 @@ struct SidebarView: View {
                         if section.conversations.isEmpty {
                             // A brand-new folder is empty, and an expanded
                             // group showing nothing reads as a rendering bug.
-                            Text("No conversations yet")
+                            Text(isZh ? "暂无对话" : "No conversations yet")
                                 .font(RapidFont.caption)
                                 .foregroundStyle(.tertiary)
                                 .padding(.horizontal, RapidTheme.Space.sm)
@@ -839,7 +837,7 @@ struct SidebarView: View {
             Button {
                 presentFolderPrompt(.rename(folder: folder))
             } label: {
-                Label("Rename Folder", systemImage: "pencil")
+                Label(isZh ? "重命名文件夹" : "Rename Folder", systemImage: "pencil")
             }
             .accessibilityIdentifier("Sidebar.Folder.Action.Rename")
             Divider()
@@ -847,7 +845,7 @@ struct SidebarView: View {
                 cancelRename()
                 pendingFolderDeletion = folder
             } label: {
-                Label("Delete Folder", systemImage: "trash")
+                Label(isZh ? "删除文件夹" : "Delete Folder", systemImage: "trash")
             }
             .accessibilityIdentifier("Sidebar.Folder.Action.Delete")
         }
@@ -871,7 +869,7 @@ struct SidebarView: View {
                 HStack(spacing: RapidTheme.Space.xs) {
                     Image(systemName: showArchived ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
-                    SectionHeader("Archived (\(archived.count))")
+                    SectionHeader(isZh ? "已归档 (\(archived.count))" : "Archived (\(archived.count))")
                 }
                 .contentShape(Rectangle())
             }
@@ -1048,14 +1046,14 @@ struct SidebarView: View {
                 renamingID = conv.id
                 renameSession &+= 1
             } label: {
-                Label("Rename", systemImage: "pencil")
+                Label(isZh ? "重命名" : "Rename", systemImage: "pencil")
             }
             .accessibilityIdentifier("Sidebar.Conversation.Action.Rename")
             moveToFolderMenu(conv)
             Button {
                 presentFolderPrompt(.create(fileConversationID: conv.id))
             } label: {
-                Label("Move to New Folder…", systemImage: "folder.badge.plus")
+                Label(isZh ? "新建文件夹并移动…" : "Move to New Folder…", systemImage: "folder.badge.plus")
             }
             .accessibilityIdentifier("Sidebar.Conversation.Action.MoveToNewFolder")
             Divider()
@@ -1064,7 +1062,7 @@ struct SidebarView: View {
                 chat.setConversationPinned(conv.id, !conv.isPinned)
             } label: {
                 Label(
-                    conv.isPinned ? "Unpin" : "Pin",
+                    conv.isPinned ? (isZh ? "取消置顶" : "Unpin") : (isZh ? "置顶" : "Pin"),
                     systemImage: conv.isPinned ? "pin.slash" : "pin"
                 )
             }
@@ -1074,7 +1072,7 @@ struct SidebarView: View {
                 chat.setConversationArchived(conv.id, !conv.isArchived)
             } label: {
                 Label(
-                    conv.isArchived ? "Unarchive" : "Archive",
+                    conv.isArchived ? (isZh ? "取消归档" : "Unarchive") : (isZh ? "归档" : "Archive"),
                     systemImage: conv.isArchived ? "tray.and.arrow.up" : "archivebox"
                 )
             }
@@ -1083,13 +1081,13 @@ struct SidebarView: View {
             Button {
                 ConversationExportPanel.export(conv, format: .markdown)
             } label: {
-                Label("Export Markdown…", systemImage: "doc.richtext")
+                Label(isZh ? "导出 Markdown…" : "Export Markdown…", systemImage: "doc.richtext")
             }
             .accessibilityIdentifier("Sidebar.Conversation.Action.Export.Markdown")
             Button {
                 ConversationExportPanel.export(conv, format: .json)
             } label: {
-                Label("Export JSON…", systemImage: "curlybraces")
+                Label(isZh ? "导出 JSON…" : "Export JSON…", systemImage: "curlybraces")
             }
             .accessibilityIdentifier("Sidebar.Conversation.Action.Export.JSON")
             Divider()
@@ -1106,7 +1104,7 @@ struct SidebarView: View {
             Button(role: .destructive) {
                 pendingDeletion = conv
             } label: {
-                Label("Delete", systemImage: "trash")
+                Label(isZh ? "删除" : "Delete", systemImage: "trash")
             }
             .accessibilityIdentifier("Sidebar.Conversation.Action.Delete")
         }
@@ -1145,12 +1143,12 @@ struct SidebarView: View {
                         cancelRename()
                         chat.moveConversation(conv.id, toFolder: nil)
                     } label: {
-                        Label("Remove from Folder", systemImage: "folder.badge.minus")
+                        Label(isZh ? "移出文件夹" : "Remove from Folder", systemImage: "folder.badge.minus")
                     }
                     .accessibilityIdentifier("Sidebar.Conversation.Action.MoveToFolder.Remove")
                 }
             } label: {
-                Label("Move to Folder", systemImage: "folder")
+                Label(isZh ? "移至文件夹" : "Move to Folder", systemImage: "folder")
             }
             .accessibilityIdentifier("Sidebar.Conversation.Action.MoveToFolder")
         }
@@ -1261,9 +1259,10 @@ struct SidebarView: View {
         isSelected: Bool,
         action: @escaping () -> Void
     ) -> some View {
+        let displayTitle = YouziLocalization.localized(title, isChinese: isZh)
         // Same reasoning as the history rows: leaving for New Chat / Launch
         // resolves a rename in progress instead of stranding it.
-        SidebarRow(
+        return SidebarRow(
             isSelected: isSelected,
             action: {
                 cancelRename()
@@ -1278,7 +1277,7 @@ struct SidebarView: View {
                     // the row above.
                     .font(.system(size: 13, weight: isSelected ? .semibold : .medium))
                     .frame(width: RapidTheme.Layout.iconSlot, alignment: .center)
-                Text(title)
+                Text(displayTitle)
                     .font(isSelected ? RapidFont.bodyEmphasis : RapidFont.body)
                     .lineLimit(1)
             }

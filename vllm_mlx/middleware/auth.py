@@ -7,6 +7,8 @@ import hmac
 # ``ipaddress`` is imported by ``_subnet_bucket`` (rate-limit helper).
 import ipaddress
 import logging
+import os
+import re
 import secrets
 import threading
 import time
@@ -295,8 +297,69 @@ def _verify_api_key_values(*api_keys: str | None) -> bool:
     return True
 
 
-async def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify API key if authentication is enabled."""
+# Anonymous mode is a desktop-only inference exception, never an admin bypass.
+_ANONYMOUS_ENDPOINTS = {
+    "GET": {"/v1/models", "/v1/audio/voices", "/v1/videos", "/v1/videos/capabilities"},
+    "POST": {
+        "/v1/chat/completions", "/v1/completions", "/v1/responses", "/v1/messages",
+        "/v1/embeddings", "/v1/audio/speech", "/v1/audio/transcriptions",
+        "/v1/audio/translations", "/v1/audio/music",
+        "/v1/images/generations", "/v1/images/edits", "/v1/videos",
+    },
+}
+
+
+def anonymous_inference_enabled(request: Request) -> bool:
+    """Per-process setting, overridden live by authenticated desktop Save.
+
+    App state keeps separate ASGI app instances isolated. Bare Request callers
+    and a freshly booted process retain the launch environment default.
+    """
+    app = request.scope.get("app")
+    state = getattr(app, "state", None)
+    value = getattr(state, "youzi_anonymous_inference", None)
+    return value if isinstance(value, bool) else (
+        os.environ.get("YOUZI_ALLOW_ANONYMOUS_INFERENCE") == "1"
+    )
+
+
+def allows_anonymous_inference(request: Request) -> bool:
+    """Fail closed for remote/browser requests, credentials and management APIs.
+
+    Inspect the actual socket peer, not forwarded headers. Requiring a loopback
+    Host also prevents DNS rebinding; Origin (including null) never opts in.
+    """
+    if not anonymous_inference_enabled(request):
+        return False
+    if any(name in request.headers for name in ("origin", "authorization", "x-api-key")):
+        return False
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        return False
+    try:
+        if request.client is None or not ipaddress.ip_address(request.client.host).is_loopback:
+            return False
+        host = request.url.hostname
+        if host != "localhost" and not ipaddress.ip_address(host or "").is_loopback:
+            return False
+    except ValueError:
+        return False
+    path = request.url.path
+    if path in _ANONYMOUS_ENDPOINTS.get(request.method, set()):
+        return True
+    # Only video job reads, not arbitrary /v1 prefix matching. Model residency,
+    # load/unload, cache and MCP configuration always require the internal key.
+    return request.method == "GET" and bool(
+        re.fullmatch(r"/v1/videos/[A-Za-z0-9_-]+(?:/content)?", path)
+    )
+
+
+async def verify_api_key(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    """Verify the internal key unless local anonymous inference was opted in."""
+    if allows_anonymous_inference(request):
+        return True
     bearer_key = credentials.credentials if credentials is not None else None
     return _verify_api_key_values(bearer_key)
 
@@ -306,6 +369,8 @@ async def verify_api_key_or_x_api_key(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ):
     """Verify OpenAI Bearer auth or Anthropic x-api-key auth."""
+    if allows_anonymous_inference(request):
+        return True
     bearer_key = credentials.credentials if credentials is not None else None
     # ``getlist`` so a duplicated ``x-api-key`` header can't smuggle an invalid
     # value past the gate alongside a valid twin — every present value is

@@ -57,8 +57,8 @@ struct AccessibilityIdentifierInventoryTests {
     func modelSwitchGuardPreferenceIdentifier() throws {
         try assertDeclared(
             [#""Settings.Models.ConfirmActiveRequestSwitchToggle""#],
-            in: "Sources/Rapid/UI/SettingsModelManagementPanel.swift",
-            surface: "Settings → Model Management switch guard preference"
+            in: "Sources/Rapid/UI/SettingsModelsPanel.swift",
+            surface: "Settings → Models → Service switch guard preference"
         )
     }
 

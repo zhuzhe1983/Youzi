@@ -10,11 +10,22 @@ enum YouziSimpleDestination: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    func localizedTitle(isChinese: Bool) -> String {
+        if isChinese { return title }
+        switch self {
+        case .newTask: return "New Task"
+        case .workspaces: return "Workspaces"
+        case .helpers: return "Experts · Skills · Connectors"
+        case .knowMe: return "About Me"
+        case .results: return "Deliverables"
+        }
+    }
+
     var title: String {
         switch self {
         case .newTask: "新任务"
         case .workspaces: "工作空间"
-        case .helpers: "帮手"
+        case .helpers: "专家·技能·连接"
         case .knowMe: "知我"
         case .results: "成果"
         }

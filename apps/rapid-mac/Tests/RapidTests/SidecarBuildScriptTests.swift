@@ -117,12 +117,20 @@ struct SidecarBuildScriptTests {
                 "The torch-deferral patch must abort on an unrecognised weight_loader.py.")
         #expect(script.contains("has no single-line def for"),
                 "The torch-deferral patch must abort when a target function moves.")
-        #expect(script.contains("mflux still pulls torch at import time"),
+        #expect(script.contains("plain image generation imports optional torch/cv2/matplotlib"),
                 "A post-patch import probe must prove the image lane needs no torch.")
         #expect(script.contains("mflux/models/common/pid_decoder/pid_weight_mapping.py"),
                 "The Qwen Image import path must defer PiD's optional torch checkpoint converter.")
-        #expect(script.contains(#"importlib.import_module("mflux.models.qwen.variants.txt2img.qwen_image")"#),
-                "The bundle build must prove qwen-image itself imports without torch.")
+        for module in [
+            "mflux.models.qwen.variants.txt2img.qwen_image",
+            "mflux.models.flux2.variants.txt2img.flux2_klein",
+            "mflux.models.flux2.variants.edit.flux2_klein_edit",
+            "mflux.models.z_image.variants.z_image",
+        ] {
+            #expect(script.contains(module), "Every shipped image lane must be import-probed.")
+        }
+        #expect(script.contains("importlib.import_module(module)"))
+        #expect(script.contains(#"any(name in sys.modules for name in ("torch", "cv2", "matplotlib"))"#))
         #expect(script.contains("SIDECAR_IMAGE_SMOKE_MODEL"),
                 "Release-candidate builds must opt into a real image-generation model.")
         #expect(script.contains("$REPO_ROOT/scripts/smoke-sidecar-image.py"),

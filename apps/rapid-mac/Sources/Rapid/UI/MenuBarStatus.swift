@@ -62,6 +62,7 @@ enum MenuBarStatus {
         case about
         case settings
         case quit
+        case copyAPIKey
     }
 
     /// A keyboard chord attached to a tray menu item. AppKit-free so
@@ -99,7 +100,11 @@ enum MenuBarStatus {
         hasUpdate: Bool,
         updateVersion: String,
         checking: Bool,
-        baseURL: String?
+        baseURL: String?,
+        resourceLine: String? = nil,
+        modelLines: [String] = [],
+        hasAPIKey: Bool = false,
+        isChinese: Bool = false
     ) -> [MenuBarItem] {
         var items: [MenuBarItem] = [
             .button(.open, title: "Open Youzi", enabled: true, shortcut: nil),
@@ -113,12 +118,14 @@ enum MenuBarStatus {
             .status(statusLine(state: state)),
         ]
 
+        if let resourceLine { items.append(.status(resourceLine)) }
+        items.append(contentsOf: modelLines.map { .status($0) })
         // Serve-type users live in the tray and never open the main
         // window; their highest-frequency action is copying the API
         // endpoint into their own agent/script. Only render the row when
         // the server is actually serving on a known host:port — otherwise
         // it would be a dead click for a user whose backend isn't up yet.
-        if let baseURL {
+        if baseURL != nil {
             items.append(
                 .button(
                     .copyEndpoint,
@@ -127,6 +134,9 @@ enum MenuBarStatus {
                     shortcut: nil
                 )
             )
+        }
+        if baseURL != nil {
+            items.append(.button(.copyAPIKey, title: "Copy API Key", enabled: hasAPIKey, shortcut: nil))
         }
         items.append(.separator)
 
@@ -167,6 +177,24 @@ enum MenuBarStatus {
                 shortcut: MenuShortcut(key: "q", modifiers: [.command])
             )
         )
-        return items
+        guard isChinese else { return items }
+        return items.map { item in
+            guard case .button(let action, let title, let enabled, let shortcut) = item else {
+                if case .status(let line) = item, line == statusLine(state: state) {
+                    return .status(line.replacingOccurrences(of: "Ready", with: "就绪")
+                        .replacingOccurrences(of: "Idle", with: "服务未启动")
+                        .replacingOccurrences(of: "Starting…", with: "启动中…")
+                        .replacingOccurrences(of: "Crashed", with: "服务异常")
+                        .replacingOccurrences(of: "Setup needed", with: "需要初始化"))
+                }
+                return item
+            }
+            let titles: [MenuBarAction: String] = [
+                .open: "打开柚子", .newChat: "新任务", .copyEndpoint: "复制模型服务地址",
+                .copyAPIKey: "复制 API Key", .update: "发现新版本 — v\(updateVersion)",
+                .checkForUpdates: "检查更新…", .about: "关于柚子…", .settings: "设置…", .quit: "退出柚子"
+            ]
+            return .button(action, title: titles[action] ?? title, enabled: enabled, shortcut: shortcut)
+        }
     }
 }

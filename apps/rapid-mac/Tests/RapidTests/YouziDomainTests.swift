@@ -43,7 +43,7 @@ struct YouziDomainTests {
             id: permissionID,
             taskID: taskID,
             kind: .connectorRead,
-            targetIdentifier: accountID.uuidString,
+            targetIdentifier: accountID.uuidString.lowercased(),
             purpose: "Read the selected calendar while preparing a plan",
             duration: .task,
             decision: .allowed,
@@ -124,6 +124,31 @@ struct YouziDomainTests {
             lastCheckedAt: updated,
             createdAt: created,
             updatedAt: updated
+        )
+        let package = YouziSkillPackageRecord(
+            id: skillID,
+            location: .bundled(resourcePath: "YouziSkills/calendar-planning"),
+            packageVersion: "1.2.0",
+            contentSHA256: String(repeating: "a", count: 64),
+            installedAt: created,
+            verifiedAt: updated,
+            updatedAt: updated
+        )
+        let binding = YouziConnectorBinding(
+            id: accountID,
+            runtime: .mcp(serverName: "calendar"),
+            createdAt: created,
+            updatedAt: updated
+        )
+        let grant = YouziPermissionGrant(
+            id: id("000000000023"),
+            permissionRecordID: permissionID,
+            taskID: taskID,
+            kind: .connectorRead,
+            targetIdentifier: accountID.uuidString.lowercased(),
+            targetRevision: 1,
+            duration: .task,
+            grantedAt: updated
         )
         let task = YouziTask(
             id: taskID,
@@ -212,6 +237,19 @@ struct YouziDomainTests {
             startedAt: created,
             finishedAt: updated
         )
+        let audit = YouziExecutionAuditEvent(
+            id: id("000000000024"),
+            sequence: 1,
+            taskID: taskID,
+            automationRunID: run.id,
+            permissionRecordID: permissionID,
+            permissionGrantID: grant.id,
+            connectionAccountID: accountID,
+            capabilityIdentifier: "calendar.list_events",
+            kind: .toolCompleted,
+            outcome: .succeeded,
+            occurredAt: updated
+        )
         let citation = YouziMemoryCitation(
             id: citationID,
             sourceType: .workspaceFile,
@@ -291,13 +329,17 @@ struct YouziDomainTests {
             projects: [project],
             helpers: [helper],
             skills: [skill],
+            skillPackages: [package],
             connectors: [connector],
             connectionAccounts: [account],
+            connectorBindings: [binding],
+            permissionGrants: [grant],
             files: [file],
             artifacts: [artifact],
             templates: [template],
             automations: [automation],
             automationRuns: [run],
+            executionAuditEvents: [audit],
             memoryNodes: [userNode, preferenceNode],
             memoryEdges: [edge],
             memoryCitations: [citation],
@@ -324,6 +366,10 @@ struct YouziDomainTests {
         #expect(restored.voiceSessions[0].conversationID == restored.tasks[0].conversationID)
         #expect(restored.helpers[0].source.version == "1.0.0")
         #expect(restored.automations[0].revision == 1)
+        #expect(restored.skillPackages[0].id == restored.skills[0].id)
+        #expect(restored.connectorBindings[0].id == restored.connectionAccounts[0].id)
+        #expect(restored.permissionGrants[0].permissionRecordID == restored.permissions[0].id)
+        #expect(restored.executionAuditEvents[0].automationRunID == restored.automationRuns[0].id)
     }
 
     @Test("Envelope pins format and schema version from the first write")

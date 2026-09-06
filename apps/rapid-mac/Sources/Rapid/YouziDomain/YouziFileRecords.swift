@@ -26,6 +26,46 @@ enum YouziFileLocation: Codable, Equatable, Sendable {
     case workspace(workspaceID: UUID, relativePath: String)
     case appManaged(relativePath: String)
     case securityScopedBookmark(data: Data, displayPath: String)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, workspaceID, relativePath, data, displayPath
+    }
+    private enum Kind: String, Codable { case workspace, appManaged, securityScopedBookmark }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .workspace:
+            self = .workspace(
+                workspaceID: try container.decode(UUID.self, forKey: .workspaceID),
+                relativePath: try container.decode(String.self, forKey: .relativePath)
+            )
+        case .appManaged:
+            self = .appManaged(relativePath: try container.decode(String.self, forKey: .relativePath))
+        case .securityScopedBookmark:
+            self = .securityScopedBookmark(
+                data: try container.decode(Data.self, forKey: .data),
+                displayPath: try container.decode(String.self, forKey: .displayPath)
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .workspace(workspaceID, relativePath):
+            try container.encode(Kind.workspace, forKey: .kind)
+            try container.encode(workspaceID, forKey: .workspaceID)
+            try container.encode(relativePath, forKey: .relativePath)
+        case let .appManaged(relativePath):
+            try container.encode(Kind.appManaged, forKey: .kind)
+            try container.encode(relativePath, forKey: .relativePath)
+        case let .securityScopedBookmark(data, displayPath):
+            try container.encode(Kind.securityScopedBookmark, forKey: .kind)
+            try container.encode(data, forKey: .data)
+            try container.encode(displayPath, forKey: .displayPath)
+        }
+    }
 }
 
 struct YouziFile: Identifiable, Codable, Equatable, Sendable {
@@ -74,5 +114,11 @@ struct YouziFile: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.lastVerifiedAt = lastVerifiedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, displayName, contentTypeIdentifier, byteCount, sha256, role
+        case originTaskID, projectID, location, availability, createdAt, updatedAt
+        case lastVerifiedAt
     }
 }

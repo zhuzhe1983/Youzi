@@ -4,6 +4,18 @@ import Testing
 
 @Suite("YouziSimpleWorkbench")
 struct YouziSimpleWorkbenchTests {
+    @Test("Sidebar content groups use whitespace while retaining header and footer rules")
+    func sidebarSectionSpacing() throws {
+        let source = try sourceFile("YouziSimpleShell.swift")
+        let sidebar = try #require(source.components(separatedBy: "private var sidebar: some View {").last)
+            .components(separatedBy: "private var brand: some View {")[0]
+        #expect(sidebar.components(separatedBy: "Divider()").count - 1 == 2)
+        #expect(sidebar.components(separatedBy: ".frame(height: sectionGap)").count - 1 == 2)
+        #expect(sidebar.contains("let sectionGap = RapidTheme.Space.md"))
+        #expect(sidebar.contains("- sectionGap * 2"))
+        #expect(sidebar.components(separatedBy: ".frame(height: sectionH)").count - 1 == 3)
+    }
+
     @Test("Bundled templates are versioned, unique, and editable-draft inputs")
     func bundledTemplateCatalog() throws {
         let catalog = try YouziBundledTemplateCatalog.loadBundled()
@@ -77,7 +89,7 @@ struct YouziSimpleWorkbenchTests {
         #expect(!source.contains("Conversation"))
         #expect(!source.contains("FileManager"))
         #expect(!source.contains("NSWorkspace"))
-        #expect(source.contains("Text(\"成果\")"))
+        #expect(source.contains("成果"))
         #expect(source.contains("还没有任务成果"))
         #expect(!source.contains("任务结果"))
     }
@@ -115,7 +127,7 @@ struct YouziSimpleWorkbenchTests {
         #expect(pages.contains("let workspaces: [YouziWorkspace]"))
         #expect(pages.contains("let projects: [YouziProject]"))
         #expect(pages.contains("let files: [YouziFile]"))
-        #expect(shell.contains("sidebarLabel(\"对话文件夹\")"))
+        #expect(shell.contains("sidebarLabel") && shell.contains("对话文件夹"))
     }
 
     @Test("Task submission links lifecycle before the shared chat runtime sends")

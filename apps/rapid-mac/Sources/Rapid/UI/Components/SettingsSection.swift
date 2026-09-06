@@ -175,17 +175,29 @@ extension View {
 /// of these run to three lines, and truncating a sentence that explains
 /// what a switch does is the wrong trade.
 struct SettingsRowLabel: View {
+    @Environment(YouziI18nConfig.self) private var i18n: YouziI18nConfig?
     let title: String
     var description: String? = nil
 
+    private var resolvedTitle: String {
+        let isZh = i18n?.isChinese ?? YouziI18nConfig.shared.isChinese
+        return YouziLocalization.localized(title, isChinese: isZh)
+    }
+
+    private var resolvedDescription: String? {
+        guard let description else { return nil }
+        let isZh = i18n?.isChinese ?? YouziI18nConfig.shared.isChinese
+        return YouziLocalization.localized(description, isChinese: isZh)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
-            Text(title)
+            Text(resolvedTitle)
                 .font(RapidFont.bodyEmphasis)
                 .foregroundStyle(RapidTheme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
-            if let description {
-                Text(description)
+            if let resolvedDescription {
+                Text(resolvedDescription)
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)

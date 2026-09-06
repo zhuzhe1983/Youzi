@@ -96,13 +96,21 @@ struct DownloadStrip: View {
     var body: some View {
         Group {
             if !orderedJobs.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(orderedJobs) { job in jobRow(job) }
                 }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 6)
-                .background(.bar)
-                .overlay(Divider(), alignment: .bottom)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(width: 340)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(RapidTheme.surfaceRaised)
+                        .shadow(color: Color.black.opacity(0.12), radius: 8, x: 0, y: 3)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(RapidTheme.hairlineStrong, lineWidth: 1)
+                )
             }
         }
         .task(id: completedCleanupKey) {
@@ -148,20 +156,31 @@ struct DownloadStrip: View {
                 trailingAffordance(for: job)
             }
         } else {
-            HStack(spacing: 8) {
-                statusGlyph(for: job)
-                    .frame(width: 16)
-                Text(job.alias)
-                    .scaledSystemFont(12, relativeTo: .caption, weight: .medium)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(progressDetail(for: job))
-                    .scaledSystemFont(11, relativeTo: .caption, design: .monospaced)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer()
-                trailingAffordance(for: job)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    statusGlyph(for: job)
+                        .frame(width: 16)
+                    Text(job.alias)
+                        .scaledSystemFont(12, relativeTo: .caption, weight: .medium)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(progressDetail(for: job))
+                        .scaledSystemFont(11, relativeTo: .caption, design: .monospaced)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    trailingAffordance(for: job)
+                }
+                if case .running = job.status {
+                    if let fraction = job.progress.progressFraction {
+                        ProgressView(value: fraction)
+                            .progressViewStyle(.linear)
+                    } else {
+                        ProgressView()
+                            .progressViewStyle(.linear)
+                    }
+                }
             }
         }
     }

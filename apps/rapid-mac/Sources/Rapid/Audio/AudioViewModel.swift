@@ -43,8 +43,25 @@ final class AudioViewModel {
 
     var speechText = ""
     var voices: [String] = []
-    var selectedVoice = ""
-    var speed = 1.0
+    private var voiceOverride: String?
+    private var speedOverride: Double?
+    private let generationSettings: ModelGenerationSettings
+    var selectedVoice: String {
+        get {
+            if let voiceOverride, voices.contains(voiceOverride) { return voiceOverride }
+            return generationSettings.voice(for: selectedSpeechAlias, available: voices)
+        }
+        set { voiceOverride = newValue.isEmpty ? nil : newValue }
+    }
+    var speed: Double {
+        get { speedOverride ?? generationSettings.speed }
+        set { speedOverride = newValue }
+    }
+
+    func useGenerationDefaults() {
+        voiceOverride = nil
+        speedOverride = nil
+    }
     var synthesizedAudio: SynthesizedAudio?
 
     var isLoadingVoices = false
@@ -55,9 +72,11 @@ final class AudioViewModel {
     private let server: ServerManager
     private let client: AudioClient
 
-    init(server: ServerManager, client: AudioClient = AudioClient()) {
+    init(server: ServerManager, client: AudioClient = AudioClient(),
+         generationSettings: ModelGenerationSettings = .shared) {
         self.server = server
         self.client = client
+        self.generationSettings = generationSettings
     }
 
     var transcriptionModels: [ModelEntry] {
@@ -128,12 +147,13 @@ final class AudioViewModel {
                 port: server.activePort,
                 bearer: server.activeBearer
             )
+            guard entry.alias == selectedSpeechAlias else { return false }
             guard !loaded.isEmpty else {
                 errorMessage = "This model did not report any available voices."
                 return false
             }
             voices = loaded
-            if !loaded.contains(selectedVoice) { selectedVoice = loaded[0] }
+            if let voiceOverride, !loaded.contains(voiceOverride) { self.voiceOverride = nil }
             return true
         } catch {
             errorMessage = Self.message(for: error)

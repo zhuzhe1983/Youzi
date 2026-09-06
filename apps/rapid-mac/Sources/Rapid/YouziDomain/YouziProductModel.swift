@@ -44,6 +44,10 @@ final class YouziProductModel: ChatConversationLifecycleObserver {
     var files: [YouziFile] { document.files }
     var artifacts: [YouziArtifact] { document.artifacts }
     var templates: [YouziTemplate] { document.templates }
+    var helpers: [YouziHelper] { document.helpers }
+    var skills: [YouziSkill] { document.skills }
+    var connectors: [YouziConnector] { document.connectors }
+    var connectionAccounts: [YouziConnectionAccount] { document.connectionAccounts }
 
     func task(id: UUID) -> YouziTask? { document.tasks.first { $0.id == id } }
     func workspace(id: UUID) -> YouziWorkspace? { document.workspaces.first { $0.id == id } }
@@ -51,7 +55,56 @@ final class YouziProductModel: ChatConversationLifecycleObserver {
     func file(id: UUID) -> YouziFile? { document.files.first { $0.id == id } }
     func artifact(id: UUID) -> YouziArtifact? { document.artifacts.first { $0.id == id } }
     func template(id: UUID) -> YouziTemplate? { document.templates.first { $0.id == id } }
+    func helper(id: UUID) -> YouziHelper? { document.helpers.first { $0.id == id } }
+    func skill(id: UUID) -> YouziSkill? { document.skills.first { $0.id == id } }
+    func connector(id: UUID) -> YouziConnector? { document.connectors.first { $0.id == id } }
     func file(for artifact: YouziArtifact) -> YouziFile? { file(id: artifact.fileID) }
+
+    /// Skills ordered by observed use, then recency, then name. Empty-use
+    /// skills still appear so a fresh install has a useful quick-start strip.
+    func rankedSkills(limit: Int = 8) -> [YouziSkill] {
+        let counts = Dictionary(grouping: document.tasks.flatMap(\.skillIDs), by: { $0 })
+            .mapValues(\.count)
+        return document.skills
+            .filter { $0.state == .active }
+            .sorted { lhs, rhs in
+                let leftCount = counts[lhs.id, default: 0]
+                let rightCount = counts[rhs.id, default: 0]
+                if leftCount != rightCount { return leftCount > rightCount }
+                switch (lhs.lastUsedAt, rhs.lastUsedAt) {
+                case let (left?, right?) where left != right:
+                    return left > right
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+                }
+            }
+            .prefix(max(0, limit))
+            .map { $0 }
+    }
+
+    func markSkillUsed(_ id: UUID, at date: Date = Date()) {
+        guard var skill = skill(id: id) else { return }
+        skill.lastUsedAt = date
+        skill.updatedAt = date
+        save(skill)
+    }
+
+    func seedMissingCapabilities(helpers: [YouziHelper], skills: [YouziSkill]) {
+        capture {
+            try store.update { doc in
+                for helper in helpers where !doc.helpers.contains(where: { $0.id == helper.id || $0.name == helper.name }) {
+                    doc.upsert(helper)
+                }
+                for skill in skills where !doc.skills.contains(where: { $0.id == skill.id || $0.name == skill.name }) {
+                    doc.upsert(skill)
+                }
+            }
+        }
+    }
 
     func refresh() {
         capture { try store.load() }
@@ -101,6 +154,18 @@ final class YouziProductModel: ChatConversationLifecycleObserver {
 
     func save(_ project: YouziProject) {
         capture { try store.update { $0.upsert(project) } }
+    }
+
+    func save(_ helper: YouziHelper) {
+        capture { try store.update { $0.upsert(helper) } }
+    }
+
+    func save(_ skill: YouziSkill) {
+        capture { try store.update { $0.upsert(skill) } }
+    }
+
+    func save(_ connector: YouziConnector) {
+        capture { try store.update { $0.upsert(connector) } }
     }
 
     @discardableResult

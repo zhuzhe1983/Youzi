@@ -64,11 +64,13 @@ struct TextKitMarkdownView: View, Equatable {
         .chatLinkSafetyFilter()
     }
 
-    private var options: MarkdownOptions { Self.options(basePointSize: basePointSize) }
+    private var options: MarkdownOptions { Self.options(basePointSize: basePointSize * YouziFontSizeConfig.shared.scale) }
 
     static func options(basePointSize: CGFloat) -> MarkdownOptions {
         var options = MarkdownOptions.assistantTranscript()
         options.textPointSize = basePointSize
+        options.codePointSize = basePointSize * (13.0 / 15.0)
+        options.codeLineHeight = (options.codePointSize * 1.23).rounded()
         options.textColor = .labelColor
         options.linkColor = NSColor(RapidTheme.linkLabel)
         return options

@@ -232,7 +232,7 @@ enum BrowseTool {
         while true {
             // Validate (incl. DNS) BEFORE connecting to this hop's host, then
             // pin the socket to the exact validated address.
-            let validatedAddresses = try await BrowseSSRFGuard.validatedAddresses(current)
+            let validatedAddresses = try await BrowseSSRFGuard.validatedAddresses(current, proxyCompatibility: BrowseNetworkPreference.proxyCompatibility())
             let hopURL = current
 
             // Hard wall-clock ceiling per hop — see ``requestTimeout``.

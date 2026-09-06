@@ -42,7 +42,8 @@ private struct ScaledSystemFontModifier: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        content.font(.system(size: size, weight: weight, design: design))
+        let scaledSize = max(9, round(size * YouziFontSizeConfig.shared.scale))
+        content.font(.system(size: scaledSize, weight: weight, design: design))
     }
 }
 

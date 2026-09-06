@@ -82,7 +82,7 @@ struct SettingsVisualFoundationTests {
         // update this literal alongside the enum when a feature adds one.
         var expected: Set<String> = [
             "modelManagement", "instructions", "memory", "tools", "connectors", "performance",
-            "experimentalFeatures", "appearance", "privacy", "app",
+            "experimentalFeatures", "appearance", "dataManagement", "privacy", "app",
         ]
         // `swift test` builds debug, so the debug-only category is present
         // here and absent from the shipped binary. Conditioning the literal
@@ -109,7 +109,7 @@ struct SettingsVisualFoundationTests {
     func categoryOrderIsStable() {
         var expectedOrder = [
             "modelManagement", "instructions", "memory", "tools", "connectors", "performance",
-            "experimentalFeatures", "appearance", "privacy", "app",
+            "experimentalFeatures", "appearance", "dataManagement", "privacy", "app",
         ]
         #if DEBUG
         expectedOrder.append("developer")
@@ -117,7 +117,7 @@ struct SettingsVisualFoundationTests {
         #expect(SettingsView.Category.allCases.map(\.rawValue) == expectedOrder)
 
         var expectedRail = [
-            "appearance", "instructions", "memory", "tools", "modelManagement", "privacy", "app",
+            "appearance", "instructions", "memory", "tools", "modelManagement", "dataManagement", "privacy", "app",
         ]
         #if DEBUG
         expectedRail.append("developer")
@@ -128,7 +128,7 @@ struct SettingsVisualFoundationTests {
         var expectedSectionCategories: [[String]] = [
             ["appearance"],
             ["instructions", "memory", "tools", "modelManagement"],
-            ["privacy"],
+            ["dataManagement", "privacy"],
             ["app"],
         ]
         #if DEBUG
@@ -145,13 +145,13 @@ struct SettingsVisualFoundationTests {
         #expect(SettingsView.Category.memory.title == "记忆")
         #expect(SettingsView.Category.tools.title == "智能体")
         #expect(SettingsView.Category.modelManagement.title == "模型")
-        #expect(SettingsView.Category.privacy.title == "数据与安全")
+        #expect(SettingsView.Category.privacy.title == "安全中心")
         #expect(SettingsView.Category.app.title == "关于")
         #expect(SettingsView.Category.connectors.title == "连接器")
         #expect(SettingsView.Category.performance.title == "性能")
         #expect(SettingsView.Category.experimentalFeatures.title == "实验功能")
 
-        #expect(SettingsView.Category.railDestination(for: .experimentalFeatures) == .appearance)
+        #expect(SettingsView.Category.railDestination(for: .experimentalFeatures) == .modelManagement)
         #expect(SettingsView.Category.railDestination(for: .connectors) == .tools)
         #expect(SettingsView.Category.railDestination(for: .performance) == .modelManagement)
         #expect(SettingsView.Category.railDestination(for: .appearance) == .appearance)
@@ -159,10 +159,10 @@ struct SettingsVisualFoundationTests {
         // Arrow keys walk the visible rail. Hidden cases first normalize
         // through ``railDestination(for:)``.
         #expect(SettingsView.category(.connectors, movedBy: 1) == .modelManagement)
-        #expect(SettingsView.category(.performance, movedBy: 1) == .privacy)
-        #expect(SettingsView.category(.experimentalFeatures, movedBy: 1) == .instructions)
+        #expect(SettingsView.category(.performance, movedBy: 1) == .dataManagement)
+        #expect(SettingsView.category(.experimentalFeatures, movedBy: 1) == .dataManagement)
         #expect(SettingsView.category(.appearance, movedBy: -1) == nil)
-        #expect(SettingsView.category(.modelManagement, movedBy: 1) == .privacy)
+        #expect(SettingsView.category(.modelManagement, movedBy: 1) == .dataManagement)
         #expect(SettingsView.category(.modelManagement, movedBy: -1) == .tools)
         #if DEBUG
         #expect(SettingsView.category(.app, movedBy: 1) == .developer)
@@ -223,7 +223,8 @@ struct SettingsVisualFoundationTests {
     func persistedKeysAreUnchanged() throws {
         // The migration repainted controls; it must not have moved where
         // any of them reads or writes.
-        let panel = try strippedSource("Sources/Rapid/UI/SettingsModelManagementPanel.swift")
+        // Controls moved to focused tabs, but retain their persisted keys.
+        let panel = try strippedSource("Sources/Rapid/UI/SettingsModelsPanel.swift")
         #expect(panel.contains("@AppStorage(ModelPickerVisibility.showAllStorageKey)"))
         #expect(panel.contains("@AppStorage(AutoStartPreference.storageKey)"))
     }

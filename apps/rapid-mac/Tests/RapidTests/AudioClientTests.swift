@@ -12,6 +12,46 @@ struct AudioClientTests {
         return AudioClient(session: URLSession(configuration: config))
     }
 
+    @Test("Omitted speech parameters resolve saved voice against real model voices")
+    func persistedSpeechDefaults() async throws {
+        let name = "AudioDefaultsWire.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        var client = makeClient()
+        client.generationDefaults = ModelGenerationDefaults(defaults: defaults)
+        defaults.set(["speech-model": "Serena"], forKey: ModelGenerationDefaults.Key.voices)
+        defaults.set(1.25, forKey: ModelGenerationDefaults.Key.speed)
+        AudioStubProtocol.response = (200, [:], Data(#"{"voices":["Vivian","Serena"]}"#.utf8))
+        _ = try await client.synthesize(text: "Hello", model: "speech-model", port: 8123, bearer: "test")
+        #expect(AudioStubProtocol.requests.map { $0.url?.path } == ["/v1/audio/voices", "/v1/audio/speech"])
+        let body = try JSONSerialization.jsonObject(with: AudioStubProtocol.bodies.last!) as? [String: Any]
+        #expect(body?["voice"] as? String == "Serena")
+        #expect(body?["speed"] as? Double == 1.25)
+        #expect(AudioStubProtocol.requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer test" })
+    }
+
+    @MainActor
+    @Test("Settings preview sends first speech request on a ready but not yet resident lazy lane")
+    func settingsPreviewLazyLane() async throws {
+        let client = makeClient()
+        AudioStubProtocol.response = (200, ["Content-Type": "audio/wav"], Data("RIFFtest".utf8))
+        let server = ServerManager(testingState: .ready(alias: "chat-model"), activeBearer: "test-bearer")
+        #expect(!server.isModelResident("qwen3-tts"))
+        #expect(server.isVoiceLaneReady(for: "qwen3-tts"))
+        let data = try await SettingsVoicePreview.synthesizeOnReadyLane(
+            server: server, alias: "qwen3-tts", text: "你好，柚子。", voice: "Vivian", speed: 1.1, client: client
+        )
+        #expect(data == Data("RIFFtest".utf8))
+        #expect(server.servingAlias == "chat-model")
+        let request = try #require(AudioStubProtocol.requests.first)
+        #expect(request.url?.path == "/v1/audio/speech")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-bearer")
+        let body = try JSONSerialization.jsonObject(with: #require(AudioStubProtocol.bodies.first)) as? [String: Any]
+        #expect(body?["model"] as? String == "qwen3-tts")
+        #expect(body?["voice"] as? String == "Vivian")
+        #expect(body?["speed"] as? Double == 1.1)
+    }
+
     @Test("Transcription uploads multipart audio with model and bearer")
     @MainActor
     func transcriptionRequest() async throws {

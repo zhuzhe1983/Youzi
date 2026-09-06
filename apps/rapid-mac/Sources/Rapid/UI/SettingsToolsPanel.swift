@@ -16,6 +16,7 @@ struct SettingsToolsPanel: View {
     @Environment(WebSearchConfig.self) private var webSearch
     @Environment(BrowseApprovalStore.self) private var browseApproval
     @Environment(ServerManager.self) private var server
+    @Environment(YouziI18nConfig.self) private var i18n
 
     /// Draft of the API key field. Committed on Return or Save so we don't
     /// write to the Keychain on every keystroke.
@@ -45,22 +46,24 @@ struct SettingsToolsPanel: View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             if showsPageHeader {
                 SectionHeader(
-                    "Tools",
-                    subtitle: "Tools the model can call during a chat. Turn one off and it is never offered — and never runs, even if the model asks for it by name.",
+                    i18n.text(zh: "工具与智能体", en: "Tools"),
+                    subtitle: i18n.text(
+                        zh: "模型在对话中可调用的内置工具。关闭后模型将不再提供该能力，即使主动调用也会被拦截。",
+                        en: "Tools the model can call during a chat. Turn one off and it is never offered — and never runs, even if the model asks for it by name."
+                    ),
                     emphasis: .page
                 )
             }
             toolsSection
             webSearchSection
             browseSection
-            embeddedAPISection
         }
     }
 
     // MARK: - Available tools
 
     private var toolsSection: some View {
-        SettingsSection("Available tools") {
+        SettingsSection(i18n.text(zh: "可用工具", en: "Available tools")) {
             let definitions = chat.builtinDefinitions
             ForEach(Array(definitions.enumerated()), id: \.element.function.name) { index, def in
                 if index > 0 { SettingsRowDivider() }
@@ -99,8 +102,8 @@ struct SettingsToolsPanel: View {
                         .frame(width: RapidTheme.Layout.iconSlot)
                         .accessibilityHidden(true)
                     SettingsRowLabel(
-                        title: Self.displayName(for: name),
-                        description: Self.summary(for: name, fallback: def.function.description)
+                        title: Self.displayName(for: name, isChinese: i18n.isChinese),
+                        description: Self.summary(for: name, fallback: def.function.description, isChinese: i18n.isChinese)
                     )
                 }
             }
@@ -197,7 +200,15 @@ struct SettingsToolsPanel: View {
     /// Human name for a built-in tool. Falls back to the raw identifier
     /// so a tool added to the registry without an entry here still shows
     /// something true rather than nothing.
-    static func displayName(for toolName: String) -> String {
+    static func displayName(for toolName: String, isChinese: Bool = false) -> String {
+        if isChinese {
+            switch toolName {
+            case "web_search": return "联网搜索"
+            case "browse":     return "浏览网页"
+            case "weather":    return "天气"
+            default:           return toolName
+            }
+        }
         switch toolName {
         case "web_search": return "Web Search"
         case "browse":     return "Browse Web Page"
@@ -209,7 +220,19 @@ struct SettingsToolsPanel: View {
     /// One line on what the tool does, in the user's terms. The engine's
     /// own description is written FOR THE MODEL — it carries pagination
     /// offsets and calling conventions — so it stays in the disclosure.
-    static func summary(for toolName: String, fallback: String) -> String {
+    static func summary(for toolName: String, fallback: String, isChinese: Bool = false) -> String {
+        if isChinese {
+            switch toolName {
+            case "web_search":
+                return "在回答需要最新信息时在网络上搜索。"
+            case "browse":
+                return "打开并阅读指定网页内容。每次访问均需确认。"
+            case "weather":
+                return "查询指定地点的实时天气与预报。"
+            default:
+                return fallback
+            }
+        }
         switch toolName {
         case "web_search":
             return "Looks up current information on the web when a question needs it."
@@ -276,7 +299,7 @@ struct SettingsToolsPanel: View {
                                 )
                         }
                     }
-                    .pickerStyle(.radioGroup)
+                    .compactRadioGroup()
                     .labelsHidden()
                     .controlSize(.small)
                     .tint(nil)
@@ -473,103 +496,6 @@ struct SettingsToolsPanel: View {
     }
 
     // MARK: - Embedded API security
-
-    private var embeddedAPISection: some View {
-        SettingsSection(
-            "Embedded API security",
-            subtitle: "The Desktop engine always requires a bearer key and stays bound to 127.0.0.1. Choose when that key rotates."
-        ) {
-            VStack(alignment: .leading, spacing: RapidTheme.Space.sm) {
-                RapidSegmentedControl(
-                    selection: Binding(
-                        get: { server.embeddedBearerLifetime },
-                        set: { server.setEmbeddedBearerLifetime($0) }
-                    ),
-                    options: [
-                        .init(
-                            value: .perLaunch,
-                            title: "Every start",
-                            identifier: "Settings.Tools.EmbeddedAPI.PerLaunch"
-                        ),
-                        .init(
-                            value: .daily,
-                            title: "Daily",
-                            identifier: "Settings.Tools.EmbeddedAPI.Daily"
-                        ),
-                        .init(
-                            value: .explicit,
-                            title: "Until I rotate",
-                            identifier: "Settings.Tools.EmbeddedAPI.Explicit"
-                        ),
-                    ],
-                    accessibilityLabel: "Embedded API key rotation"
-                )
-                .accessibilityIdentifier("Settings.Tools.EmbeddedAPI.Lifetime")
-
-                Text(server.embeddedBearerLifetime.summary)
-                    .font(RapidFont.caption)
-                    .foregroundStyle(RapidTheme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                statusCopy
-
-                if server.embeddedBearerLifetime != .perLaunch {
-                    Button("Rotate now") {
-                        server.rotateEmbeddedBearerNow()
-                    }
-                    .accessibilityIdentifier("Settings.Tools.EmbeddedAPI.RotateNow")
-
-                    if case .ready = server.state {
-                        Text("Restart the model to make a newly rotated key active.")
-                            .font(RapidFont.caption)
-                            .foregroundStyle(RapidTheme.textSecondary)
-                            .accessibilityIdentifier("Settings.Tools.EmbeddedAPI.RestartNotice")
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var statusCopy: some View {
-        switch server.embeddedBearerStatus {
-        case .notMaterialized:
-            EmptyView()
-        case .materialized(_, let isPersisted, let issue):
-            if let issue {
-                VStack(alignment: .leading, spacing: RapidTheme.Space.xs) {
-                    Text(Self.embeddedBearerIssueCopy(issue))
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.statusError)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("Settings.Tools.EmbeddedAPI.DegradedNotice")
-
-                    if issue == .deleteFailed,
-                       server.embeddedBearerLifetime == .perLaunch {
-                        Button("Retry Keychain cleanup") {
-                            server.retryEmbeddedBearerCleanup()
-                        }
-                        .accessibilityIdentifier("Settings.Tools.EmbeddedAPI.RetryCleanup")
-                    }
-                }
-            } else if server.embeddedBearerLifetime == .perLaunch {
-                Text("No embedded API key is stored in your Keychain.")
-                    .font(RapidFont.caption)
-                    .foregroundStyle(RapidTheme.textSecondary)
-                    .accessibilityIdentifier("Settings.Tools.EmbeddedAPI.ClearedNotice")
-            } else if isPersisted {
-                Text("The current key is stored in your Keychain.")
-                    .font(RapidFont.caption)
-                    .foregroundStyle(RapidTheme.textSecondary)
-                    .accessibilityIdentifier("Settings.Tools.EmbeddedAPI.PersistedNotice")
-            } else {
-                Text("This model is using a one-time key.")
-                    .font(RapidFont.caption)
-                    .foregroundStyle(RapidTheme.textSecondary)
-                    .accessibilityIdentifier("Settings.Tools.EmbeddedAPI.OneTimeNotice")
-            }
-        }
-    }
 
     static func embeddedBearerIssueCopy(_ issue: EmbeddedBearerStorageIssue) -> String {
         switch issue {

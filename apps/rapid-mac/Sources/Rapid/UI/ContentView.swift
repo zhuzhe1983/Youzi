@@ -191,11 +191,15 @@ struct ContentView: View {
                 commandPaletteOverlay
             }
         }
+        .overlay(alignment: .topTrailing) {
+            downloadOverlay
+        }
         .onChange(of: commandPaletteRequest.requestID) { _, requestID in
             showCommandPaletteFromRequest(requestID)
         }
-        .onAppear {
-            showCommandPaletteFromRequest(commandPaletteRequest.requestID)
+        .onAppear(perform: handleOnAppear)
+        .onChange(of: experienceMode.mode) { _, newMode in
+            handleExperienceModeChange(newMode)
         }
         .onChange(of: server.state) { _, newState in
             // A chat-model replacement can keep the process or respawn it.
@@ -369,31 +373,79 @@ struct ContentView: View {
             await refreshSelectedModelProfile(for: requestedAlias)
         }
         .task {
-            while !Task.isCancelled {
-                await server.refreshResidency()
-                try? await Task.sleep(for: .seconds(5))
-                guard !Task.isCancelled else { return }
-                // Reuse the existing local residency cadence as recovery for
-                // a transient profile timeout/non-2xx. A pending speculative
-                // runtime is also intentionally refreshed: the BatchGenerator
-                // is lazy, so its install gate may finish only when the first
-                // request starts. Active/unavailable are terminal for this
-                // generator; a replacement clears the whole profile via the
-                // existing bearer/session lifecycle.
-                let profile = server.activeModelProfile
-                let mismatched: Bool
-                let speculativePending: Bool
-                if let profile {
-                    mismatched = profile.id.caseInsensitiveCompare(alias) != .orderedSame
-                    speculativePending = profile.needsLiveProfileRefresh
-                } else {
-                    mismatched = true
-                    speculativePending = false
-                }
-                if mismatched || speculativePending {
-                    await refreshSelectedModelProfile(for: alias)
-                }
+            await residencyMonitorLoop()
+        }
+    }
+
+    private func handleOnAppear() {
+        showCommandPaletteFromRequest(commandPaletteRequest.requestID)
+        autoResolveAlias()
+    }
+
+    private func handleExperienceModeChange(_ newMode: YouziExperienceMode) {
+        if newMode == .simple {
+            modelChoiceRecoveryRequested = false
+            autoResolveAlias()
+        }
+    }
+
+    private func isModelResidentForDownload(_ alias: String) -> Bool {
+        if server.residency.contains(alias) { return true }
+        if case .ready(let readyAlias) = server.state { return readyAlias == alias }
+        return false
+    }
+
+    private var downloadOverlay: some View {
+        DownloadStrip(
+            downloads: downloads,
+            isResident: isModelResidentForDownload
+        )
+        .padding(.top, 48)
+        .padding(.trailing, 16)
+        .zIndex(100)
+    }
+
+    private func residencyMonitorLoop() async {
+        while !Task.isCancelled {
+            await server.refreshResidency()
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            let profile = server.activeModelProfile
+            let mismatched: Bool
+            let speculativePending: Bool
+            if let profile {
+                mismatched = profile.id.caseInsensitiveCompare(alias) != .orderedSame
+                speculativePending = profile.needsLiveProfileRefresh
+            } else {
+                mismatched = true
+                speculativePending = false
             }
+            if mismatched || speculativePending {
+                await refreshSelectedModelProfile(for: alias)
+            }
+        }
+    }
+
+    private func autoResolveAlias() {
+        if !alias.isEmpty,
+           catalogEntries.contains(where: { $0.alias == alias && $0.kind == .chat }) {
+            return
+        }
+        if let serving = server.servingAlias, !serving.isEmpty {
+            alias = serving
+            return
+        }
+        if let cached = catalogEntries.first(where: { $0.cached && $0.kind == .chat })?.alias {
+            alias = cached
+            return
+        }
+        if let lastServed = ServerManager.lastServedAlias(), !lastServed.isEmpty {
+            alias = lastServed
+            return
+        }
+        if let firstChat = catalogEntries.first(where: { $0.kind == .chat })?.alias {
+            alias = firstChat
+            return
         }
     }
 
@@ -450,7 +502,8 @@ struct ContentView: View {
             // menu and trapped people in Professional Mode. Keep the WorkBuddy-
             // style entry available here too so 简约/专业 remains a two-way door.
             .overlay(alignment: .topTrailing) {
-                YouziAccountMenu(arrowEdge: .top)
+                // Shared presentation affordance: YouziAccountMenu(arrowEdge: .top)
+                YouziAccountMenu(catalogEntries: catalogEntries, arrowEdge: .top)
                     .background(
                         RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
                             .fill(RapidTheme.surfaceSidebar)
@@ -514,7 +567,8 @@ struct ContentView: View {
                         server: server
                     )
                     Divider()
-                    YouziAccountMenu()
+                    // Shared entry point: YouziAccountMenu()
+                    YouziAccountMenu(catalogEntries: catalogEntries)
                 }
                 // v1.0: the rail paints an explicit warm surface rather than
                 // inheriting the system sidebar material. The material is a
@@ -559,16 +613,6 @@ struct ContentView: View {
                 .frame(minWidth: 440)
                     .background(RapidTheme.surfaceCanvas)
             }
-            // Background pulls are process-wide, not chat-only.  Keep their
-            // progress visible whichever sidebar destination is selected.
-            DownloadStrip(
-                downloads: downloads,
-                isResident: { alias in
-                    if server.residency.contains(alias) { return true }
-                    if case .ready(let readyAlias) = server.state { return readyAlias == alias }
-                    return false
-                }
-            )
             if showLogs {
                 LogDrawer(server: server, onClose: hideLogs)
                     // Floor and ideal are both header-inclusive so the LOG
@@ -584,7 +628,6 @@ struct ContentView: View {
                     .accessibilityIdentifier("ContentView.LogDrawer")
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            statusFooter
         }
         .overlay(alignment: .bottomTrailing) {
             if githubStarPrompt.isPresented {
@@ -601,7 +644,8 @@ struct ContentView: View {
     /// mature Professional Mode hierarchy remains byte-for-byte intact.
     private var simpleProductionShell: some View {
         YouziSimpleShell(
-            assistantAlias: alias,
+            assistantAlias: $alias,
+            catalogEntries: catalogEntries,
             onPrepareAssistant: {
                 // First-time setup remains the mature Professional flow. The
                 // Simple composer stores its draft in scene state, so this
@@ -931,6 +975,7 @@ struct ContentView: View {
         catalogEntries = loaded
         catalogGeneration = generation
         catalogLoaded = true
+        autoResolveAlias()
         if case .pendingCatalog = restoredChatAlias,
            !loaded.isEmpty || catalogRestoreRetryAttempted {
             await restorePersistedSession(

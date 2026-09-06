@@ -84,6 +84,11 @@ enum MemoryProbe {
     /// out of the view so the contract can be pinned by tests —
     /// the labelling style is part of the UI promise, not an
     /// incidental detail.
+    static func formatPercentLabel(_ snapshot: Snapshot) -> String {
+        let percent = Int((snapshot.usedRatio * 100.0).rounded())
+        return "\(max(0, min(100, percent)))%"
+    }
+
     static func formatLabel(_ snapshot: Snapshot) -> String {
         let usedGB = Double(snapshot.usedBytes) / Double(1 << 30)
         let totalGB = Double(snapshot.totalBytes) / Double(1 << 30)
