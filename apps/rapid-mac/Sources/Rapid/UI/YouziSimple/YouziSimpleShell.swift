@@ -555,6 +555,12 @@ struct YouziSimpleShell: View {
                     if let file = productModel.file(for: artifact) {
                         sharing.shareFile(file, product: productModel)
                     }
+                },
+                mediaLease: { artifact in
+                    guard let file = productModel.file(for: artifact) else {
+                        throw YouziLifecycleError.artifactNotFound(artifact.id)
+                    }
+                    return try await productModel.mediaLease(id: file.id)
                 }
             )
         }

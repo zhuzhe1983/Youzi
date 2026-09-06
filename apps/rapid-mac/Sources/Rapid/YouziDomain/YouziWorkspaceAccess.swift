@@ -154,6 +154,7 @@ final class YouziWorkspaceAccessCoordinator: @unchecked Sendable {
     func withAccess<Result>(
         to workspace: YouziWorkspace,
         relativePath: String = "",
+        retainingScope: ((URL, YouziSecurityScopedBookmarkAccess) -> Void)? = nil,
         _ operation: (URL, YouziWorkspaceLocation?) throws -> Result
     ) throws -> Result {
         switch workspace.location {
@@ -194,6 +195,7 @@ final class YouziWorkspaceAccessCoordinator: @unchecked Sendable {
             } else {
                 refreshed = nil
             }
+            retainingScope?(resolved.url, bookmarks)
             return try operation(target, refreshed)
         }
     }

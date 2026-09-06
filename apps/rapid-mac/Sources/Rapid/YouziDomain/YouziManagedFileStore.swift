@@ -139,6 +139,7 @@ final class YouziManagedFileStore: @unchecked Sendable {
     func withAccess<Result>(
         to file: YouziFile,
         workspaces workspaceRecords: [UUID: YouziWorkspace],
+        retainingScope: ((URL, YouziSecurityScopedBookmarkAccess) -> Void)? = nil,
         _ operation: (URL, YouziFileLocation?) throws -> Result
     ) throws -> Result {
         switch file.location {
@@ -153,7 +154,7 @@ final class YouziManagedFileStore: @unchecked Sendable {
             guard let workspace = workspaceRecords[workspaceID] else {
                 throw YouziManagedFileStoreError.workspaceNotFound(workspaceID)
             }
-            return try workspaces.withAccess(to: workspace, relativePath: relativePath) {
+            return try workspaces.withAccess(to: workspace, relativePath: relativePath, retainingScope: retainingScope) {
                 url, refreshedWorkspaceLocation in
                 let refreshedFileLocation: YouziFileLocation?
                 if let refreshedWorkspaceLocation {
@@ -193,6 +194,7 @@ final class YouziManagedFileStore: @unchecked Sendable {
             } else {
                 refreshed = nil
             }
+            retainingScope?(resolved.url, bookmarks)
             return try operation(resolved.url, refreshed)
         }
     }

@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// A domain-backed list of deliverables with "My Files" layout.
-/// Artifact bytes and filesystem access stay behind the product model;
-/// this view only presents records and reports explicit user actions.
+/// Domain records and injected media leases keep filesystem ownership outside UI.
 struct YouziSimpleResultsPage: View {
     @Environment(YouziI18nConfig.self) private var i18n
     let artifacts: [YouziArtifact]
@@ -11,80 +9,144 @@ struct YouziSimpleResultsPage: View {
     let onRevealInFinder: (YouziArtifact) -> Void
     let onExport: (YouziArtifact) -> Void
     var onShare: ((YouziArtifact) -> Void)? = nil
+    let mediaLease: (YouziArtifact) async throws -> YouziMediaFileLease
 
-    @State private var selectedKind: YouziArtifactKind? = nil
+    @State private var selectedKind: YouziArtifactKind?
     @State private var searchText = ""
-    @State private var viewMode: ViewMode = .list
-
-    enum ViewMode: String, CaseIterable, Identifiable {
-        case list = "list"
-        case previewGrid = "previewGrid"
-
-        var id: String { rawValue }
-    }
+    @AppStorage("youzi.results.cardSize") private var cardSize: YouziArtifactCardSize = .medium
+    @State private var playback = YouziArtifactPlayback()
 
     var body: some View {
-        VStack(spacing: 0) {
-            headerSection
-                .padding(.horizontal, RapidTheme.Space.xl)
-                .padding(.top, RapidTheme.Space.xl)
-                .padding(.bottom, RapidTheme.Space.md)
-
-            Divider()
-
-            filterToolbar
-                .padding(.horizontal, RapidTheme.Space.xl)
-                .padding(.vertical, RapidTheme.Space.sm)
-
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: RapidTheme.Space.lg) {
+        ZStack {
+            VStack(spacing: 0) {
+                headerSection.padding(.horizontal, RapidTheme.Space.xl)
+                    .padding(.top, RapidTheme.Space.xl).padding(.bottom, RapidTheme.Space.md)
+                filterToolbar.padding(.horizontal, RapidTheme.Space.xl)
+                    .padding(.vertical, RapidTheme.Space.sm)
+                ScrollView {
                     if sortedArtifacts.isEmpty {
                         emptyState
                     } else if filteredArtifacts.isEmpty {
                         noMatchState
                     } else {
-                        switch viewMode {
-                        case .list:
-                            listView
-                        case .previewGrid:
-                            previewGridView
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: cardSize.edge), spacing: 18, alignment: .top)], spacing: 22) {
+                            ForEach(filteredArtifacts) { artifact in
+                                artifactCard(artifact)
+                            }
                         }
+                        .padding(RapidTheme.Space.xl)
                     }
                 }
-                .padding(RapidTheme.Space.xl)
+                if let title = playback.audioTitle {
+                    HStack(spacing: 12) {
+                        Image(systemName: "waveform").foregroundStyle(RapidTheme.brandPrimary)
+                        Text(title).font(RapidFont.secondary).lineLimit(1)
+                        Spacer()
+                        Button { playback.toggleAudio() } label: {
+                            Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
+                        }
+                        .help(i18n.text(zh: "播放 / 暂停", en: "Play / Pause"))
+                        Button { playback.stop() } label: { Image(systemName: "xmark") }
+                            .help(i18n.text(zh: "停止播放", en: "Stop playback"))
+                    }
+                    .buttonStyle(.plain).padding(14)
+                    .background(RapidTheme.surfaceSidebar)
+                }
+            }
+            .allowsHitTesting(playback.preview == nil)
+            .accessibilityHidden(playback.preview != nil)
+            if let preview = playback.preview {
+                YouziArtifactMediaOverlay(preview: preview, onClose: { playback.stop() })
+                    .id(preview.id).zIndex(1)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .alert(i18n.text(zh: "无法预览文件", en: "Unable to preview file"), isPresented: Binding(
+            get: { playback.failed }, set: { playback.failed = $0 }
+        )) {
+            Button(i18n.text(zh: "好", en: "OK"), role: .cancel) {}
+        } message: {
+            Text(i18n.text(zh: "文件可能已移动、无访问权限或格式不受支持。可以通过卡片菜单在 Finder 中查看。",
+                           en: "The file may have moved, require access, or use an unsupported format. Use the card menu to reveal it in Finder."))
+        }
+        .onDisappear { playback.stop() }
         .accessibilityIdentifier("YouziSimple.Surface.results")
     }
 
     private var headerSection: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
-                Text(i18n.text(zh: "成果", en: "Deliverables"))
-                    .font(RapidFont.pageTitle)
-                Text(i18n.text(
-                    zh: "快捷查看任务成果，上传到云端网盘开启跨端同步。",
-                    en: "Quickly view task deliverables and sync cross-device with cloud storage."
-                ))
-                .font(RapidFont.secondary)
-                .foregroundStyle(RapidTheme.textSecondary)
+        HStack(alignment: .center, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(i18n.text(zh: "成果", en: "Deliverables")).font(RapidFont.pageTitle)
+                Text(i18n.text(zh: "集中查看本地成果，点击预览或播放。", en: "Your local deliverables. Click to preview or play."))
+                    .font(RapidFont.secondary).foregroundStyle(RapidTheme.textSecondary)
             }
             Spacer(minLength: 0)
-
-            Picker("View Mode", selection: $viewMode) {
-                Image(systemName: "list.bullet")
-                    .tag(ViewMode.list)
-                    .accessibilityLabel(i18n.text(zh: "列表视图", en: "List View"))
-                Image(systemName: "square.grid.2x2")
-                    .tag(ViewMode.previewGrid)
-                    .accessibilityLabel(i18n.text(zh: "预览网格", en: "Preview Grid"))
+            Picker(i18n.text(zh: "卡片大小", en: "Card size"), selection: $cardSize) {
+                ForEach(YouziArtifactCardSize.allCases) { size in
+                    Text(size.title(isChinese: i18n.isChinese)).tag(size)
+                }
             }
-            .pickerStyle(.segmented)
-            .frame(width: 80)
+            .labelsHidden().pickerStyle(.segmented).frame(width: 156)
+            .accessibilityLabel(i18n.text(zh: "卡片大小", en: "Card size"))
+            .accessibilityIdentifier("YouziSimple.Results.CardSize")
         }
+    }
+
+    private func artifactCard(_ artifact: YouziArtifact) -> some View {
+        let file = fileForArtifact(artifact)
+        let canResolveFile = artifact.state == .active && (file?.availability == .available || file?.availability == .staleBookmark)
+        let canPreview = canResolveFile || (artifact.previewText != nil && ![.image, .video, .audio].contains(artifact.kind))
+        return VStack(alignment: .leading, spacing: 9) {
+            Button {
+                switch artifact.kind {
+                case .image, .video, .audio:
+                    Task { await playback.open(artifact, lease: { try await mediaLease(artifact) }) }
+                default: onPreview(artifact)
+                }
+            } label: {
+                YouziArtifactThumbnail(
+                    artifact: artifact,
+                    revision: file?.updatedAt ?? artifact.updatedAt,
+                    playing: playback.audioID == artifact.id && playback.isPlaying,
+                    available: canResolveFile,
+                    mediaLease: { try await mediaLease(artifact) }
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(!canPreview)
+            .accessibilityLabel(artifact.title)
+            .accessibilityHint(i18n.text(zh: artifact.kind == .audio ? "播放或暂停音频" : "打开预览",
+                                         en: artifact.kind == .audio ? "Play or pause audio" : "Open preview"))
+            HStack(alignment: .top, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(artifact.title).font(RapidFont.bodyEmphasis).lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help(artifact.title)
+                    HStack(spacing: 5) {
+                        Text(artifact.kind.localizedDisplayName(isChinese: i18n.isChinese))
+                        if let bytes = file?.byteCount {
+                            Text("· " + ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                        }
+                    }
+                    .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary).lineLimit(1)
+                }
+                Menu {
+                    Button(i18n.text(zh: "预览", en: "Preview")) {
+                        if [.image, .video, .audio].contains(artifact.kind) {
+                            Task { await playback.open(artifact, lease: { try await mediaLease(artifact) }) }
+                        } else { onPreview(artifact) }
+                    }.disabled(!canPreview)
+                    Button(i18n.text(zh: "在 Finder 中显示", en: "Show in Finder")) { onRevealInFinder(artifact) }.disabled(!canResolveFile)
+                    Button(i18n.text(zh: "导出…", en: "Export…")) { onExport(artifact) }.disabled(!canResolveFile)
+                    if let onShare {
+                        Button(i18n.text(zh: "分享…", en: "Share…")) { onShare(artifact) }.disabled(!canResolveFile)
+                    }
+                } label: { Image(systemName: "ellipsis") }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .accessibilityLabel(i18n.text(zh: "文件操作", en: "File actions") + " " + artifact.title)
+            }
+        }
+        .accessibilityIdentifier("YouziSimple.Result.Grid.\(artifact.id.uuidString)")
     }
 
     private var filterToolbar: some View {
@@ -187,26 +249,6 @@ struct YouziSimpleResultsPage: View {
         }
     }
 
-    private var listView: some View {
-        LazyVStack(spacing: RapidTheme.Space.md) {
-            ForEach(filteredArtifacts) { artifact in
-                artifactCard(artifact)
-            }
-        }
-        .frame(maxWidth: 820)
-    }
-
-    private var previewGridView: some View {
-        LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 220, maximum: 280), spacing: RapidTheme.Space.md)],
-            spacing: RapidTheme.Space.md
-        ) {
-            ForEach(filteredArtifacts) { artifact in
-                artifactPreviewCard(artifact)
-            }
-        }
-    }
-
     private var emptyState: some View {
         VStack(spacing: RapidTheme.Space.lg) {
             Image(systemName: "tray")
@@ -241,206 +283,6 @@ struct YouziSimpleResultsPage: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func artifactCard(_ artifact: YouziArtifact) -> some View {
-        let file = fileForArtifact(artifact)
-        let canResolveFile = artifact.state == .active && file?.availability == .available
-
-        return VStack(alignment: .leading, spacing: RapidTheme.Space.md) {
-            HStack(alignment: .top, spacing: RapidTheme.Space.md) {
-                Image(systemName: artifact.kind.systemImage)
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(RapidTheme.brandPrimary)
-                    .frame(width: 42, height: 42)
-                    .background(
-                        RoundedRectangle(cornerRadius: RapidTheme.Radius.button, style: .continuous)
-                            .fill(RapidTheme.brandPrimaryTint)
-                    )
-
-                VStack(alignment: .leading, spacing: RapidTheme.Space.xs) {
-                    Text(artifact.title)
-                        .font(RapidFont.sectionTitle)
-                        .lineLimit(2)
-                    HStack(spacing: RapidTheme.Space.sm) {
-                        Text(artifact.kind.localizedDisplayName(isChinese: i18n.isChinese))
-                        Text(artifact.updatedAt, style: .relative)
-                    }
-                    .font(RapidFont.caption)
-                    .foregroundStyle(RapidTheme.textSecondary)
-                }
-
-                Spacer(minLength: 0)
-
-                if !canResolveFile {
-                    Label(i18n.text(zh: "文件需要重新定位", en: "File needs relocation"), systemImage: "exclamationmark.circle")
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textSecondary)
-                }
-            }
-
-            if let preview = artifact.previewText, !preview.isEmpty {
-                Text(preview)
-                    .font(RapidFont.secondary)
-                    .foregroundStyle(RapidTheme.textSecondary)
-                    .lineLimit(3)
-            }
-
-            Divider()
-
-            HStack(spacing: RapidTheme.Space.sm) {
-                Button(i18n.text(zh: "预览", en: "Preview")) {
-                    onPreview(artifact)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canResolveFile && artifact.previewText?.isEmpty != false)
-                .accessibilityIdentifier("YouziSimple.Results.Preview.\(artifact.id.uuidString)")
-
-                Button(i18n.text(zh: "在 Finder 中显示", en: "Reveal in Finder")) {
-                    onRevealInFinder(artifact)
-                }
-                .buttonStyle(.bordered)
-                .disabled(!canResolveFile)
-                .accessibilityIdentifier("YouziSimple.Results.Reveal.\(artifact.id.uuidString)")
-
-                Spacer(minLength: 0)
-
-                if let onShare {
-                    Button(i18n.text(zh: "分享…", en: "Share…")) { onShare(artifact) }
-                        .buttonStyle(.bordered)
-                        .disabled(!canResolveFile)
-                }
-                Button(i18n.text(zh: "导出副本…", en: "Export Copy…")) {
-                    onExport(artifact)
-                }
-                .buttonStyle(.bordered)
-                .disabled(!canResolveFile)
-                .accessibilityIdentifier("YouziSimple.Results.Export.\(artifact.id.uuidString)")
-            }
-        }
-        .padding(RapidTheme.Space.lg)
-        .background(
-            RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                .fill(RapidTheme.surfaceRaised)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                .strokeBorder(RapidTheme.hairline, lineWidth: 1)
-        )
-        .accessibilityIdentifier("YouziSimple.Result.\(artifact.id.uuidString)")
-    }
-
-    private func artifactPreviewCard(_ artifact: YouziArtifact) -> some View {
-        let file = fileForArtifact(artifact)
-        let canResolveFile = artifact.state == .active && file?.availability == .available
-
-        return VStack(alignment: .leading, spacing: 0) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(RapidTheme.surfaceSidebar)
-
-                if artifact.kind == .image {
-                    VStack(spacing: RapidTheme.Space.xs) {
-                        Image(systemName: "photo.fill")
-                            .font(.system(size: 36))
-                            .foregroundStyle(RapidTheme.brandPrimary.opacity(0.8))
-                        Text(i18n.text(zh: "图片成果", en: "Image Deliverable"))
-                            .font(RapidFont.caption)
-                            .foregroundStyle(RapidTheme.textSecondary)
-                    }
-                } else if artifact.kind == .video {
-                    VStack(spacing: RapidTheme.Space.xs) {
-                        Image(systemName: "film.fill")
-                            .font(.system(size: 36))
-                            .foregroundStyle(Color.orange.opacity(0.8))
-                        Text(i18n.text(zh: "视频成果", en: "Video Deliverable"))
-                            .font(RapidFont.caption)
-                            .foregroundStyle(RapidTheme.textSecondary)
-                    }
-                } else if let preview = artifact.previewText, !preview.isEmpty {
-                    Text(preview)
-                        .font(.system(size: 10))
-                        .foregroundStyle(RapidTheme.textSecondary)
-                        .padding(RapidTheme.Space.sm)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .clipped()
-                } else {
-                    Image(systemName: artifact.kind.systemImage)
-                        .font(.system(size: 32))
-                        .foregroundStyle(RapidTheme.brandPrimary.opacity(0.7))
-                }
-            }
-            .frame(height: 120)
-            .clipped()
-
-            VStack(alignment: .leading, spacing: RapidTheme.Space.xs) {
-                Text(artifact.title)
-                    .font(RapidFont.bodyEmphasis)
-                    .lineLimit(1)
-
-                HStack(spacing: RapidTheme.Space.xs) {
-                    Text(artifact.kind.localizedDisplayName(isChinese: i18n.isChinese))
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textSecondary)
-                    Spacer()
-                    Text(artifact.updatedAt, style: .relative)
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textSecondary)
-                }
-
-                Divider()
-                    .padding(.vertical, 2)
-
-                HStack(spacing: RapidTheme.Space.xs) {
-                    Button(i18n.text(zh: "预览", en: "Preview")) {
-                        onPreview(artifact)
-                    }
-                    .buttonStyle(.plain)
-                    .font(RapidFont.caption)
-                    .foregroundStyle(RapidTheme.brandPrimary)
-                    .disabled(!canResolveFile && artifact.previewText?.isEmpty != false)
-
-                    Spacer()
-
-                    Button {
-                        onRevealInFinder(artifact)
-                    } label: {
-                        Image(systemName: "folder")
-                            .font(.system(size: 11))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canResolveFile)
-                    .help(i18n.text(zh: "在 Finder 中显示", en: "Reveal in Finder"))
-
-                    if let onShare {
-                        Button { onShare(artifact) } label: {
-                            Image(systemName: "person.crop.circle.badge.arrow.up")
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!canResolveFile)
-                        .help(i18n.text(zh: "分享…", en: "Share…"))
-                    }
-                    Button {
-                        onExport(artifact)
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 11))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canResolveFile)
-                    .help(i18n.text(zh: "导出副本…", en: "Export Copy…"))
-                }
-            }
-            .padding(RapidTheme.Space.md)
-        }
-        .background(
-            RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                .fill(RapidTheme.surfaceRaised)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                .strokeBorder(RapidTheme.hairline, lineWidth: 1)
-        )
-        .accessibilityIdentifier("YouziSimple.Result.Grid.\(artifact.id.uuidString)")
-    }
 }
 
 extension YouziArtifactKind: CaseIterable {
@@ -449,7 +291,7 @@ extension YouziArtifactKind: CaseIterable {
     }
 }
 
-private extension YouziArtifactKind {
+extension YouziArtifactKind {
     func localizedDisplayName(isChinese: Bool) -> String {
         if isChinese { return displayName }
         switch self {

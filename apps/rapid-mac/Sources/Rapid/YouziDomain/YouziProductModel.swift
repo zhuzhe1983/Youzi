@@ -300,6 +300,21 @@ final class YouziProductModel: ChatConversationLifecycleObserver {
         }
     }
 
+    /// Read-only media access must not publish the entire observable document
+    /// during lazy cell loading (which can otherwise trigger layout/reload loops).
+    func mediaLease(id: UUID) async throws -> YouziMediaFileLease {
+        let repository = lifecycle
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            return try repository.mediaLease(toFile: id)
+        }
+        let lease = try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: { worker.cancel() }
+        try Task.checkCancellation()
+        return lease
+    }
+
     func exportFile(id: UUID, to destinationURL: URL) throws {
         do {
             try lifecycle.exportFile(id, to: destinationURL)

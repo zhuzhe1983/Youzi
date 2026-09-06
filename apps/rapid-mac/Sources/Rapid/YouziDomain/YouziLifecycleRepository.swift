@@ -354,6 +354,7 @@ final class YouziLifecycleRepository: @unchecked Sendable {
 
     func withAccess<Result>(
         toFile fileID: UUID,
+        retainingScope: ((URL, YouziSecurityScopedBookmarkAccess) -> Void)? = nil,
         _ operation: (URL) throws -> Result
     ) throws -> Result {
         let document = try store.load()
@@ -367,7 +368,8 @@ final class YouziLifecycleRepository: @unchecked Sendable {
             var refreshedWorkspaceLocation: YouziWorkspaceLocation?
             let result = try workspaceAccess.withAccess(
                 to: workspace,
-                relativePath: relativePath
+                relativePath: relativePath,
+                retainingScope: retainingScope
             ) { url, refreshed in
                 refreshedWorkspaceLocation = refreshed
                 return try operation(url)
@@ -382,7 +384,7 @@ final class YouziLifecycleRepository: @unchecked Sendable {
         }
         let workspaceMap = Dictionary(uniqueKeysWithValues: document.workspaces.map { ($0.id, $0) })
         var refreshedLocation: YouziFileLocation?
-        let result = try fileStore.withAccess(to: file, workspaces: workspaceMap) { url, refreshed in
+        let result = try fileStore.withAccess(to: file, workspaces: workspaceMap, retainingScope: retainingScope) { url, refreshed in
             refreshedLocation = refreshed
             return try operation(url)
         }
@@ -397,6 +399,25 @@ final class YouziLifecycleRepository: @unchecked Sendable {
             }
         }
         return result
+    }
+
+    /// Unlike withAccess, the lease keeps the original folder/file grant alive
+    /// for asynchronous thumbnail decoding and AVPlayer. No file bytes are copied.
+    func mediaLease(toFile fileID: UUID) throws -> YouziMediaFileLease {
+        let document = try store.load()
+        guard let file = document.files.first(where: { $0.id == fileID }) else {
+            throw YouziLifecycleError.fileNotFound(fileID)
+        }
+        guard file.availability != .revoked else { throw CocoaError(.fileReadNoPermission) }
+        var scope: YouziMediaFileLease.Scope?
+        return try withAccess(toFile: fileID, retainingScope: { url, bookmarks in
+            scope = YouziMediaFileLease.Scope(url: url, bookmarks: bookmarks)
+        }) { url in
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw YouziManagedFileStoreError.fileNotFound(url.path)
+            }
+            return YouziMediaFileLease(url: url, scope: scope)
+        }
     }
 
     func exportFile(_ fileID: UUID, to destinationURL: URL) throws {
