@@ -3025,8 +3025,9 @@ def _generate_speech_blocking(
     from ..runtime.audio_worker import run_audio_mlx_sync
 
     _ensure_tts_loaded_blocking(model_name)
-    engine = _tts_engine
-    if engine is None:
+    # TTSEngine is the audio-lane adapter, not the chat BaseEngine contract.
+    speech_engine = _tts_engine
+    if speech_engine is None:
         raise RuntimeError("TTS model did not finish loading")
 
     kwargs = dict(gen_kwargs)
@@ -3040,11 +3041,11 @@ def _generate_speech_blocking(
             if ref_text is not None:
                 kwargs["ref_text"] = ref_text
             audio = run_audio_mlx_sync(
-                "tts", model_name, "infer", engine.generate, input_text, **kwargs
+                "tts", model_name, "infer", speech_engine.generate, input_text, **kwargs
             )
     else:
         audio = run_audio_mlx_sync(
-            "tts", model_name, "infer", engine.generate, input_text, **kwargs
+            "tts", model_name, "infer", speech_engine.generate, input_text, **kwargs
         )
     from ..audio.output_format import convert_audio_output
 
@@ -3061,7 +3062,7 @@ def _generate_speech_blocking(
         audio.sample_rate = output_rate
         audio.duration = len(converted) / output_rate
     return (
-        engine.to_bytes(audio, format=response_format),
+        speech_engine.to_bytes(audio, format=response_format),
         output_rate,
         output_channels,
     )

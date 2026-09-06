@@ -103,3 +103,21 @@ status must be recorded after execution, not inferred from these checks.
   A real archive from the final app contains the matching 0.14.3 VERSION.
 - Formal promotion remains gated on native-client acceptance after user unlock;
   do not call the failed hosted run a published release.
+
+- Expanded reconciliation checks: 319 Python tests passed (3 opt-in cases
+  deselected), followed by 114 audio/route-contract checks. Use a specifically
+  named `speech_engine` for the TTSEngine adapter; it is not a BaseEngine and
+  must not be mistaken for chat-engine access by the AST contract gate.
+- The installed client itself also passed the official OpenAI SDK: model-list
+  decoding, a completed Responses request, and a valid 218,924-byte WAV with
+  case-insensitive Vivian selection. Explicit `Chinese` speaker returns 400
+  before synthesis. Deep/strict code-sign verification still passes afterward.
+- A broad no-MLX experiment on this Mac was not a passing suite: 18,077 passed,
+  83 failed, 374 skipped. Most failures were Apple-path tests run without their
+  MLX packages or native-session prerequisites; the newly exposed audio AST
+  naming issue was fixed and rechecked. Use actual hosted Linux/Apple jobs as
+  their respective environment gates, not this mixed-environment result.
+- Package run 34052392766 passed its manifest and Swift steps but was cancelled
+  before draft creation to include the final audio-contract clarification.
+  The isolated port-18043 test server was shut down; the actual client on 8000
+  remains running. Screen unlock/native acceptance remains outstanding.

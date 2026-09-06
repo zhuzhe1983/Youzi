@@ -23,3 +23,12 @@ Merge CI fixtures/types/accessibility and upstream provenance are reconciled;
 151 Swift/272 Python scoped tests, Ruff and pinned mypy budget pass.
 Next: dispatch updated main, inspect hosted assets, then native acceptance and
 formal promotion. No release exists at this point; do not promise GUI acceptance.
+
+
+Expanded tests: 319 reconciliation and 114 audio-contract checks pass. The
+installed-client official OpenAI SDK also completed Responses and generated
+218,924-byte valid WAV; invalid Chinese speaker fails early with 400. Mixed
+no-MLX-on-Mac broad run is NOT a pass (18,077 pass/83 fail); see operations doc.
+Cancelled packaging 34052392766 before draft to include the TTSEngine-specific
+local name required by the chat-engine AST gate. Restart packaging from the
+new commit. Isolated 18043 is stopped, real client 8000 remains healthy.
