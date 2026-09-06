@@ -2175,6 +2175,9 @@ struct ToolCallChip: View {
     /// payload — that stays in the model's context, not on screen.
     private var resultBody: String? {
         guard let result else { return nil }
+        if failureDiagnosis != nil, call.function.name.hasPrefix("youzi_"),
+           let message = YouziLocalModelTools.failureMessage(content: result.content,
+                chinese: YouziI18nConfig.shared.isChinese) { return message }
         if let failureDiagnosis { return failureDiagnosis.message }
         return ChatTextSanitizer.sanitizeForDisplay(result.content)
     }

@@ -16,7 +16,8 @@ import referencing
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROTO_ROOT = REPO_ROOT / "proto"
 RUNTIME_ROOT = PROTO_ROOT / "model-runtime" / "v1"
-CATALOG_ROOT = PROTO_ROOT / "model-catalog" / "v1"
+CATALOG_V1_ROOT = PROTO_ROOT / "model-catalog" / "v1"
+CATALOG_ROOT = PROTO_ROOT / "model-catalog" / "v2"
 BENCH_ROOT = PROTO_ROOT / "community-benchmark" / "v1"
 
 SCHEMA_PATHS = (
@@ -24,8 +25,25 @@ SCHEMA_PATHS = (
     RUNTIME_ROOT / "machine-observation.schema.json",
     RUNTIME_ROOT / "execution-config.schema.json",
     CATALOG_ROOT / "model-alias.schema.json",
+    CATALOG_V1_ROOT / "model-registry-record.schema.json",
+    CATALOG_V1_ROOT / "recommendation-policy.schema.json",
+    CATALOG_ROOT / "catalog-snapshot.schema.json",
     BENCH_ROOT / "benchmark-run.schema.json",
+    BENCH_ROOT / "submission-receipt.schema.json",
 )
+
+
+def test_submission_receipt_contract(schemas, registry) -> None:
+    receipt = {
+        "schema_version": 1,
+        "submission_id": "00000000-0000-4000-8000-000000000001",
+        "status": "accepted",
+        "already_exists": False,
+        "accepted_at": "2026-09-01T20:00:00Z",
+        "run_digest": "sha256:" + "a" * 64,
+        "contributor": {"name": "quiet-amber-orca", "tag": "0af"},
+    }
+    _validator(schemas["submission-receipt.schema.json"], registry).validate(receipt)
 
 
 def _load(path: Path) -> dict:
@@ -131,6 +149,44 @@ def test_alias_is_a_reference_layer_not_embedded_identity(schemas, registry) -> 
     assert "execution_config_digest" in example["execution_presets"][0]
 
 
+def test_v2_alias_rejects_conflicting_mode_spellings(schemas, registry) -> None:
+    example = _load(CATALOG_ROOT / "examples" / "model-alias.example.json")
+    example["capabilities"]["generation_modes"] = ["inpainting"]
+    errors = list(
+        _validator(schemas["model-alias.schema.json"], registry).iter_errors(example)
+    )
+    assert any(list(error.absolute_path) == ["capabilities"] for error in errors)
+
+
+def test_v2_alias_requires_exactly_one_nonempty_operation_field(
+    schemas, registry
+) -> None:
+    example = _load(CATALOG_ROOT / "examples" / "model-alias.example.json")
+    del example["capabilities"]["operation_modes"]
+    errors = list(
+        _validator(schemas["model-alias.schema.json"], registry).iter_errors(example)
+    )
+    assert any(list(error.absolute_path) == ["capabilities"] for error in errors)
+
+    example["capabilities"]["operation_modes"] = []
+    errors = list(
+        _validator(schemas["model-alias.schema.json"], registry).iter_errors(example)
+    )
+    assert any(
+        list(error.absolute_path) == ["capabilities", "operation_modes"]
+        for error in errors
+    )
+
+
+def test_model_alias_v1_remains_backward_compatible() -> None:
+    schema = _load(CATALOG_V1_ROOT / "model-alias.schema.json")
+    example = _load(CATALOG_V1_ROOT / "examples" / "model-alias.example.json")
+    jsonschema.Draft202012Validator(schema).validate(example)
+    assert example["schema_version"] == 1
+    assert "origin" not in example
+    assert "availability" not in example
+
+
 def test_promoted_alias_preset_requires_scoped_evidence(schemas, registry) -> None:
     example = _load(CATALOG_ROOT / "examples" / "model-alias.example.json")
     evidence = example["execution_presets"][0]["evidence"]
@@ -149,6 +205,38 @@ def test_unresolved_alias_has_no_identity_digest_or_presets(schemas, registry) -
     example["default_execution_preset_id"] = None
     example["execution_presets"] = []
     _validator(schemas["model-alias.schema.json"], registry).validate(example)
+
+
+@pytest.mark.parametrize(
+    ("task_type", "pipeline_kind"),
+    (
+        ("speech_synthesis", "speech_synthesis"),
+        ("speech_recognition", "speech_recognition"),
+    ),
+)
+def test_audio_atomic_contracts_are_reachable(
+    schemas, registry, task_type, pipeline_kind
+) -> None:
+    identity = _load(RUNTIME_ROOT / "examples" / "model-identity.llm.example.json")
+    identity["pipeline_kind"] = pipeline_kind
+    identity["identity_digest"] = _digest(
+        {
+            key: identity[key]
+            for key in ("schema_version", "pipeline_kind", "components")
+        }
+    )
+    _validator(schemas["model-identity.schema.json"], registry).validate(identity)
+
+    execution = _load(RUNTIME_ROOT / "examples" / "execution.text.example.json")
+    execution["task_type"] = task_type
+    execution["task"] = {
+        "kind": task_type,
+        "audio": {"streaming": True, "batch_size": 1, "compute_backend": "gpu"},
+    }
+    execution["config_digest"] = _digest(
+        {key: execution[key] for key in ("task_type", "resources", "task")}
+    )
+    _validator(schemas["execution-config.schema.json"], registry).validate(execution)
 
 
 @pytest.mark.parametrize("kind", ("image", "video"))
@@ -502,18 +590,25 @@ def test_public_media_dataset_contains_reproducible_inputs() -> None:
 
 
 def test_synthetic_token_dataset_has_cross_language_golden_vector() -> None:
-    dataset = _load(BENCH_ROOT / "datasets" / "rapid-synthetic-token-dataset-v1.json")
+    dataset = _load(BENCH_ROOT / "datasets" / "rapid-synthetic-token-dataset-v2.json")
     generator = dataset["generator"]
     assert generator["input_representation"] == "token_ids"
     state = generator["seed"]
     upper_exclusive = min(dataset["golden_vector"]["tokenizer_vocab_size"], 100000)
+    special = set(dataset["golden_vector"]["special_token_ids"])
+    eligible = [
+        token_id
+        for token_id in range(generator["minimum_token_id"], upper_exclusive)
+        if token_id not in special
+    ]
     actual = []
     for _ in dataset["golden_vector"]["first_token_ids"]:
         state = (state ^ ((state << 13) & 0xFFFFFFFF)) & 0xFFFFFFFF
         state = (state ^ (state >> 17)) & 0xFFFFFFFF
         state = (state ^ ((state << 5) & 0xFFFFFFFF)) & 0xFFFFFFFF
-        actual.append(256 + state % (upper_exclusive - 256))
+        actual.append(eligible[state % len(eligible)])
     assert actual == dataset["golden_vector"]["first_token_ids"]
+    assert not special.intersection(actual)
 
 
 def test_registered_launch_examples_exactly_match_protocol_registry() -> None:

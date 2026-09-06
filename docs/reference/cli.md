@@ -17,8 +17,10 @@
 | `rapid-mlx ps` | List running rapid-mlx servers |
 | `rapid-mlx share` | Expose a local model behind a public URL via rapidmlx.com |
 | `rapid-mlx launch` | One-shot bootstrap: patch an IDE/agent client config to use rapid-mlx |
+| `rapid-mlx service` | Install/inspect/remove the headless macOS system service (`install` `status` `logs` `restart` `uninstall`) |
 | `rapid-mlx connect` | Show the server's connection info and wire up a tool |
 | `rapid-mlx agents` | List, configure, and test agent integrations |
+| `rapid-mlx start` | Start an AI agent with a local model in one command |
 | `rapid-mlx doctor` | Run self-diagnostic / regression harness |
 | `rapid-mlx telemetry` | Manage anonymous usage telemetry (opt-in) |
 | `rapid-mlx upgrade` | Upgrade rapid-mlx with its detected manager (brew / uv / pipx / pip / install.sh) |
@@ -26,6 +28,13 @@
 | `rapid-mlx help <cmd>` | Show help for a subcommand |
 
 Run `rapid-mlx <cmd> --help` for the full flag list of any subcommand.
+
+`rapid-mlx models --cached --json` is the stable machine-readable cache
+inventory used by the Desktop app. Each row includes `repo`, `alias`,
+`subfolder`, `size_bytes`, `state`, and `external`; `subfolder: null` means the
+repository root. For multi-variant repositories, the reported alias and
+subfolder rows enumerate every complete catalog checkpoint still present, not
+only the variant most recently selected for `serve`.
 
 Agent integrations can be configured without hand-editing dotfiles:
 
@@ -115,7 +124,7 @@ are the argparse defaults from `vllm_mlx/cli.py`.
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--kv-cache-dtype` | KV cache dtype (`bf16`, `int8`, `int4`). int8/int4 shrink the KV cache 2x/4x for memory-constrained hosts, but dequant-on-read costs decode throughput at long context (measured -27% int4 / -36% int8 at 16k). Sliding-window (Gemma 3, GPT-OSS) and MLA (DeepSeek V3+, Kimi K2.5) models auto-downgrade to bf16. | bf16 |
+| `--kv-cache-dtype` | KV cache dtype (`bf16`, `int8`, `int4`). int8/int4 shrink the KV cache 2x/4x for memory-constrained hosts, but dequant-on-read costs decode throughput at long context (measured -27% int4 / -36% int8 at 16k). An explicit int8/int4 on a sliding-window (Gemma 3/4, GPT-OSS) or MLA (DeepSeek V3+, Kimi K2.5) model is rejected before the server reports ready; only auto/profile-selected quantization downgrades to bf16. | bf16 |
 | `--reasoning` | Reasoning profile: pins `--kv-cache-dtype` to int8 regardless of the dtype flag (sub-4-bit KV drops accuracy on AIME-class math) | off |
 | `--kv-cache-quantization` | Deprecated alias of `--kv-cache-dtype int8`; wins when both flags are passed (backwards compatibility) | off |
 | `--kv-cache-quantization-bits` | Bit width for KV cache quantization (4 or 8) | 8 |
@@ -132,6 +141,7 @@ are the argparse defaults from `vllm_mlx/cli.py`.
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--force-disk-check` | Proceed even when the pre-flight disk-space check fails — the check still runs and prints its numbers, but a shortfall becomes a warning instead of an abort (the download will likely fail mid-way) | off |
+| `--image-weight-precision` | Explicit FLUX.2 Klein weight source: `q4` selects the compact default checkpoint; `bf16` selects the full-precision checkpoint measured faster on an M2 Pro large-matrix image workload. Other diffusion families are rejected until qualified. | None (alias default) |
 | `--disk-stream` | Stream MoE routed-expert weights from disk instead of holding them resident (opt-in; only architectures registered in `vllm_mlx.registry`) | off |
 | `--disk-stream-cache-gb` | Byte budget (GB) for the disk-stream expert LRU cache; only used with `--disk-stream` | 1.0 |
 | `--resident-memory-limit-gb` | Process-wide resident model ceiling in GiB; loading another model evicts the least-recently-used idle unpinned model first. 0 disables. | 0 (disabled) |
@@ -446,6 +456,107 @@ tools, while the spawned or remote Rapid-MLX server receives only standard
 OpenAI function tools and tool-result messages. `serve` and `share` do not
 need the chat's MCP configuration.
 
+## `rapid-mlx start`
+
+Start an AI agent with a local model in one command. `start` ties together
+steps that would otherwise take several commands — pick an agent profile,
+choose a model that fits this Mac, run the server, and wire up the client —
+into a single foreground verb.
+
+### Usage
+
+```bash
+rapid-mlx start [profile] [--model MODEL] [--port PORT] [--host HOST]
+                [--no-download] [--dry-run] [--yes] [--no-setup]
+                [--ready-timeout SECONDS]
+```
+
+### Options
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `profile` | Agent name (e.g. `codex`, `hermes`, `opencode`). Omit for a generic OpenAI-compatible endpoint. | *(none)* |
+| `--model` | Model alias or HF repo to serve. When omitted, picks the first recommended model (in the profile's declaration order) that fits this Mac and is already cached, else a previewed download. | auto |
+| `--port` | Port to serve on. | `8000` |
+| `--host` | Host to serve on. | `127.0.0.1` |
+| `--no-download` | Refuse to download a model; fail if no recommended model is cached. | off |
+| `--dry-run` | Preview the model, port, and config mutations without starting a server, downloading, or writing anything. | off |
+| `--yes`, `-y` | Skip the confirmation prompt before downloading / writing config. | off |
+| `--no-setup` | Do not write agent configuration after the server is ready; only print instructions. | off |
+| `--ready-timeout` | Seconds to wait for the spawned server to become ready. | `600` |
+
+### Behavior
+
+- **Model selection.** An explicit `--model` wins. Otherwise `start` walks
+  the profile's `recommended` models in declaration order and picks the
+  first that fits this Mac's RAM and is already cached; if none is cached it
+  picks the first fitting recommendation (the profile lists its preferred
+  workhorse first) and shows the download size for consent before starting.
+  `--no-download` refuses rather than touching the network.
+- **Foreground server.** `start` spawns the canonical `serve` in the
+  foreground as a child of this process, forwards `Ctrl-C` (SIGINT/SIGTERM)
+  to it, and exits with the server's status — no orphan `serve` is left
+  behind when you stop the agent. This differs from
+  `rapid-mlx launch --start-server`, which deliberately detaches.
+- **Port reuse.** If a healthy Rapid-MLX server already serves the chosen
+  model on the port, `start` reuses it instead of spawning a second one. If
+  the port is occupied by something else (or a different model), it refuses
+  with a clear message.
+- **Setup.** After the endpoint is healthy, `start` prints the agent's
+  connection instructions and, for the first-class profiles (`claude-code`,
+  `continue`, `deepseek-harness`), applies the same previewed/backed-up
+  atomic config changes as `rapid-mlx agents <name> --setup`. `--no-setup`
+  prints instructions only.
+
+### Examples
+
+```bash
+# Start codex with its recommended model that fits this Mac
+rapid-mlx start codex
+
+# Preview without starting, downloading, or writing anything
+rapid-mlx start hermes --dry-run
+
+# Serve an explicit model on a non-default port, skipping prompts
+rapid-mlx start opencode --model qwen3.5-9b-4bit --port 8123 --yes
+
+# Start a generic OpenAI-compatible endpoint (no agent config)
+rapid-mlx start
+```
+## `rapid-mlx service`
+
+Manage Rapid-MLX as an unattended headless macOS system service (a launchd
+LaunchDaemon that boots before any GUI login). macOS-only; requires an
+existing non-administrator service account and (for `install`/`uninstall`/
+`restart`) root.
+
+```bash
+rapid-mlx service install --service-user USER --model MODEL \
+  [--host HOST] [--port PORT] [--dry-run] [-- SERVE_OPTIONS...]
+rapid-mlx service status [--json]
+rapid-mlx service logs [--follow] [--tail N]
+rapid-mlx service restart [--dry-run]
+rapid-mlx service uninstall [--dry-run]
+```
+
+- `install` validates the least-privilege service account, writes a
+  deterministic root-owned plist to `/Library/LaunchDaemons/`, and
+  bootstraps the daemon. It refuses an administrator/system account, a
+  secret in the definition, and a target port that already has a server.
+  `--dry-run` prints every step without changing anything.
+- Additional `serve` options must follow a `--` separator, for example
+  `-- --max-num-seqs 4`. Bind overrides and secret-bearing options are
+  rejected; use the service command's own `--host` and `--port` flags.
+- `status` reports launchd registration, PID and owner, the declared model
+  and bind, endpoint (`/livez`/`/readyz`) health, and log paths.
+- `logs` tails the daemon's stdout/stderr logs (`--follow` streams across
+  KeepAlive restarts).
+- `restart` kickstarts the daemon and waits for readiness.
+- `uninstall` removes the launchd registration and plist only — models,
+  cache, and logs are never deleted.
+
+See [`docs/guides/headless-macos-service.md`](../guides/headless-macos-service.md)
+for the full appliance setup and recovery guidance.
 ## Environment Variables
 
 Operator-facing `RAPID_MLX_*` variables read by the server and CLI. A CLI

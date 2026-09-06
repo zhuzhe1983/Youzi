@@ -16,6 +16,7 @@ from vllm_mlx.runtime.resident_models import (
     ResidentModelError,
     ResidentModelManager,
     ResidentPerformanceConfig,
+    ResidentRole,
     resident_scheduler_kwargs,
 )
 
@@ -35,6 +36,18 @@ def test_resident_performance_maps_to_the_scheduler_contract():
         "kv_cache_quantization_bits": 4,
         "enable_prefix_cache": False,
         "cache_memory_mb": 4096,
+    }
+
+
+def test_legacy_capacity_error_keeps_stable_envelope():
+    error = ResidentModelCapacityError("legacy replacement rejected")
+    assert error.envelope() == {
+        "error": {
+            "message": "legacy replacement rejected",
+            "type": "insufficient_capacity_error",
+            "code": "insufficient_capacity_error",
+            "param": "model",
+        }
     }
     assert resident_scheduler_kwargs(
         ResidentPerformanceConfig(kv_cache_turboquant="k8v4")
@@ -463,15 +476,30 @@ class FailingStopLifecycleEngine(FakeLifecycleEngine):
         raise RuntimeError("stop failed")
 
 
+class FailOnceStopLifecycleEngine(FakeLifecycleEngine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.stop_calls = 0
+
+    async def stop(self) -> None:
+        self.stop_calls += 1
+        if self.stop_calls == 1:
+            raise RuntimeError("transient stop failure")
+        self.stopped = True
+
+
 class BlockingStopLifecycleEngine(FakeLifecycleEngine):
     def __init__(self) -> None:
         super().__init__()
         self.stop_started = asyncio.Event()
+        self.stop_release = asyncio.Event()
+        self.stop_calls = 0
 
     async def stop(self) -> None:
+        self.stop_calls += 1
         self.stopped = True
         self.stop_started.set()
-        await asyncio.Event().wait()
+        await self.stop_release.wait()
 
 
 class Clock:
@@ -1221,7 +1249,12 @@ async def test_evict_first_stop_failure_finishes_handoff_as_primary_absent():
     handoff.commit.assert_called_once_with(None)
     handoff.rollback.assert_not_called()
     assert registry.default_name is None
-    assert manager.snapshot()["models"] == []
+    # The evict-first failure propagates, but the engine is NOT silently freed:
+    # it is durably tracked as cleanup-failed and its bytes stay charged.
+    snapshot_models = manager.snapshot()["models"]
+    assert [item["id"] for item in snapshot_models] == ["chat-old"]
+    assert snapshot_models[0]["state"] == "failed"
+    assert snapshot_models[0]["cleanup_failed"] == "stop failed"
 
 
 @pytest.mark.asyncio
@@ -1270,7 +1303,15 @@ async def test_evict_first_sibling_stop_failure_preserves_primary_publication():
     assert primary_engine.stopped is False
     assert primary_engine.paused is False
     assert registry.default_name == "chat-primary"
-    assert [item["id"] for item in manager.snapshot()["models"]] == ["chat-primary"]
+    # The sibling's cleanup failed and is durably tracked (bytes charged), while
+    # the healthy primary stays published and un-touched.
+    ids = {item["id"] for item in manager.snapshot()["models"]}
+    assert ids == {"chat-primary", "chat-sibling"}
+    sibling_row = next(
+        item for item in manager.snapshot()["models"] if item["id"] == "chat-sibling"
+    )
+    assert sibling_row["state"] == "failed"
+    assert sibling_row["cleanup_failed"] == "stop failed"
 
 
 @pytest.mark.asyncio
@@ -1788,8 +1829,16 @@ async def test_committed_replacement_does_not_rollback_to_stopped_sibling(caplog
     assert replacement.primary is True
     assert registry.default_name == "chat-new"
     assert [item.model_name for item in registry.list_entries()] == ["chat-new"]
-    assert {item["id"] for item in manager.snapshot()["models"]} == {"chat-new"}
-    assert "Failed to stop replaced model 'chat-sibling'" in caplog.text
+    # The failed sibling is durably tracked as cleanup-failed (not resurrected
+    # as a route, but never silently freed) with its bytes still charged.
+    ids = {item["id"] for item in manager.snapshot()["models"]}
+    assert ids == {"chat-new", "chat-sibling"}
+    sibling_row = next(
+        item for item in manager.snapshot()["models"] if item["id"] == "chat-sibling"
+    )
+    assert sibling_row["state"] == "failed"
+    assert sibling_row["cleanup_failed"] == "stop failed"
+    assert "Failed to clean up resident model 'chat-sibling'" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1827,9 +1876,19 @@ async def test_primary_stop_failure_keeps_committed_replacement_routable(
     assert replacement.primary is True
     assert registry.default_name == "chat-new"
     assert [item.model_name for item in registry.list_entries()] == ["chat-new"]
-    assert {item["id"] for item in manager.snapshot()["models"]} == {"chat-new"}
+    # The old primary's cleanup failed and is durably tracked (bytes charged),
+    # never silently freed, while the committed new route stays authoritative.
+    assert {item["id"] for item in manager.snapshot()["models"]} == {
+        "chat-new",
+        "chat-old",
+    }
+    old_row = next(
+        item for item in manager.snapshot()["models"] if item["id"] == "chat-old"
+    )
+    assert old_row["state"] == "failed"
+    assert old_row["cleanup_failed"] == "stop failed"
     assert handoff_events == ["commit:chat-new"]
-    assert "Failed to stop replaced primary 'chat-old'" in caplog.text
+    assert "Failed to clean up resident model 'chat-old'" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1858,7 +1917,18 @@ async def test_task_cancel_after_primary_commit_preserves_new_route():
     assert registry.default_name == "chat-new"
     assert registry.get_engine("chat-new") is loaded["chat-new"]
     assert [item.model_name for item in registry.list_entries()] == ["chat-new"]
-    assert {item["id"] for item in manager.snapshot()["models"]} == {"chat-new"}
+    # The old engine's stop was suspended when the caller cancelled; it must stay
+    # durably tracked as retiring (bytes charged) until a later shutdown rejoins
+    # and drains its cleanup -- the old route is never resurrected.
+    assert {item["id"] for item in manager.snapshot()["models"]} == {
+        "chat-new",
+        "chat-old",
+    }
+    old_row = next(
+        item for item in manager.snapshot()["models"] if item["id"] == "chat-old"
+    )
+    assert old_row["state"] == "retiring"
+    assert "cleanup_failed" in old_row and old_row["cleanup_failed"] is None
 
 
 @pytest.mark.asyncio
@@ -1869,6 +1939,16 @@ async def test_task_cancel_during_sibling_cleanup_reopens_remaining_sibling():
     blocking_engine = BlockingStopLifecycleEngine()
     blocking = entry("chat-blocking", blocking_engine)
     remaining_engine = FakeLifecycleEngine()
+    resume_started = asyncio.Event()
+    resume_release = asyncio.Event()
+
+    async def blocking_resume() -> dict:
+        resume_started.set()
+        await resume_release.wait()
+        remaining_engine.paused = False
+        return remaining_engine.lifecycle_status()
+
+    remaining_engine.resume_generation = blocking_resume
     remaining = entry("chat-remaining", remaining_engine)
     registry.add(primary, is_default=True)
     registry.add(blocking)
@@ -1895,6 +1975,14 @@ async def test_task_cancel_during_sibling_cleanup_reopens_remaining_sibling():
     await blocking_engine.stop_started.wait()
 
     replacement.cancel()
+    await resume_started.wait()
+    # A second cancellation during rollback recovery must not strand the
+    # unretired sibling paused. The original cancellation is delayed until the
+    # manager-owned recovery finishes.
+    replacement.cancel()
+    await asyncio.sleep(0)
+    assert replacement.done() is False
+    resume_release.set()
     with pytest.raises(asyncio.CancelledError):
         await replacement
 
@@ -1904,6 +1992,54 @@ async def test_task_cancel_during_sibling_cleanup_reopens_remaining_sibling():
         "chat-new",
     ]
     assert remaining_engine.paused is False
+
+
+@pytest.mark.asyncio
+async def test_existing_target_cancel_reopens_unretired_sibling(monkeypatch):
+    # This contract is about cancellation ownership, not allocator latency.
+    monkeypatch.setattr(
+        "vllm_mlx.runtime.resident_models._release_allocator_cache", lambda: None
+    )
+    registry = ModelRegistry()
+    primary_engine = BlockingStopLifecycleEngine()
+    primary = entry("chat-primary", primary_engine)
+    target_engine = FakeLifecycleEngine()
+    target = entry("chat-target", target_engine)
+    remaining_engine = FakeLifecycleEngine()
+    remaining = entry("chat-remaining", remaining_engine)
+    for model in (primary, target, remaining):
+        registry.add(model, is_default=model is primary)
+
+    manager = ResidentModelManager(registry, AsyncMock(), memory_reader=lambda: 0)
+    manager.register_primary(primary, estimated_bytes=4 * GIB)
+    for model in (target, remaining):
+        manager._index_record(
+            ResidencyRecord(
+                entry=model,
+                estimated_bytes=2 * GIB,
+                loaded_at=0,
+                last_used_at=0,
+            )
+        )
+
+    replacement = asyncio.create_task(
+        manager.load("chat-target", replace_group="assistant", replace_mode="wait")
+    )
+    await primary_engine.stop_started.wait()
+
+    replacement.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await replacement
+
+    # The old primary is already owned by retirement, but the later sibling
+    # stays routable and must be reopened rather than left paused indefinitely.
+    assert registry.default_name == "chat-target"
+    assert "chat-primary" not in {model.model_name for model in registry.list_entries()}
+    assert "chat-remaining" in {model.model_name for model in registry.list_entries()}
+    assert remaining_engine.paused is False
+
+    primary_engine.stop_release.set()
+    await asyncio.wait_for(manager.shutdown(), timeout=1)
 
 
 @pytest.mark.asyncio
@@ -1935,6 +2071,567 @@ async def test_wait_replacement_retires_drained_engine_with_http_lease_finalizin
 
     assert old_engine.stopped is True
     assert registry.default_name == "chat-new"
+
+
+# --- Issue #2383: post-commit retirement is durably tracked across ------------
+# cancellation. These assert the engine stays memory-charged + snapshot-visible
+# until its stop()/allocator cleanup finishes or fails truthfully, while the lock
+# stays free during a suspended stop.
+
+
+def _accounted_bytes(manager: ResidentModelManager, model_id: str) -> int:
+    """Sum the retired/resident model's reserved bytes as snapshot would."""
+    for retirement in manager._retiring.values():
+        if retirement.record.model_id == model_id:
+            return max(
+                retirement.record.estimated_bytes, retirement.record.measured_bytes
+            )
+    record = manager._records.get(model_id)
+    if record is not None:
+        return max(record.estimated_bytes, record.measured_bytes)
+    return 0
+
+
+@pytest.mark.asyncio
+async def test_cancel_primary_replace_keeps_old_bytes_charged_until_cleanup():
+    """PRIMARY replacement: suspended old stop keeps bytes charged; cancel then
+    release the stop proves eventual cleanup with no old-route resurrection."""
+    registry = ModelRegistry()
+    old_engine = BlockingStopLifecycleEngine()
+    primary = entry("chat-old", old_engine)
+    registry.add(primary, is_default=True)
+    loaded: dict[str, FakeEngine] = {}
+
+    async def loader(name: str, path: str | None, performance=None):
+        loaded[name] = FakeEngine()
+        return entry(name, loaded[name])
+
+    manager = ResidentModelManager(registry, loader, memory_reader=lambda: 0)
+    manager.register_primary(primary, estimated_bytes=4 * GIB)
+
+    replacement = asyncio.create_task(
+        manager.load("chat-new", replace_group="assistant", replace_mode="wait")
+    )
+    await old_engine.stop_started.wait()
+
+    # The new route is already authoritative before cancellation.
+    assert registry.default_name == "chat-new"
+    old_row = next(
+        item for item in manager.snapshot()["models"] if item["id"] == "chat-old"
+    )
+    assert old_row["state"] == "retiring"
+    # During suspension the old engine's bytes are STILL charged.
+    assert _accounted_bytes(manager, "chat-old") == 4 * GIB
+    joined = _accounted_bytes(manager, "chat-old")
+    assert joined > 0
+
+    replacement.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await replacement
+
+    # Still retiring (suspended), bytes still charged, no resurrection.
+    assert registry.default_name == "chat-new"
+    assert [item.model_name for item in registry.list_entries()] == ["chat-new"]
+    assert _accounted_bytes(manager, "chat-old") == 4 * GIB
+
+    # Release the suspended stop and drain via shutdown -> cleanup completes,
+    # bytes disappear, old engine no longer visible.
+    old_engine.stop_release.set()
+    await asyncio.wait_for(manager.shutdown(), timeout=1)
+    assert {item["id"] for item in manager.snapshot()["models"]} == {"chat-new"}
+    assert _accounted_bytes(manager, "chat-old") == 0
+
+
+@pytest.mark.asyncio
+async def test_cancel_secondary_replace_keeps_sibling_charged_and_cleaned():
+    """SECONDARY replacement: a non-primary replacement candidate suspended in
+    stop() keeps bytes charged, and completes cleanup on release."""
+    registry = ModelRegistry()
+    primary_engine = FakeLifecycleEngine()
+    primary = entry("chat-primary", primary_engine)
+    old_engine = BlockingStopLifecycleEngine()
+    old_secondary = entry("chat-secondary", old_engine)
+    registry.add(primary, is_default=True)
+    registry.add(old_secondary)
+
+    async def loader(name: str, path: str | None, performance=None):
+        return entry(name)
+
+    manager = ResidentModelManager(registry, loader, memory_reader=lambda: 0)
+    manager.register_primary(primary, estimated_bytes=4 * GIB)
+    manager._index_record(
+        ResidencyRecord(
+            entry=old_secondary,
+            estimated_bytes=2 * GIB,
+            loaded_at=0,
+            last_used_at=0,
+        )
+    )
+
+    replacement = asyncio.create_task(
+        manager.load("chat-new", replace_group="assistant", replace_mode="wait")
+    )
+    # The old PRIMARY is retired first (fast), then the suspended SECONDARY.
+    await old_engine.stop_started.wait()
+
+    # The replacement group commits: chat-new becomes the new primary; the
+    # suspended secondary candidate is retired but still reports as being
+    # cleaned up, with its bytes charged.
+    assert registry.default_name == "chat-new"
+    assert _accounted_bytes(manager, "chat-secondary") == 2 * GIB
+    secondary_row = next(
+        item for item in manager.snapshot()["models"] if item["id"] == "chat-secondary"
+    )
+    assert secondary_row["state"] == "retiring"
+
+    replacement.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await replacement
+
+    # Sibling still retiring + charged until its stop is released.
+    assert _accounted_bytes(manager, "chat-secondary") == 2 * GIB
+
+    old_engine.stop_release.set()
+    await asyncio.wait_for(manager.shutdown(), timeout=1)
+    assert "chat-secondary" not in {item["id"] for item in manager.snapshot()["models"]}
+    assert _accounted_bytes(manager, "chat-secondary") == 0
+
+
+@pytest.mark.asyncio
+async def test_suspended_stop_does_not_block_lease_or_unrelated_op(monkeypatch):
+    """LOCK SAFETY: suspended stop must not block unrelated manager ops."""
+    monkeypatch.setattr(
+        "vllm_mlx.runtime.resident_models._release_allocator_cache", lambda: None
+    )
+    registry = ModelRegistry()
+    primary_engine = BlockingStopLifecycleEngine()
+    primary = entry("chat-old", primary_engine)
+    unrelated_engine = FakeLifecycleEngine()
+    unrelated = entry("chat-unrelated", unrelated_engine)
+    registry.add(primary, is_default=True)
+    registry.add(unrelated)
+
+    async def loader(name: str, path: str | None, performance=None):
+        return entry(name)
+
+    manager = ResidentModelManager(registry, loader, memory_reader=lambda: 0)
+    manager.register_primary(primary, estimated_bytes=4 * GIB)
+    manager._index_record(
+        ResidencyRecord(
+            entry=unrelated,
+            estimated_bytes=2 * GIB,
+            loaded_at=0,
+            last_used_at=0,
+        )
+    )
+
+    # Kick off a replacement that suspends the old primary's stop().
+    replacement = asyncio.create_task(
+        manager.load("chat-new", replace_group="assistant", replace_mode="wait")
+    )
+    await primary_engine.stop_started.wait()
+
+    # The synchronous snapshot remains observable during suspended cleanup;
+    # the async operations below are the assertions that the lock is free.
+    manager.snapshot()
+
+    # A lease on the UNRELATED resident model must not be blocked by the
+    # suspended stop() -- it needs the manager lock, which must be free.
+    async def use_unrelated_model() -> None:
+        async with manager.lease("chat-unrelated"):
+            pass
+
+        # A non-conflicting set_pinned on the unrelated model must also proceed.
+        await manager.set_pinned("chat-unrelated", True)
+
+    await asyncio.wait_for(use_unrelated_model(), timeout=1)
+
+    replacement.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await replacement
+    primary_engine.stop_release.set()
+    await asyncio.wait_for(manager.shutdown(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_failed_stop_exposes_cleanup_failed_and_keeps_bytes_charged():
+    """FAILURE: stop() raises -> snapshot exposes cleanup_failed, bytes stay
+    charged, route stays retired, and retry/shutdown behaves explicitly."""
+    registry = ModelRegistry()
+    old_engine = FailingStopLifecycleEngine()
+    primary = entry("chat-old", old_engine)
+    registry.add(primary, is_default=True)
+
+    async def loader(name: str, path: str | None, performance=None):
+        return entry(name)
+
+    manager = ResidentModelManager(registry, loader, memory_reader=lambda: 0)
+    manager.register_primary(primary, estimated_bytes=4 * GIB)
+
+    await manager.load("chat-new", replace_group="assistant", replace_mode="wait")
+
+    # Route retired, failed cleanup exposed, bytes still charged.
+    assert registry.default_name == "chat-new"
+    assert [item.model_name for item in registry.list_entries()] == ["chat-new"]
+    failed_row = next(
+        item for item in manager.snapshot()["models"] if item["id"] == "chat-old"
+    )
+    assert failed_row["state"] == "failed"
+    assert failed_row["cleanup_failed"] == "stop failed"
+    assert _accounted_bytes(manager, "chat-old") == 4 * GIB
+
+    # A later shutdown reports rather than silently claiming success or the
+    # bytes free: the failed record remains observable.
+    with pytest.raises(ResidentModelError, match="chat-old: stop failed"):
+        await manager.shutdown()
+    assert _accounted_bytes(manager, "chat-old") == 4 * GIB
+    current_row = next(
+        item for item in manager.snapshot()["models"] if item["id"] == "chat-old"
+    )
+    assert current_row["state"] == "failed"
+    assert current_row["cleanup_failed"] == "stop failed"
+
+
+@pytest.mark.asyncio
+async def test_explicit_unload_propagates_stop_failure():
+    registry = ModelRegistry()
+    engine = FailingStopLifecycleEngine()
+    target = entry("chat-target", engine)
+    registry.add(target)
+    manager = ResidentModelManager(registry, AsyncMock(), memory_reader=lambda: 0)
+    manager._index_record(
+        ResidencyRecord(
+            entry=target,
+            estimated_bytes=2 * GIB,
+            loaded_at=0,
+            last_used_at=0,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="stop failed"):
+        await manager.unload("chat-target")
+
+    assert manager._retiring[id(engine)].state == "failed"
+    assert _accounted_bytes(manager, "chat-target") == 2 * GIB
+
+
+@pytest.mark.asyncio
+async def test_explicit_unload_reports_cancelled_raw_cleanup():
+    """A cancelled manager-owned cleanup remains charged and fails explicitly."""
+    registry = ModelRegistry()
+    engine = BlockingStopLifecycleEngine()
+    target = entry("chat-target", engine)
+    registry.add(target)
+    manager = ResidentModelManager(registry, AsyncMock(), memory_reader=lambda: 0)
+    manager._index_record(
+        ResidencyRecord(
+            entry=target,
+            estimated_bytes=2 * GIB,
+            loaded_at=0,
+            last_used_at=0,
+        )
+    )
+
+    unload = asyncio.create_task(manager.unload("chat-target"))
+    await engine.stop_started.wait()
+    retirement = manager._retiring[id(engine)]
+    assert retirement.task is not None
+    retirement.task.cancel()
+
+    with pytest.raises(
+        ResidentModelError, match="retirement cleanup cancelled before completion"
+    ):
+        await unload
+
+    assert retirement.state == "failed"
+    assert _accounted_bytes(manager, "chat-target") == 2 * GIB
+
+
+@pytest.mark.asyncio
+async def test_ttl_does_not_report_failed_cleanup_as_evicted():
+    registry = ModelRegistry()
+    engine = FailingStopLifecycleEngine()
+    target = entry("chat-target", engine)
+    registry.add(target)
+    manager = ResidentModelManager(
+        registry,
+        AsyncMock(),
+        idle_ttl_seconds=60,
+        memory_reader=lambda: 0,
+        clock=lambda: 61,
+    )
+    manager._index_record(
+        ResidencyRecord(
+            entry=target,
+            estimated_bytes=2 * GIB,
+            loaded_at=0,
+            last_used_at=0,
+        )
+    )
+
+    assert await manager.evict_expired() == []
+    assert manager._retiring[id(engine)].state == "failed"
+    assert _accounted_bytes(manager, "chat-target") == 2 * GIB
+
+
+@pytest.mark.asyncio
+async def test_shutdown_reports_every_failed_cleanup_after_draining_all():
+    registry = ModelRegistry()
+    manager = ResidentModelManager(registry, AsyncMock(), memory_reader=lambda: 0)
+    engines = {}
+    for model_id in ("chat-a", "chat-b"):
+        engine = FailingStopLifecycleEngine()
+        engines[model_id] = engine
+        target = entry(model_id, engine)
+        registry.add(target)
+        manager._index_record(
+            ResidencyRecord(
+                entry=target,
+                estimated_bytes=2 * GIB,
+                loaded_at=0,
+                last_used_at=0,
+            )
+        )
+
+    with pytest.raises(ResidentModelError) as caught:
+        await manager.shutdown()
+
+    assert "chat-a: stop failed" in str(caught.value)
+    assert "chat-b: stop failed" in str(caught.value)
+    assert all(engine.stopped is True for engine in engines.values())
+    assert all(
+        manager._retiring[id(engine)].state == "failed" for engine in engines.values()
+    )
+
+
+@pytest.mark.asyncio
+async def test_shutdown_reports_failure_without_a_preserved_cause(monkeypatch):
+    """The aggregate error remains useful for cause-less cleanup failures."""
+    manager = ResidentModelManager(
+        ModelRegistry(), AsyncMock(), memory_reader=lambda: 0
+    )
+    monkeypatch.setattr(
+        manager,
+        "_cleanup_failures",
+        lambda _identities: [("chat-target", "cleanup interrupted", None)],
+    )
+
+    with pytest.raises(
+        ResidentModelError, match="chat-target: cleanup interrupted"
+    ) as caught:
+        await manager.shutdown()
+
+    assert caught.value.__cause__ is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_retries_a_completed_failed_retirement():
+    registry = ModelRegistry()
+    engine = FailOnceStopLifecycleEngine()
+    target = entry("chat-target", engine)
+    registry.add(target)
+    manager = ResidentModelManager(registry, AsyncMock(), memory_reader=lambda: 0)
+    record = ResidencyRecord(
+        entry=target,
+        estimated_bytes=2 * GIB,
+        loaded_at=0,
+        last_used_at=0,
+    )
+    manager._index_record(record)
+
+    async with manager._lock:
+        first_attempt = manager._begin_evict_locked(record, reason="explicit")
+    await first_attempt
+    assert engine.stop_calls == 1
+    assert manager._retiring[id(engine)].state == "failed"
+    assert _accounted_bytes(manager, "chat-target") == 2 * GIB
+
+    await manager.shutdown()
+    assert engine.stop_calls == 2
+    assert engine.stopped is True
+    assert id(engine) not in manager._retiring
+    assert _accounted_bytes(manager, "chat-target") == 0
+
+
+@pytest.mark.asyncio
+async def test_unload_shutdown_race_stops_engine_exactly_once():
+    """IDEMPOTENCY: unload + shutdown for the same engine calls stop() exactly
+    once (the second retirement joins the in-flight cleanup, never double-stops)."""
+    registry = ModelRegistry()
+    primary_engine = FakeLifecycleEngine()
+    primary = entry("chat-primary", primary_engine)
+    target_engine = BlockingStopLifecycleEngine()
+    target = entry("chat-target", target_engine)
+    registry.add(primary, is_default=True)
+    registry.add(target)
+
+    async def loader(name: str, path: str | None, performance=None):
+        return entry(name)
+
+    manager = ResidentModelManager(registry, loader, memory_reader=lambda: 0)
+    manager.register_primary(primary, estimated_bytes=4 * GIB)
+    manager._index_record(
+        ResidencyRecord(
+            entry=target,
+            estimated_bytes=2 * GIB,
+            loaded_at=0,
+            last_used_at=0,
+        )
+    )
+
+    # Start an unload that suspends the target's stop().
+    unload_task = asyncio.create_task(manager.unload("chat-target"))
+    await target_engine.stop_started.wait()
+
+    # A concurrent shutdown must not call stop() again on the same engine; it
+    # joins the in-flight cleanup.
+    shutdown_task = asyncio.create_task(manager.shutdown())
+    await asyncio.sleep(0)
+
+    target_engine.stop_release.set()
+    await asyncio.wait_for(asyncio.gather(unload_task, shutdown_task), timeout=1)
+    assert target_engine.stop_calls == 1
+    assert target_engine.stopped is True
+    assert _accounted_bytes(manager, "chat-target") == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_waiter_does_not_poison_later_retirement_join():
+    registry = ModelRegistry()
+    engine = BlockingStopLifecycleEngine()
+    target = entry("chat-target", engine)
+    registry.add(target)
+    manager = ResidentModelManager(registry, AsyncMock(), memory_reader=lambda: 0)
+    record = ResidencyRecord(
+        entry=target,
+        estimated_bytes=2 * GIB,
+        loaded_at=0,
+        last_used_at=0,
+    )
+    manager._index_record(record)
+
+    async with manager._lock:
+        first_waiter = manager._begin_evict_locked(record, reason="explicit")
+    await engine.stop_started.wait()
+    first_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_waiter
+
+    async with manager._lock:
+        second_waiter = manager._begin_evict_locked(record, reason="shutdown")
+    assert second_waiter.cancelled() is False
+
+    engine.stop_release.set()
+    await asyncio.wait_for(second_waiter, timeout=1)
+    assert engine.stop_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_shutdown_does_not_cancel_manager_owned_retirement():
+    registry = ModelRegistry()
+    engine = BlockingStopLifecycleEngine()
+    target = entry("chat-target", engine)
+    registry.add(target)
+    manager = ResidentModelManager(registry, AsyncMock(), memory_reader=lambda: 0)
+    record = ResidencyRecord(
+        entry=target,
+        estimated_bytes=2 * GIB,
+        loaded_at=0,
+        last_used_at=0,
+    )
+    manager._index_record(record)
+
+    async with manager._lock:
+        first_waiter = manager._begin_evict_locked(record, reason="explicit")
+    await engine.stop_started.wait()
+    first_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_waiter
+
+    shutdown = asyncio.create_task(manager.shutdown())
+    await asyncio.sleep(0)
+    shutdown.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await shutdown
+
+    retirement = manager._retiring[id(engine)]
+    assert retirement.task is not None
+    assert retirement.task.cancelled() is False
+
+    engine.stop_release.set()
+    await asyncio.wait_for(manager.shutdown(), timeout=1)
+    assert engine.stop_calls == 1
+    assert id(engine) not in manager._retiring
+
+
+@pytest.mark.asyncio
+async def test_retirement_does_not_remove_replacement_that_reuses_old_alias():
+    registry = ModelRegistry()
+    old_engine = BlockingStopLifecycleEngine()
+    old = entry("chat-old", old_engine)
+    registry.add(old, is_default=True)
+    manager = ResidentModelManager(registry, AsyncMock(), memory_reader=lambda: 0)
+    old_record = manager.register_primary(old, estimated_bytes=2 * GIB)
+
+    replacement = entry("chat-new")
+    replacement.aliases.add("chat-old")
+    registry.add(replacement, is_default=True)
+    replacement_record = ResidencyRecord(
+        entry=replacement,
+        estimated_bytes=2 * GIB,
+        loaded_at=1,
+        last_used_at=1,
+        pinned=True,
+        primary=True,
+    )
+    manager._index_record(replacement_record)
+
+    async with manager._lock:
+        cleanup = manager._begin_evict_locked(old_record, reason="replace_assistant")
+    await old_engine.stop_started.wait()
+
+    assert registry.get_entry("chat-old") is replacement
+    assert manager._canonical("chat-old") == "chat-new"
+
+    old_engine.stop_release.set()
+    await asyncio.wait_for(cleanup, timeout=1)
+    assert registry.get_entry("chat-old") is replacement
+    assert registry.list_entries() == [replacement]
+    assert manager._records["chat-new"] is replacement_record
+
+
+@pytest.mark.asyncio
+async def test_suspended_stop_cancellation_latency_stays_bounded():
+    """CANCELLATION LATENCY: a cancelled caller returns promptly (not blocked on
+    the suspended stop), while cleanup continues to completion when released."""
+    registry = ModelRegistry()
+    old_engine = BlockingStopLifecycleEngine()
+    primary = entry("chat-old", old_engine)
+    registry.add(primary, is_default=True)
+
+    async def loader(name: str, path: str | None, performance=None):
+        return entry(name)
+
+    manager = ResidentModelManager(registry, loader, memory_reader=lambda: 0)
+    manager.register_primary(primary, estimated_bytes=4 * GIB)
+
+    replacement = asyncio.create_task(
+        manager.load("chat-new", replace_group="assistant", replace_mode="wait")
+    )
+    await old_engine.stop_started.wait()
+
+    # Bounded wait proves the cancellation propagates promptly even though the
+    # stop is still suspended (events + wait_for, never sleep-as-sync).
+    replacement.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(replacement, timeout=1)
+
+    # Cleanup is still in flight (suspended); bytes remain charged.
+    assert _accounted_bytes(manager, "chat-old") == 4 * GIB
+    # Release and drain.
+    old_engine.stop_release.set()
+    await asyncio.wait_for(manager.shutdown(), timeout=1)
+    assert _accounted_bytes(manager, "chat-old") == 0
 
 
 @pytest.mark.asyncio
@@ -2962,19 +3659,1053 @@ def test_residency_control_plane_validates_and_forwards_performance(monkeypatch)
 
 
 def test_resident_performance_uses_cli_kv_safety_gate(monkeypatch):
+    """#78: a control-plane kv_cache_dtype is operator-explicit, so an
+    unsupported family is now REJECTED with the shared typed error
+    (mapped to 422 by the residency route) instead of being silently
+    downgraded to bf16 as before."""
+    from vllm_mlx.kv_cache_dtype import KVCacheQuantizationUnsupportedError
     from vllm_mlx.runtime.resident_models import resolve_resident_performance
 
     monkeypatch.setattr(
         "vllm_mlx.cli._gather_kv_cache_dtype_inputs",
         lambda _name: ({"sliding_window": 4096}, None),
     )
-    resolved = resolve_resident_performance(
-        ResidentPerformanceConfig(kv_cache_dtype="int4", cache_memory_mb=2048),
-        model_name="example/sliding-model",
-        model_path=None,
-    )
+    with pytest.raises(KVCacheQuantizationUnsupportedError):
+        resolve_resident_performance(
+            ResidentPerformanceConfig(kv_cache_dtype="int4", cache_memory_mb=2048),
+            model_name="example/sliding-model",
+            model_path=None,
+        )
 
-    assert resolved == ResidentPerformanceConfig(
-        kv_cache_dtype="bf16",
-        cache_memory_mb=2048,
+
+def test_residency_route_maps_kv_unsupported_rejection_to_422(monkeypatch):
+    """#78: the residency route must surface the shared typed rejection as an
+    actionable 422 BEFORE load, not a 500 from the generic handler."""
+    from types import SimpleNamespace
+
+    from vllm_mlx.routes.residency import router
+
+    manager, _, _, _ = manager_fixture(limit_gib=20)
+    monkeypatch.setattr(
+        "vllm_mlx.routes.residency.get_config",
+        lambda: SimpleNamespace(residency_manager=manager),
     )
+    monkeypatch.setattr(
+        "vllm_mlx.cli._gather_kv_cache_dtype_inputs",
+        # Sliding-window layout with an explicit quantized-KV perf request:
+        # resolve_resident_performance raises KVCacheQuantizationUnsupportedError.
+        lambda _name: ({"sliding_window": 4096}, None),
+    )
+    app = FastAPI()
+    app.include_router(router)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/models/load",
+            json={
+                "model": "sliding-model",
+                "performance": {
+                    "kv_cache_dtype": "int4",
+                    "cache_memory_mb": 2048,
+                },
+            },
+        )
+    assert response.status_code == 422
+    assert "#78" not in response.json()["detail"]
+    assert "kv" in response.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Protected-role admission (forced alignment). These exercise the shared
+# residency ledger's ``admit_role``/``release_role`` transaction path with a
+# bare manager (no registry primary) so the alignment role is tested in
+# isolation — entirely MLX-free.
+# ---------------------------------------------------------------------------
+
+
+def role_manager_fixture(*, limit_gib=4.0):
+    """A manager with no primary model so role admission is tested alone."""
+
+    registry = ModelRegistry()
+    clock = Clock()
+    manager = ResidentModelManager(
+        registry,
+        lambda name, path=None, perf=None: entry(name),
+        memory_limit_bytes=limit_gib * GIB,
+        clock=clock,
+        memory_reader=lambda: 0,
+    )
+    return manager, clock
+
+
+def _aligner_bytes() -> int:
+    # The real catalog footprint of qwen3-aligner /
+    # mlx-community/Qwen3-ForcedAligner-0.6B-8bit (~1.19 GiB).
+    return 1276473392
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_admitted_under_budget_and_ledger_resident():
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+
+    async with manager.admit_role(
+        role="alignment",
+        model_id="qwen3-aligner",
+        requested_bytes=_aligner_bytes(),
+        capacity_source="catalog",
+    ):
+        # During the load the reservation is charged in the "loading" state.
+        roles = manager.snapshot()["roles"]
+        entry = next(r for r in roles if r["role"] == "alignment")
+        assert entry["state"] == "loading"
+        assert entry["reserved_bytes"] == _aligner_bytes()
+
+    # After the context succeeds the reservation is committed resident.
+    roles = manager.snapshot()["roles"]
+    entry = next(r for r in roles if r["role"] == "alignment")
+    assert entry["state"] == "resident"
+    assert entry["capacity_source"] == "catalog"
+    # The reservation is charged to the shared accounted usage.
+    assert manager._accounted_usage() >= _aligner_bytes()
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_rejected_with_typed_507_when_over_ceiling():
+    # Ceiling below the aligner footprint with no eligible eviction ->
+    # the typed role_capacity envelope must be produced.
+    manager, _ = role_manager_fixture(limit_gib=0.5)  # 0.5 GiB < aligner
+
+    with pytest.raises(ResidentModelCapacityError) as exc_info:
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=_aligner_bytes(),
+            capacity_source="catalog",
+        ):
+            pass
+
+    exc = exc_info.value
+    assert exc.reason == "role_capacity_alignment"
+    assert exc.requested_bytes == _aligner_bytes()
+    assert exc.limit_bytes == int(0.5 * GIB)
+    assert exc.requested_role == "alignment"
+    envelope = exc.envelope()
+    assert envelope["error"]["type"] == "insufficient_capacity_error"
+    assert envelope["error"]["code"] == "insufficient_capacity_error"
+    assert envelope["error"]["reason"] == "role_capacity_alignment"
+    assert envelope["error"]["requested_bytes"] == _aligner_bytes()
+    assert envelope["error"]["limit_bytes"] == int(0.5 * GIB)
+    # No leaked reservation on rejection.
+    assert manager.snapshot()["roles"] == []
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_rollback_on_load_failure_keeps_ledger_empty():
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+
+    with pytest.raises(RuntimeError, match="weight load failed"):
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=_aligner_bytes(),
+            capacity_source="catalog",
+        ):
+            raise RuntimeError("weight load failed")
+
+    # A failed load leaves no leaked reservation.
+    assert manager.snapshot()["roles"] == []
+    assert manager._accounted_usage() == 0
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_rollback_on_cancellation_keeps_ledger_empty():
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+
+    with pytest.raises(asyncio.CancelledError):
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=_aligner_bytes(),
+            capacity_source="catalog",
+        ):
+            raise asyncio.CancelledError()
+
+    assert manager.snapshot()["roles"] == []
+    assert manager._accounted_usage() == 0
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_replace_retires_previous_on_failure():
+    # A new aligner replaces a previous one; the load drops the old engine so
+    # its reservation must not be restored on failure (retire_previous).
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+
+    # First aligner loads and commits.
+    async with manager.admit_role(
+        role="alignment",
+        model_id="qwen3-aligner",
+        requested_bytes=_aligner_bytes(),
+        capacity_source="catalog",
+    ):
+        pass
+    assert manager.snapshot()["roles"][0]["model"] == "qwen3-aligner"
+
+    # Replace with a second aligner whose load fails after retire_previous.
+    with pytest.raises(RuntimeError, match="reload failed"):
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-forced-aligner",
+            requested_bytes=_aligner_bytes(),
+            capacity_source="catalog",
+            replace_existing=True,
+        ) as admission:
+            admission.retire_previous()
+            raise RuntimeError("reload failed")
+
+    # The old engine is gone, so no reservation should remain.
+    assert manager.snapshot()["roles"] == []
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_replace_restores_previous_unless_retired():
+    # Without retire_previous, a failed replacement restores the previous
+    # reservation (the old engine still exists).
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+
+    async with manager.admit_role(
+        role="alignment",
+        model_id="qwen3-aligner",
+        requested_bytes=_aligner_bytes(),
+        capacity_source="catalog",
+    ):
+        pass
+
+    try:
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-forced-aligner",
+            requested_bytes=_aligner_bytes(),
+            capacity_source="catalog",
+            replace_existing=True,
+        ):
+            raise RuntimeError("reload failed")
+    except RuntimeError:
+        pass
+
+    # Previous aligner reservation restored (old engine survives).
+    roles = manager.snapshot()["roles"]
+    assert len(roles) == 1
+    assert roles[0]["model"] == "qwen3-aligner"
+    assert roles[0]["state"] == "resident"
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_rejects_second_loading_admission():
+    """A role must never host two concurrent in-flight LOADS.
+
+    pr_validate codex BLOCKING #1: a second admission while the first is
+    still loading would overwrite the ledger entry, and a later rollback
+    could resurrect a stale ``\"loading\"`` record. The ledger layer rejects
+    the second admission instead of corrupting the reservation.
+    """
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_open():
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=_aligner_bytes(),
+            capacity_source="catalog",
+        ):
+            started.set()
+            await release.wait()
+
+    first = asyncio.create_task(hold_open())
+    await started.wait()
+
+    # While the first load is in flight ("loading"), a second admission for
+    # the same role — even with replace_existing=True — must be rejected, not
+    # overwrite the in-flight reservation.
+    with pytest.raises(ResidentModelError, match="loading admission in flight"):
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-forced-aligner",
+            requested_bytes=_aligner_bytes(),
+            capacity_source="catalog",
+            replace_existing=True,
+        ):
+            pass
+
+    release.set()
+    await first
+
+    # The original (first) reservation committed resident, untouched by the
+    # rejected second admission.
+    roles = [r for r in manager.snapshot()["roles"] if r["role"] == "alignment"]
+    assert len(roles) == 1
+    assert roles[0]["model"] == "qwen3-aligner"
+    assert roles[0]["state"] == "resident"
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_unknown_capacity_fails_closed_under_ceiling():
+    # Under a configured ceiling, a model with no catalog/local-cache size
+    # must fail closed rather than admit blind.
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+
+    with pytest.raises(ResidentModelCapacityError) as exc_info:
+        async with manager.admit_role(
+            role="alignment",
+            model_id="some-unknown-aligner",
+            requested_bytes=None,
+            capacity_source="unknown",
+        ):
+            pass
+
+    assert exc_info.value.reason == "role_capacity_unknown"
+    assert exc_info.value.requested_bytes is None
+    assert exc_info.value.envelope()["error"]["reason"] == "role_capacity_unknown"
+    assert manager.snapshot()["roles"] == []
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_no_ceiling_admits_without_typed_rejection():
+    # With no configured ceiling (limit 0) admission bypasses capacity checks
+    # entirely, preserving pre-existing behavior for unmanaged servers.
+    manager, _ = role_manager_fixture(limit_gib=0.0)
+
+    async with manager.admit_role(
+        role="alignment",
+        model_id="qwen3-aligner",
+        requested_bytes=None,  # unknown, but no ceiling -> admitted
+        capacity_source="unknown",
+    ):
+        pass
+
+    roles = manager.snapshot()["roles"]
+    assert len(roles) == 1
+    assert roles[0]["state"] == "resident"
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_release_removes_ledger_charge():
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+
+    async with manager.admit_role(
+        role="alignment",
+        model_id="qwen3-aligner",
+        requested_bytes=_aligner_bytes(),
+        capacity_source="catalog",
+    ):
+        pass
+    assert manager._accounted_usage() >= _aligner_bytes()
+
+    await manager.release_role("alignment")
+    assert manager.snapshot()["roles"] == []
+    assert manager._accounted_usage() == 0
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_release_exclusive_retires_sibling_on_success():
+    """pr_validate codex BLOCKING (round-17): alignment and dictation are
+    mutually exclusive, so a resident ``speech-input`` reservation must be
+    retired atomically WITHIN the alignment admission transaction — read from
+    the real auxiliary ``_roles`` ledger, never the ``snapshot()`` projection
+    (which mixes in synthesized ordinary-model entries a route could wrongly
+    release). On SUCCESS the sibling stays retired (the ASR engine was
+    evicted) so the ledger charges only the alignment role."""
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+
+    small = int(0.05 * 1024**3)
+    async with manager.admit_role(
+        role="speech-input",
+        model_id="whisper-large",
+        requested_bytes=small,
+        capacity_source="catalog",
+    ):
+        pass
+    assert any(r["role"] == "speech-input" for r in manager.snapshot()["roles"])
+
+    async with manager.admit_role(
+        role="alignment",
+        model_id="qwen3-aligner",
+        requested_bytes=_aligner_bytes(),
+        capacity_source="catalog",
+        release_exclusive_role="speech-input",
+    ):
+        pass
+
+    roles = {r["role"] for r in manager.snapshot()["roles"]}
+    assert "alignment" in roles
+    assert "speech-input" not in roles  # retired with the successful admission
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_release_exclusive_restores_sibling_on_rollback():
+    """pr_validate codex BLOCKING (round-17): when the alignment admission
+    transaction rolls back (no engine evicted), the retired ``speech-input``
+    reservation MUST be restored atomically under the same lock — a
+    still-resident ASR engine can never be left silently unaccounted. There is
+    no window for a concurrent admission to claim the freed capacity, because
+    the release and the restore are the SAME manager transaction."""
+    manager, _ = role_manager_fixture(limit_gib=0.5)
+
+    small = int(0.05 * 1024**3)
+    async with manager.admit_role(
+        role="speech-input",
+        model_id="whisper-large",
+        requested_bytes=small,
+        capacity_source="catalog",
+    ):
+        pass
+    assert any(r["role"] == "speech-input" for r in manager.snapshot()["roles"])
+
+    # The aligner (1.19 GiB) cannot fit under 0.5 GiB even after the small
+    # speech-input reservation is released -> the in-lock rollback runs and
+    # must restore speech-input before the capacity error propagates.
+    with pytest.raises(ResidentModelCapacityError):
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=_aligner_bytes(),
+            capacity_source="catalog",
+            release_exclusive_role="speech-input",
+        ):
+            pass
+
+    roles = {r["role"] for r in manager.snapshot()["roles"]}
+    assert "speech-input" in roles  # restored: the ASR engine is still resident
+    assert "alignment" not in roles  # the rejected aligner left no reservation
+    # The restored reservation keeps its original footprint (accounted once).
+    (speech,) = [r for r in manager.snapshot()["roles"] if r["role"] == "speech-input"]
+    assert speech["reserved_bytes"] == small
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_exclusive_sibling_capacity_is_retained_during_load():
+    """pr_validate codex BLOCKING (round-19/21): the manager lock is NOT held
+    across the yielded aligner load, so the mutually-exclusive sibling's
+    capacity could be STOLEN by a concurrent admission if it were released
+    up front. Instead the sibling reservation is RETAINED (credited against the
+    aligner, never freed), so a concurrent admission CANNOT claim its bytes:
+    it is rejected with 507 while the aligner loads, and the rollback leaves
+    the sibling's still-resident engine correctly accounted — no unaccounted
+    engine and no over-ceiling ledger."""
+    manager, _ = role_manager_fixture(limit_gib=1.0)
+    GIB = 1024**3
+    speech = int(0.4 * GIB)
+    other = int(0.2 * GIB)
+    aligner = int(0.3 * GIB)
+    concurrent = int(0.5 * GIB)
+
+    # Pre-existing roles: speech-input (0.4) + a speech-output sibling (0.2) = 0.6.
+    async with manager.admit_role(
+        role="speech-output",
+        model_id="some-tts",
+        requested_bytes=other,
+        capacity_source="catalog",
+    ):
+        pass
+    async with manager.admit_role(
+        role="speech-input",
+        model_id="whisper-large",
+        requested_bytes=speech,
+        capacity_source="catalog",
+    ):
+        pass
+    assert manager._accounted_usage() == other + speech
+
+    # Enter alignment (speech-input retained + credited, so no false 507 and
+    # no freed capacity). During the yielded LOAD a concurrent admission wants
+    # the sibling's bytes, but they are RETAINED -> it cannot fit -> 507.
+    with pytest.raises(ResidentModelCapacityError):
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=aligner,
+            capacity_source="catalog",
+            release_exclusive_role="speech-input",
+        ):
+            async with manager.admit_role(
+                role="image-generation",
+                model_id="other-gen",
+                requested_bytes=concurrent,
+                capacity_source="catalog",
+            ):
+                pass
+            raise RuntimeError("load failed")
+
+    # The concurrent image-generation admission was REJECTED (sibling capacity
+    # retained), so on rollback the ledger is exactly as before the aligner:
+    # speech-input restored (its engine is still resident) + speech-output,
+    # alignment gone.
+    roles = {r["role"] for r in manager.snapshot()["roles"]}
+    assert "alignment" not in roles
+    assert "speech-output" in roles
+    assert "image-generation" not in roles
+    assert "speech-input" in roles  # retained + credited, its engine accounted
+    assert manager._accounted_usage() == other + speech
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_commit_finalize_is_cancellation_shielded():
+    """pr_validate codex BLOCKING (round-22): after ``admission.commit()`` the
+    engine is resident, so a cancellation arriving while the success-path
+    finalization waits on the manager lock must STILL retire the evicted
+    sibling (and keep the committed record resident) — never leak a phantom
+    sibling charge. The success finalization runs under a cancel-drained
+    shield, so whether the cancellation is handled by that shield or by the
+    ``committed`` rollback branch, the invariant holds: sibling retired,
+    alignment record resident."""
+    from vllm_mlx.runtime.resident_models import ResidentRoleAdmission
+
+    manager, _ = role_manager_fixture(limit_gib=1.0)
+    GIB = 1024**3
+    speech = int(0.4 * GIB)
+    aligner = int(0.3 * GIB)
+
+    async with manager.admit_role(
+        role="speech-input",
+        model_id="whisper-large",
+        requested_bytes=speech,
+        capacity_source="catalog",
+    ):
+        pass
+
+    # align() commits the engine inside its body, then BLOCKS holding the
+    # manager lock so cancellation lands deterministically AFTER publication.
+    committed_in_body = asyncio.Event()
+    release_body_lock = asyncio.Event()
+
+    async def _align():
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=aligner,
+            capacity_source="catalog",
+            release_exclusive_role="speech-input",
+        ) as admission:
+            # Engine published -> mark resident; a cancellation anywhere after
+            # this must not resurrect the evicted sibling.
+            if isinstance(admission, ResidentRoleAdmission):
+                admission.commit()
+            # Hold the manager lock and park: the body owns the lock here, so
+            # cancelling now exercises the post-commit cleanup under lock
+            # contention (either the committed-rollback branch or the shielded
+            # else-finalize) — both must retire the sibling.
+            async with manager._lock:
+                committed_in_body.set()
+                await release_body_lock.wait()
+
+    align_task = asyncio.create_task(_align())
+    await committed_in_body.wait()  # committed and holding the manager lock
+    align_task.cancel()  # cancel AFTER publication
+    release_body_lock.set()  # let the post-commit cleanup run (drains)
+
+    try:
+        await align_task
+    except asyncio.CancelledError:
+        pass
+
+    # The cancellation must not leak: sibling retired (ASR engine evicted) and
+    # the committed alignment record resident.
+    roles = {r["role"] for r in manager.snapshot()["roles"]}
+    assert "speech-input" not in roles
+    (aligned,) = [r for r in manager.snapshot()["roles"] if r["role"] == "alignment"]
+    assert aligned["state"] == "resident"
+    assert aligned["reserved_bytes"] == aligner
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_success_finalize_drains_repeated_cancellation(
+    monkeypatch,
+):
+    """Success finalization completes even if its waiter is cancelled twice."""
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+    finalize_started = asyncio.Event()
+    release_finalize = asyncio.Event()
+    original = manager._finalize_role_commit
+
+    async def delayed_finalize(**kwargs):
+        finalize_started.set()
+        await release_finalize.wait()
+        await original(**kwargs)
+
+    monkeypatch.setattr(manager, "_finalize_role_commit", delayed_finalize)
+
+    async def admit():
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=_aligner_bytes(),
+            capacity_source="catalog",
+        ):
+            pass
+
+    task = asyncio.create_task(admit())
+    await finalize_started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.sleep(0)
+    release_finalize.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    (role,) = manager.snapshot()["roles"]
+    assert role["role"] == "alignment"
+    assert role["state"] == "resident"
+
+
+@pytest.mark.asyncio
+async def test_alignment_role_rollback_preserves_concurrently_replaced_sibling():
+    """pr_validate codex BLOCKING (round-24): rollback must only retire the
+    sibling reservation THIS transaction retained — never erase a NEWER
+    reservation a concurrent admission installed for that role while the
+    aligner load ran. The identity-checked pop preserves the replacement."""
+    manager, _ = role_manager_fixture(limit_gib=1.0)
+    GIB = 1024**3
+    s1 = int(0.4 * GIB)
+    s2 = int(0.25 * GIB)
+    aligner = int(0.3 * GIB)
+
+    async with manager.admit_role(
+        role="speech-input",
+        model_id="whisper-large",
+        requested_bytes=s1,
+        capacity_source="catalog",
+    ):
+        pass
+
+    with pytest.raises(RuntimeError, match="load failed"):
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=aligner,
+            capacity_source="catalog",
+            release_exclusive_role="speech-input",
+        ) as admission:
+            # The load evicted the ASR engine -> retire_exclusive fires.
+            admission.retire_exclusive()
+            # A concurrent admission REPLACES the speech-input reservation with
+            # a newer (still-resident engine) one while the aligner loads.
+            async with manager.admit_role(
+                role="speech-input",
+                model_id="whisper-large",
+                requested_bytes=s2,
+                capacity_source="catalog",
+                replace_existing=True,
+            ):
+                pass
+            raise RuntimeError("load failed")
+
+    # The rollback must NOT erase the newer reservation (its engine is
+    # resident); only alignment is rolled back.
+    (speech,) = [r for r in manager.snapshot()["roles"] if r["role"] == "speech-input"]
+    assert speech["reserved_bytes"] == s2
+    assert "alignment" not in {r["role"] for r in manager.snapshot()["roles"]}
+
+
+# ---------------------------------------------------------------------------
+# Engine-layer contract for #2305: closed role enum + typed capacity envelope.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_closed_role_enum_rejects_unknown_and_admits_all_six():
+    # The six roles the shared residency lifecycle owns are all admissible.
+    manager, _ = role_manager_fixture(limit_gib=16.0)
+    for role in (
+        "assistant",
+        "speech-input",
+        "speech-output",
+        "alignment",
+        "image-generation",
+        "video-generation",
+    ):
+        async with manager.admit_role(
+            role=role,
+            model_id=f"model-{role}",
+            requested_bytes=int(0.1 * GIB),
+            capacity_source="catalog",
+        ):
+            pass
+    resident = {r["role"] for r in manager.snapshot()["roles"]}
+    assert resident == {
+        "assistant",
+        "speech-input",
+        "speech-output",
+        "alignment",
+        "image-generation",
+        "video-generation",
+    }
+
+    # An arbitrary/unknown role string must be rejected at the ledger gate with
+    # a clear error — never silently admitted into the closed set.
+    with pytest.raises(ResidentModelError, match="unknown resident role"):
+        async with manager.admit_role(
+            role="tts-extra",
+            model_id="whatever",
+            requested_bytes=int(0.1 * GIB),
+            capacity_source="catalog",
+        ):
+            pass
+
+    # release_role is gated by the same closed set.
+    with pytest.raises(ResidentModelError, match="unknown resident role"):
+        await manager.release_role("no-such-role")
+
+
+def test_role_enum_accepts_canonical_underscore_aliases():
+    # Callers may use the snake_case canonical names (speech_input,
+    # speech_output, image_generation, video_generation) and the closed enum
+    # coerces them to the authoritative dash-form wire values.
+    for role, wire in (
+        ("speech_input", "speech-input"),
+        ("speech_output", "speech-output"),
+        ("image_generation", "image-generation"),
+        ("video_generation", "video-generation"),
+    ):
+        assert ResidentRole.coerce(role).value == wire
+
+    with pytest.raises(ResidentModelError, match="invalid role"):
+        ResidentRole.coerce(7)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_role_aliases_share_one_canonical_ledger_key():
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+
+    async with manager.admit_role(
+        role="speech_input",
+        model_id="asr",
+        requested_bytes=int(0.3 * GIB),
+        capacity_source="catalog",
+    ):
+        pass
+
+    roles = manager.snapshot()["roles"]
+    assert [row["role"] for row in roles] == ["speech-input"]
+
+    # The dash and underscore spellings are one logical role, not two ledger
+    # slots that could be admitted and charged independently.
+    with pytest.raises(ResidentModelError, match="already resident"):
+        async with manager.admit_role(
+            role="speech-input",
+            model_id="other-asr",
+            requested_bytes=int(0.3 * GIB),
+            capacity_source="catalog",
+        ):
+            pass
+
+    # Release accepts either spelling and removes the canonical reservation.
+    await manager.release_role("speech_input")
+    assert manager.snapshot()["roles"] == []
+
+
+@pytest.mark.asyncio
+async def test_capacity_507_envelope_carries_full_role_contract():
+    # A capacity rejection must surface the stable machine fields #2306 will
+    # parse: requested_role, the live resident_roles ledger, recovery_actions,
+    # and the requested/used/limit bytes.
+    manager, _ = role_manager_fixture(limit_gib=1.0)
+    small = int(0.2 * GIB)
+
+    # Seed a resident speech-output role so the ledger is non-empty.
+    async with manager.admit_role(
+        role="speech-output",
+        model_id="some-tts",
+        requested_bytes=small,
+        capacity_source="catalog",
+    ):
+        pass
+
+    with pytest.raises(ResidentModelCapacityError) as exc_info:
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=_aligner_bytes(),
+            capacity_source="catalog",
+        ):
+            pass
+
+    exc = exc_info.value
+    assert exc.requested_role == "alignment"
+    envelope = exc.envelope()["error"]
+    assert envelope["type"] == "insufficient_capacity_error"
+    assert envelope["requested_role"] == "alignment"
+    assert envelope["requested_bytes"] == _aligner_bytes()
+    assert envelope["limit_bytes"] == int(1.0 * GIB)
+    assert envelope["used_bytes"] > 0
+    # The live ledger is reflected in the envelope (speech-output resident).
+    resident = envelope["resident_roles"]
+    assert resident == [
+        {
+            "role": "speech-output",
+            "model_id": "some-tts",
+            "reserved_bytes": small,
+            "state": "resident",
+        }
+    ]
+    # Alignment's server-declared recovery actions.
+    assert envelope["recovery_actions"] == ["unload_assistant"]
+
+
+@pytest.mark.asyncio
+async def test_capacity_507_envelope_includes_registered_assistant_role():
+    registry = ModelRegistry()
+    assistant = entry("assistant-model")
+    registry.add(assistant, is_default=True)
+    manager = ResidentModelManager(
+        registry,
+        lambda name, path=None, perf=None: entry(name),
+        memory_limit_bytes=1 * GIB,
+        memory_reader=lambda: 0,
+    )
+    manager.register_primary(assistant, estimated_bytes=int(0.8 * GIB))
+
+    with pytest.raises(ResidentModelCapacityError) as exc_info:
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=int(0.3 * GIB),
+            capacity_source="catalog",
+        ):
+            pass
+
+    envelope = exc_info.value.envelope()["error"]
+    assert envelope["used_bytes"] == int(0.8 * GIB)
+    assert envelope["resident_roles"] == [
+        {
+            "role": "assistant",
+            "model_id": "assistant-model",
+            "reserved_bytes": int(0.8 * GIB),
+            "state": "resident",
+        }
+    ]
+    assert envelope["recovery_actions"] == ["unload_assistant"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_state", ["retiring", "failed"])
+async def test_capacity_507_envelope_includes_charged_retirement(
+    cleanup_state, monkeypatch
+):
+    monkeypatch.setattr(
+        "vllm_mlx.runtime.resident_models._release_allocator_cache", lambda: None
+    )
+    registry = ModelRegistry()
+    engine = BlockingStopLifecycleEngine()
+    assistant = entry("retiring-assistant", engine)
+    registry.add(assistant)
+    manager = ResidentModelManager(
+        registry,
+        AsyncMock(),
+        memory_limit_bytes=1 * GIB,
+        memory_reader=lambda: 0,
+    )
+    record = ResidencyRecord(
+        entry=assistant,
+        estimated_bytes=int(0.8 * GIB),
+        loaded_at=0,
+        last_used_at=0,
+    )
+    manager._index_record(record)
+
+    async with manager._lock:
+        cleanup = manager._begin_evict_locked(record, reason="explicit")
+    await engine.stop_started.wait()
+    retirement = manager._retiring[id(engine)]
+    if cleanup_state == "failed":
+        assert retirement.task is not None
+        retirement.task.cancel()
+        await cleanup
+
+    with pytest.raises(ResidentModelCapacityError) as exc_info:
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=int(0.3 * GIB),
+            capacity_source="catalog",
+        ):
+            pass
+
+    envelope = exc_info.value.envelope()["error"]
+    assert envelope["used_bytes"] == int(0.8 * GIB)
+    assert envelope["resident_roles"] == [
+        {
+            "role": "assistant",
+            "model_id": "retiring-assistant",
+            "reserved_bytes": int(0.8 * GIB),
+            "state": cleanup_state,
+        }
+    ]
+
+    if cleanup_state == "retiring":
+        engine.stop_release.set()
+        await cleanup
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("resident_role", "requested_role", "admission_options"),
+    [
+        ("speech-output", "speech-output", {"replace_existing": True}),
+        (
+            "speech-input",
+            "alignment",
+            {"release_exclusive_role": "speech-input"},
+        ),
+    ],
+)
+async def test_capacity_507_used_bytes_remain_actual_when_role_is_credited(
+    resident_role, requested_role, admission_options
+):
+    manager, _ = role_manager_fixture(limit_gib=1.0)
+    resident_bytes = int(0.8 * GIB)
+    async with manager.admit_role(
+        role=resident_role,
+        model_id="resident-model",
+        requested_bytes=resident_bytes,
+        capacity_source="catalog",
+    ):
+        pass
+
+    with pytest.raises(ResidentModelCapacityError) as exc_info:
+        async with manager.admit_role(
+            role=requested_role,
+            model_id="oversized-replacement",
+            requested_bytes=int(1.1 * GIB),
+            capacity_source="catalog",
+            **admission_options,
+        ):
+            pass
+
+    envelope = exc_info.value.envelope()["error"]
+    assert envelope["used_bytes"] == resident_bytes
+    assert envelope["resident_roles"] == [
+        {
+            "role": resident_role,
+            "model_id": "resident-model",
+            "reserved_bytes": resident_bytes,
+            "state": "resident",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_alignment_replace_conflict_reports_recovery_actions():
+    # The capacity rejection for the alignment role must pair its
+    # requested_role with the role-appropriate recovery actions.
+    manager, _ = role_manager_fixture(limit_gib=0.5)
+
+    with pytest.raises(ResidentModelCapacityError) as exc_info:
+        async with manager.admit_role(
+            role="alignment",
+            model_id="qwen3-aligner",
+            requested_bytes=_aligner_bytes(),
+            capacity_source="catalog",
+        ):
+            pass
+
+    envelope = exc_info.value.envelope()["error"]
+    assert envelope["requested_role"] == "alignment"
+    assert envelope["recovery_actions"] == ["unload_assistant"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_actions_are_role_appropriate():
+    # recovery_actions is data-driven per role: speech-input gets the three
+    # actions; speech-output only stop_speech_output; assistant none.
+    async def envelope_for_role(role):
+        manager, _ = role_manager_fixture(limit_gib=0.1)
+        with pytest.raises(ResidentModelCapacityError) as exc_info:
+            async with manager.admit_role(
+                role=role,
+                model_id=f"model-{role}",
+                requested_bytes=int(1.0 * GIB),  # far over the tiny ceiling
+                capacity_source="catalog",
+            ):
+                pass
+        return exc_info.value.envelope()["error"]
+
+    assert (await envelope_for_role("speech-input"))["recovery_actions"] == [
+        "select_smaller_speech_input",
+        "stop_speech_output",
+        "unload_assistant",
+    ]
+    assert (await envelope_for_role("speech-output"))["recovery_actions"] == [
+        "stop_speech_output"
+    ]
+    assert (await envelope_for_role("alignment"))["recovery_actions"] == [
+        "unload_assistant"
+    ]
+    # Assistant has no server-declared recovery actions.
+    assert (await envelope_for_role("assistant"))["recovery_actions"] == []
+
+
+@pytest.mark.asyncio
+async def test_role_telemetry_consistent_across_success_rollback_cancel():
+    # The role ledger stays consistent across the full lifecycle: an admitted
+    # role commits resident; a failed load rolls back to empty; a cancellation
+    # also leaves no leaked reservation (all deterministic — no real sleeps).
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+
+    # Success: commits to resident.
+    async with manager.admit_role(
+        role="speech-input",
+        model_id="whisper",
+        requested_bytes=int(0.3 * GIB),
+        capacity_source="catalog",
+    ):
+        pass
+    (entry,) = [r for r in manager.snapshot()["roles"] if r["role"] == "speech-input"]
+    assert entry["state"] == "resident"
+    assert entry["reserved_bytes"] == int(0.3 * GIB)
+
+    # Rollback on failure: the new role is not left in the ledger.
+    with pytest.raises(RuntimeError, match="boom"):
+        async with manager.admit_role(
+            role="speech-output",
+            model_id="tts",
+            requested_bytes=int(0.3 * GIB),
+            capacity_source="catalog",
+        ):
+            raise RuntimeError("boom")
+    assert "speech-output" not in {r["role"] for r in manager.snapshot()["roles"]}
+
+    # Cancellation: no leaked reservation.
+    with pytest.raises(asyncio.CancelledError):
+        async with manager.admit_role(
+            role="speech-output",
+            model_id="tts",
+            requested_bytes=int(0.3 * GIB),
+            capacity_source="catalog",
+        ):
+            raise asyncio.CancelledError()
+    assert "speech-output" not in {r["role"] for r in manager.snapshot()["roles"]}
+
+    # release_role drops a committed reservation so the snapshot is consistent.
+    await manager.release_role("speech-input")
+    assert "speech-input" not in {r["role"] for r in manager.snapshot()["roles"]}
+
+
+@pytest.mark.asyncio
+async def test_release_role_unknown_rejected_after_valid_release_works():
+    manager, _ = role_manager_fixture(limit_gib=4.0)
+    async with manager.admit_role(
+        role="speech-output",
+        model_id="tts",
+        requested_bytes=int(0.3 * GIB),
+        capacity_source="catalog",
+    ):
+        pass
+    # Valid release succeeds.
+    await manager.release_role("speech-output")
+    assert "speech-output" not in {r["role"] for r in manager.snapshot()["roles"]}
+    # Unknown release is gated by the closed enum.
+    with pytest.raises(ResidentModelError, match="unknown resident role"):
+        await manager.release_role("speech-output-extra")

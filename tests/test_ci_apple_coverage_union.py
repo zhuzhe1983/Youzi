@@ -144,11 +144,44 @@ def test_apple_coverage_roster_contains_only_tracked_tests() -> None:
 
 
 def test_qwen4_fused_gdn_coverage_runs_on_apple_silicon() -> None:
-    """The Metal fast path must contribute to the changed-lines union."""
+    """Qwen4 Metal fast paths must contribute to the changed-lines union."""
     _, workflow = _workflow()
     apple_run = workflow["jobs"]["test-apple-silicon"]["steps"][-2]["run"]
 
     assert "tests/test_qwen4_fused_gdn_decode.py" in apple_run
+    assert "tests/test_qsa_block_sparse.py" in apple_run
+    assert "tests/test_qsa_indexed_splitk.py" in apple_run
+
+
+def test_hidream_runtime_coverage_runs_on_apple_silicon() -> None:
+    """The MLX-only image runtime must contribute to the coverage union."""
+    _, workflow = _workflow()
+    apple_run = workflow["jobs"]["test-apple-silicon"]["steps"][-2]["run"]
+
+    assert "tests/test_hidream_o1_alias.py" in apple_run
+
+
+def test_sdxl_runtime_coverage_runs_on_apple_silicon() -> None:
+    """The vendored MLX-only SDXL runtime must contribute to coverage."""
+    _, workflow = _workflow()
+    apple_run = workflow["jobs"]["test-apple-silicon"]["steps"][-2]["run"]
+
+    assert "tests/test_sdxl_alias.py" in apple_run
+
+
+def test_bonsai_runtime_coverage_runs_on_apple_silicon() -> None:
+    """The MLX-only product adapter and dependency must reach the Apple lane."""
+    _, workflow = _workflow()
+    steps = workflow["jobs"]["test-apple-silicon"]["steps"]
+    apple_run = steps[-2]["run"]
+    install = next(
+        step["run"]
+        for step in steps
+        if step.get("name") == "Install project and dependencies"
+    )
+
+    assert "tests/test_bonsai_image_alias.py" in apple_run
+    assert 'pip install -e ".[vision,image]"' in install
 
 
 def test_coverage_data_is_commit_bound_and_fail_closed() -> None:

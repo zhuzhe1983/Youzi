@@ -42,6 +42,8 @@ jobs:
           if [[ "$CREATE_DRAFT" == true ]]; then
             test "$RELEASE_TAG" = "youzi-v$VERSION"
           fi
+      - name: Verify desktop regressions
+        run: swift test --package-path apps/rapid-mac --filter 'Youzi|AudioClientTests|ModelServiceAuthTests|ModelAPIAccessTests|ModelGenerationDefaultsTests|SettingsVoicePreviewTests|SidecarBuildScriptTests|ServerLocatorTests'
       - name: Build complete app including inference runtime
         run: bash apps/rapid-mac/scripts/build.sh
       - name: Verify and archive
@@ -52,7 +54,13 @@ jobs:
           codesign --verify --deep --strict "$APP"
           mkdir -p dist-youzi
           ditto -c -k --sequesterRsrc --keepParent "$APP" dist-youzi/Youzi-macos-arm64.zip
-          (cd dist-youzi && shasum -a 256 Youzi-macos-arm64.zip > SHA256SUMS)
+          mkdir -p "$RUNNER_TEMP/youzi-dmg"
+          ditto "$APP" "$RUNNER_TEMP/youzi-dmg/Rapid-MLX Desktop.app"
+          ln -s /Applications "$RUNNER_TEMP/youzi-dmg/Applications"
+          hdiutil create -volname Youzi -srcfolder "$RUNNER_TEMP/youzi-dmg" -ov -format UDZO dist-youzi/Youzi-macos-arm64.dmg
+          cp apps/rapid-mac/build/sidecar-stage/rapid-mlx-sidecar.tar.gz dist-youzi/
+          python3 scripts/youzi-release-manifest.py dist-youzi
+          (cd dist-youzi && shasum -a 256 *.zip *.dmg *.tar.gz latest.json > SHA256SUMS)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: youzi-macos-arm64-${{ github.sha }}
@@ -82,4 +90,4 @@ jobs:
           set -euo pipefail
           gh release create "$RELEASE_TAG" dist-youzi/* \
             --target "$TARGET_SHA" --draft --title "Youzi $RELEASE_TAG" \
-            --notes 'Personal-use Apple Silicon build. Ad-hoc signed; NOT Apple-notarized. Includes the inference runtime, but no model weights. Review build evidence and test locally before publication.'
+            --notes 'Personal-use Apple Silicon build for M-series Macs. Minimum recommended memory: 24 GB; 64 GB or more recommended. Ad-hoc signed; NOT Apple-notarized. Includes the full inference runtime, but no model weights. TTS speaker validation, secondary video service routing, and square artifact gallery. Wan/LTX weights load during generation; video service readiness is not a GPU-residency claim. Built by GitHub Actions; publish only after local client acceptance.'

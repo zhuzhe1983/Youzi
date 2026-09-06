@@ -53,6 +53,21 @@ def _completed_job(job_id: str, *, created_at: int = 1) -> video._VideoJob:
     )
 
 
+def test_video_job_reports_artifact_shape_when_known() -> None:
+    job = video._VideoJob(
+        id="video_" + "f" * 32,
+        model="wan",
+        prompt="prompt",
+        seconds="4",
+        size="832x480",
+        frames=81,
+        fps=24,
+    )
+
+    assert job.public()["frames"] == 81
+    assert job.public()["fps"] == 24
+
+
 def _write_completed_job(job: video._VideoJob) -> None:
     job_dir = video._jobs_root / job.id
     job_dir.mkdir(mode=0o700)
@@ -74,7 +89,7 @@ async def test_completed_job_survives_store_reconfiguration(
         def generate(self, *, output_path: Path, **kwargs) -> None:
             output_path.write_bytes(b"generated-mp4")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model="": FakeEngine())
     created = await video.create_video(
         prompt="Ocean waves at sunset",
         model="ltx-2.3-mlx-q4",
@@ -122,7 +137,7 @@ async def test_default_store_remains_process_temporary(
         def generate(self, *, output_path: Path, **kwargs) -> None:
             output_path.write_bytes(b"generated-mp4")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model="": FakeEngine())
     created = await video.create_video(
         prompt="Temporary result",
         model="ltx-2.3-mlx-q4",
@@ -488,7 +503,7 @@ async def test_metadata_failure_keeps_completed_video_available(
     def fail_persist(job) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model="": FakeEngine())
     monkeypatch.setattr(video, "_persist_completed_job", fail_persist)
     created = await video.create_video(
         prompt="Keep the completed output",
@@ -529,7 +544,7 @@ async def test_persistence_thread_start_failure_keeps_completed_video(
             raise RuntimeError("cannot start thread")
         original_start(thread)
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model="": FakeEngine())
     monkeypatch.setattr(video.threading.Thread, "start", fail_persistence_start)
     created = await video.create_video(
         prompt="Keep output after thread exhaustion",
@@ -572,7 +587,7 @@ async def test_shutdown_does_not_wait_for_blocked_metadata_persistence(
         release_persistence.wait(timeout=5)
         persist_completed_job(job)
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model="": FakeEngine())
     monkeypatch.setattr(video, "_persist_completed_job", block_persist)
     created = await video.create_video(
         prompt="Finish within shutdown budget",
@@ -691,7 +706,7 @@ async def test_shutdown_cancels_queued_job_with_active_generation(
             release.wait(timeout=5)
             output_path.write_bytes(b"generated-mp4")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: BlockingEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model="": BlockingEngine())
     first = await video.create_video(
         prompt="Active job",
         model="ltx-2.3-mlx-q4",
@@ -777,7 +792,7 @@ async def test_new_job_evicts_oldest_finished_job_at_capacity(
         def generate(self, *, output_path: Path, **kwargs) -> None:
             output_path.write_bytes(b"generated-mp4")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model="": FakeEngine())
     created = await video.create_video(
         prompt="Newest result",
         model="ltx-2.3-mlx-q4",

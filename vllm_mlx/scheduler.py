@@ -48,7 +48,7 @@ from ._sampler_fast_path import (  # noqa: E402
     make_fused_top_p_temp_sampler,
 )
 from ._seeded_sampler import make_seeded_sampler  # noqa: E402
-from .errors import BackpressureError  # noqa: E402
+from .errors import BackpressureError, PagedCacheUnsupportedLayoutError  # noqa: E402
 from .kv_estimation import (  # noqa: E402
     _cfg_get,
     _valid_layer_types,
@@ -125,12 +125,17 @@ from .gdn_prefill import install as install_gdn_prefill_kernel
 from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig  # noqa: E402
 from .paged_cache import PagedCacheManager
 from .pflash import PFlashConfig, compress_request_tokens
-from .prefix_cache import BlockAwarePrefixCache, PrefixCacheManager
+from .prefix_cache import (
+    BlockAwarePrefixCache,
+    PrefixCacheManager,
+    validate_paged_cache_capability,
+)
 from .repetition_guard import (
     AgentRepetitionLogitsProcessor,
     detect_repeated_token_suffix,
 )
 from .request import Request, RequestOutput, RequestStatus, SamplingParams
+from .runtime.model_performance import get_model_performance_ledger
 from .utils.decode import IncrementalDecoder
 from .utils.mamba_cache import ensure_mamba_support
 
@@ -155,6 +160,22 @@ _RECURRENT_CACHE_MATERIALIZE_INTERVAL = 8
 # ~150× below the 499000-handle ceiling — only UNBOUNDED chains exhaust Metal.
 _RECURRENT_MATERIALIZE_HANDLE_BUDGET = 64
 _RECURRENT_MATERIALIZE_MAX_INTERVAL = 64
+# Consecutive realize-failures of the per-step output chain (issue #2834) that
+# must be tolerated as a transient/missing-surface before the lane escalates.
+# A persistent failure means the very chain this barrier exists to bound is
+# not being detached — continuing to log-and-return would silently concede to
+# the Metal-handle exhaustion the fix targets.
+_RECURRENT_OUTPUT_CHAIN_FAILURE_LIMIT = 8
+
+
+class _RecurrentOutputChainError(RuntimeError):
+    """Raised when a recurrent lane's per-step decode output chain cannot be
+    realized (or, codex r4, even collected) ``_RECURRENT_OUTPUT_CHAIN_FAILURE_LIMIT``
+    consecutive times. The barrier exists so the lazy per-step graph cannot grow
+    to Metal's 499000-handle ceiling (#2834/#2836); a persistent failure means
+    that safety guarantee is no longer upheld, so the lane fails rather than
+    silently continuing toward unbounded handle growth.
+    """
 
 
 def _pflash_compressed(request: Request) -> bool:
@@ -529,6 +550,16 @@ class SchedulerConfig:
     # this independent flag permits membership mutation only when the loaded
     # model descriptor and runtime also attest it.
     mtp_allow_dynamic_membership: bool = False
+
+    # True when quantization was an operator-explicit request (CLI flag /
+    # control-plane) rather than an auto/profile default (#78). Lane
+    # capability gates hard-fail explicit requests they cannot honor
+    # (before the server reports ready) instead of silently serving bf16.
+    # APPEND-ONLY: kept at the tail so the historical positional prefix
+    # (``model_name`` / ``vision_min_pixels`` / ``vision_max_pixels``) is
+    # not shifted — see ``test_scheduler_config_preserves_the_historical_
+    # positional_prefix``.
+    kv_cache_dtype_explicit: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.mtp_continuous_batching, bool):
@@ -987,6 +1018,10 @@ def _install_continuous_mtp_router(
         )
 
     driver: ContinuousMTPDriver | None = None
+    # Dynamic joins leave the base queue before their cache preparation runs at
+    # the next driver boundary.  Retain the exact source tuples until that
+    # boundary succeeds so a deferred admission failure can restore ownership.
+    staged_join_sequences: dict[int, Any] = {}
 
     def _stage_initial() -> None:
         nonlocal driver
@@ -999,13 +1034,26 @@ def _install_continuous_mtp_router(
             return
         specs = [lane.spec for lane in routed.cohort]
         selected = {spec.uid for spec in specs}
+        try:
+            candidate_driver = ContinuousMTPDriver.create(
+                specs,
+                runtime,
+                stop_tokens={lane.spec.uid: lane.stop_tokens for lane in routed.cohort},
+                response_factory=_response_factory,
+            )
+        except Exception as exc:  # noqa: BLE001 - optional route fails closed
+            # Admission is transactional: until preparation succeeds, the
+            # ordinary queue remains the owner of every selected request.  The
+            # base generator can therefore process them on this same call
+            # instead of losing the cohort after an allocation/prepare failure.
+            logger.warning(
+                "[MTP-continuous] cohort preparation failed; retaining "
+                "vendored/plain queue ownership: %s",
+                exc,
+            )
+            return
         _remove_queued(selected)
-        driver = ContinuousMTPDriver.create(
-            specs,
-            runtime,
-            stop_tokens={lane.spec.uid: lane.stop_tokens for lane in routed.cohort},
-            response_factory=_response_factory,
-        )
+        driver = candidate_driver
         batch_gen._continuous_mtp_driver = driver
         logger.info(
             "[MTP-continuous] admitted continuous cohort "
@@ -1023,6 +1071,7 @@ def _install_continuous_mtp_router(
             return
         joining_specs: list[SelfMTPLaneSpec] = []
         joining_stops: dict[int, frozenset[int]] = {}
+        joining_sequences: dict[int, Any] = {}
         for sequence, metadata in _queued_candidates():
             if len(joining_specs) >= room:
                 break
@@ -1050,16 +1099,60 @@ def _install_continuous_mtp_router(
             )
             joining_specs.append(spec)
             joining_stops[spec.uid] = metadata.stop_tokens
+            joining_sequences[spec.uid] = sequence
         if not joining_specs:
             return
-        _remove_queued({spec.uid for spec in joining_specs})
-        driver.queue_lanes(joining_specs, stop_tokens=joining_stops)
+        try:
+            driver.queue_lanes(joining_specs, stop_tokens=joining_stops)
+        except Exception as exc:  # noqa: BLE001 - optional route fails closed
+            # A staged join owns no continuous cache yet.  Keep the base queue
+            # authoritative when validation or allocation rejects the join.
+            logger.warning(
+                "[MTP-continuous] lane join failed; retaining vendored/plain "
+                "queue ownership: %s",
+                exc,
+            )
+            return
+        joining_uids = {spec.uid for spec in joining_specs}
+        _remove_queued(joining_uids)
+        staged_join_sequences.update(joining_sequences)
 
     def _continuous_next(self):
         nonlocal driver
         continuous_responses = []
+        deferred_join_failed = False
         if driver is not None and driver.has_work:
-            continuous_responses = driver.next()
+            pending_before = tuple(driver.pending_join_uids)
+            try:
+                continuous_responses = driver.next()
+            except Exception as exc:
+                # ``queue_lanes`` validates synchronously but prepares caches
+                # at the following driver boundary.  If that deferred step
+                # fails before attachment, retract the staged specs and put the
+                # original mlx-lm queue tuples back at the front in FIFO order.
+                still_pending = set(driver.pending_join_uids)
+                failed_join_uids = tuple(
+                    uid for uid in pending_before if uid in still_pending
+                )
+                if not failed_join_uids:
+                    raise
+                driver.remove_uids(failed_join_uids)
+                restored = [
+                    staged_join_sequences.pop(uid)
+                    for uid in failed_join_uids
+                    if uid in staged_join_sequences
+                ]
+                batch_gen._unprocessed_sequences.extendleft(reversed(restored))
+                logger.warning(
+                    "[MTP-continuous] deferred lane preparation failed; restored "
+                    "vendored/plain queue ownership: %s",
+                    exc,
+                )
+                continuous_responses = []
+                deferred_join_failed = True
+            else:
+                for uid in driver.last_attached_uids:
+                    staged_join_sequences.pop(uid, None)
             # Completed lanes deliver their KV/MTP caches by value on the
             # response above; the driver's terminal-detach retention is then
             # redundant.  Drain it every cycle so finished requests' caches are
@@ -1080,7 +1173,7 @@ def _install_continuous_mtp_router(
             driver = None
             batch_gen._continuous_mtp_driver = None
             _stage_initial()
-        else:
+        elif not deferred_join_failed:
             _stage_joins()
 
         raw = original_next()
@@ -1096,6 +1189,7 @@ def _install_continuous_mtp_router(
                 driver.discard_all()
             except Exception as exc:  # noqa: BLE001 - close remains best effort
                 logger.debug("[MTP-continuous] close detach skipped: %s", exc)
+        staged_join_sequences.clear()
         if callable(original_close):
             return original_close()
         return None
@@ -1104,6 +1198,8 @@ def _install_continuous_mtp_router(
         removed_packages = ()
         if driver is not None:
             removed_packages = driver.remove_uids(uids)
+            for uid in uids:
+                staged_join_sequences.pop(uid, None)
         base = {}
         if callable(original_remove):
             base = original_remove(uids, *args, **kwargs)
@@ -1179,11 +1275,12 @@ def _install_mtp_vendored(
       through because the vendored generator does not yet accept a request-
       local PRNG key.
 
-    * The standard repetition / presence / frequency penalty processors are
-      passed through with the exact mlx-lm token history at the handoff seam.
-      Custom, grammar, tool, and reasoning-budget processors still fall
-      through because their mutable state needs an explicit speculative
-      rollback contract.
+    * Standard repetition / presence / frequency penalties use the exact
+      mlx-lm token history at the handoff seam. Ordinary tool requests may
+      additionally carry Rapid's agent repetition guard: it owns an explicit
+      tentative-prefix snapshot/restore contract. Grammar, tool-bias,
+      reasoning-budget, suppression, and unknown custom processors still fall
+      through.
 
     * On the very first ``_step`` call we short-circuit and return the
       token that mlx-lm's fresh ``GenerationBatch.__init__._step()``
@@ -1300,6 +1397,38 @@ def _install_mtp_vendored(
     # the uid must keep failing closed until removal or verified uid reuse.
     _terminal_uids: dict[int, str | None] = {}
 
+    # mlx-lm's BatchGenerator generates first and admits new prompt work in
+    # the same ``next()`` call.  Once this vendored verifier has emitted for a
+    # singleton, its request-local cache/token transaction owns the persistent
+    # GenerationBatch exclusively; extending that batch before the owner
+    # departs makes a plain handoff impossible without duplicating output.
+    #
+    # Use BatchGenerator's existing completion-capacity admission boundary as
+    # the lock instead of maintaining a second queue.  ``_mtp_step`` lowers
+    # the capacity while it is still on the generate-first half of the cycle,
+    # so mlx-lm's immediately-following capacity check leaves new prompts in
+    # its authoritative FIFO.  Normal finish/cancellation restores the exact
+    # configured capacity before the next admission cycle.
+    _nominal_completion_batch_size = getattr(batch_gen, "completion_batch_size", None)
+    _admission_owner_uid: int | None = None
+
+    def _lock_singleton_admission(uid: int) -> None:
+        nonlocal _admission_owner_uid
+        if _nominal_completion_batch_size is None:
+            return
+        _admission_owner_uid = uid
+        batch_gen.completion_batch_size = 1
+        batch_gen._mtp_vendored_admission_owner = uid
+
+    def _release_singleton_admission(uid: int) -> None:
+        nonlocal _admission_owner_uid
+        if _admission_owner_uid != uid:
+            return
+        if _nominal_completion_batch_size is not None:
+            batch_gen.completion_batch_size = _nominal_completion_batch_size
+        _admission_owner_uid = None
+        batch_gen._mtp_vendored_admission_owner = None
+
     _stats = {
         "vendored_steps": 0,
         "fallthrough_steps": 0,
@@ -1371,6 +1500,7 @@ def _install_mtp_vendored(
         boundary: no generator, marker, or log-once key may retain the request.
         """
         _cleanup_uid(uid)
+        _release_singleton_admission(uid)
         _disabled_uids.pop(uid, None)
         _terminal_uids.pop(uid, None)
         # Materialize the keys before mutating the source set. Passing a
@@ -1387,10 +1517,9 @@ def _install_mtp_vendored(
 
         The scheduler owns the authoritative ``SamplingParams`` object and the
         exact per-row processor list installed into mlx-lm. Only processors
-        explicitly marked as the standard penalty list at request insertion
-        may cross this seam; identity comparison prevents a future custom
-        processor with the same list length from being mistaken for a safe
-        one.
+        explicitly admitted at request insertion may cross this seam; identity
+        comparison prevents a future custom processor with the same list
+        length from being mistaken for a safe one.
         """
         if uid_to_request_id is None or requests is None:
             return None, "request metadata is unavailable"
@@ -1428,8 +1557,10 @@ def _install_mtp_vendored(
         #
         # Keep the positional fallback for standalone/benchmark callers that
         # do not own scheduler admission state. Production always passes the
-        # uid map; custom, grammar, tool, and reasoning processors remain in
-        # that authoritative list and therefore still fail closed below.
+        # uid map; every processor on the row is in that authoritative list,
+        # so anything the scheduler did not vet by identity (custom, tool-bias,
+        # suppression, unknown) still fails closed below, while the built-in
+        # grammar, tool guard and thinking budget (#3044) pass as themselves.
         row_processors: list[Any] = []
         if uid_to_request_processors is not None:
             row_processors = list(uid_to_request_processors.get(uid, ()))
@@ -1622,6 +1753,19 @@ def _install_mtp_vendored(
 
         uid = gb.uids[0]
 
+        # A row cannot replace the speculative owner without passing through
+        # the normal finish/remove boundary that releases both its caches and
+        # admission lock.  Detect an out-of-band filter/replacement before
+        # constructing a generator or mutating token bookkeeping.
+        if _admission_owner_uid not in (None, uid):
+            _stats["invariant_violations"] += 1
+            raise RuntimeError(
+                "[MTP-vendored] conflicting singleton admission owners: "
+                f"active={_admission_owner_uid}, observed={uid}. "
+                "Request removal is required before the generation slot can "
+                "be reassigned."
+            )
+
         if uid in _terminal_uids:
             terminal_req_id = _terminal_uids[uid]
             current_req_id = (
@@ -1745,6 +1889,7 @@ def _install_mtp_vendored(
                 # FIRST-call construction so the new request gets a
                 # fresh MTP path.
                 _cleanup_uid(uid)
+                _release_singleton_admission(uid)
                 state = None
 
         if state is None:
@@ -1914,6 +2059,7 @@ def _install_mtp_vendored(
                 "request_id": _first_call_req_id,
                 "sampling_fingerprint": sampling_options["fingerprint"],
             }
+            _lock_singleton_admission(uid)
             _stats["vendored_steps"] += 1
             # Codex round-I BLOCKING #2 / round-J BLOCKING #2+#3:
             # keep ``gb._next_tokens`` / ``gb._next_logprobs`` in a
@@ -2105,6 +2251,7 @@ def _install_mtp_vendored(
     gb._mtp_vendored_state = _state
     gb._mtp_vendored_disabled_uids = _disabled_uids
     gb._mtp_vendored_terminal_uids = _terminal_uids
+    batch_gen._mtp_vendored_admission_owner = None
 
     logger.info(
         "[MTP-vendored] installed on GenerationBatch._step "
@@ -3509,6 +3656,18 @@ class Scheduler:
     # a deep low-batch chain materializes immediately when concurrency rises
     # instead of waiting for the next global-step multiple.
     _recurrent_chain_depth = 0
+    # Consecutive realize-failures of the per-step decode output chain (issue
+    # #2834). Reset on success; when it reaches
+    # ``_RECURRENT_OUTPUT_CHAIN_FAILURE_LIMIT`` the lane escalates rather than
+    # silently conceding to an unbounded output graph.
+    _recurrent_output_chain_failures = 0
+    # The generation batch ``_recurrent_output_chain_failures`` is scoped to.
+    # The failure streak belongs to ONE active recurrent lane; when the active
+    # batch identity CHANGES (idle -> recurrent, dense -> recurrent, or direct
+    # recurrent -> recurrent replacement) the counter must reset so a new
+    # request never inherits a stale streak (codex r7, r8#1). Reset on success
+    # and whenever this identity changes.
+    _recurrent_output_chain_batch = None
     # Running-sequence count at the previous barrier check. An idle->active
     # edge (this was 0, now >0) arms the barrier so a sequence admitted to a
     # fresh OR long-idle scheduler materializes its prefill-inherited graph
@@ -3544,6 +3703,9 @@ class Scheduler:
         self.config = config or SchedulerConfig()
         self._tool_logits_processor_factory = tool_logits_processor_factory
         self.model_config = model_config
+        self.performance = get_model_performance_ledger(
+            model_name=getattr(self.config, "model_name", None)
+        )
         if os.environ.get("RAPID_DUMP_SCHED_CONFIG"):
             import dataclasses as _dc
 
@@ -3699,8 +3861,44 @@ class Scheduler:
         self.paged_cache_manager: PagedCacheManager | None = None
         self.block_aware_cache: BlockAwarePrefixCache | None = None
 
+        # Fail closed on the contradictory pair BEFORE the enablement
+        # branch: an explicit --use-paged-cache with the prefix cache
+        # disabled would otherwise be silently ignored (the paged store IS
+        # a prefix-cache backend, so nothing would be constructed) — the
+        # same silent-option failure the capability gate below exists to
+        # prevent (#2955).
+        if self.config.use_paged_cache and not self.config.enable_prefix_cache:
+            raise PagedCacheUnsupportedLayoutError(
+                "--use-paged-cache requires the prefix cache: the paged "
+                "block store is a prefix-cache backend, and prefix caching "
+                "is disabled in this configuration, so the explicit paged "
+                "request cannot take effect. Remove --use-paged-cache, or "
+                "drop --disable-prefix-cache so the prefix cache is enabled."
+            )
+
         if self.config.enable_prefix_cache:
             if self.config.use_paged_cache:
+                # Fail closed BEFORE serving: the paged block serializer only
+                # supports plain full-attention KVCache layouts. An explicit
+                # --use-paged-cache on a rotating/hybrid/recurrent/quantized
+                # layout must abort startup with an actionable typed error
+                # instead of coming up healthy with zero reuse (#2955). This
+                # is a structural probe of the loaded model's prompt-cache
+                # factory — no model/architecture names involved.
+                # Any EXPLICIT KV-cache transform request (ordinary live
+                # quantization or TurboQuant) is rejected outright — the
+                # paged store implements neither, so the pair fails closed
+                # even when the transform's own probes would fall back and
+                # disable it at runtime. Honoring the flags with silently
+                # untransformed plain blocks is the same silent-option
+                # failure this gate exists to prevent.
+                validate_paged_cache_capability(
+                    model,
+                    kv_cache_transform_requested=bool(
+                        self.config.kv_cache_quantization
+                        or getattr(self.config, "kv_cache_turboquant", None)
+                    ),
+                )
                 # Use paged cache for memory efficiency
                 self.paged_cache_manager = PagedCacheManager(
                     block_size=self.config.paged_cache_block_size,
@@ -4175,6 +4373,135 @@ class Scheduler:
             self._sampler_cache.popitem(last=False)
         return sampler
 
+    #: Sentinel for a model whose cache layout could not be probed at all.
+    _KV_CACHE_UNPROBEABLE = "unprobeable"
+
+    @dataclass(frozen=True)
+    class _QuantizedLiveCacheLayout:
+        quantizable_layers: int
+        rotating_layers: int
+        total_layers: int
+        shared_borrower_layers: int = 0
+
+    @staticmethod
+    def _quantized_attention_incompatibility(model) -> str | None:
+        """Return a structural attention feature unsupported by fused QSDPA."""
+        layer_owners = [
+            model,
+            getattr(model, "model", None),
+            getattr(model, "language_model", None),
+            getattr(getattr(model, "language_model", None), "model", None),
+        ]
+        for owner in layer_owners:
+            layers = getattr(owner, "layers", None)
+            if not isinstance(layers, (list, tuple)):
+                continue
+            for layer in layers:
+                attention = getattr(layer, "self_attn", None)
+                if attention is None:
+                    attention = getattr(layer, "attention", None)
+                if attention is None:
+                    continue
+                if (
+                    getattr(attention, "sinks", None) is not None
+                    or getattr(attention, "attn_sink", None) is not None
+                ):
+                    return (
+                        "attention sinks require a fused quantized-attention "
+                        "kernel that is unavailable in this MLX runtime"
+                    )
+        return None
+
+    @classmethod
+    def _quantized_live_cache_probe(
+        cls, model
+    ) -> tuple[str | None, "Scheduler._QuantizedLiveCacheLayout | None"]:
+        """Probe incompatibility and layout from one cache construction (#78).
+
+        Asks the model what caches it actually builds — no family names,
+        no config heuristics. Returns ``None`` for an all-plain layout or a
+        verified mixture of plain ``KVCache`` and bounded ``RotatingKVCache``;
+        rotating components remain bf16. Returns the offending type name for
+        other layouts (``ArraysCache``/``MambaCache``), or
+        :data:`_KV_CACHE_UNPROBEABLE` when no cache list could be built.
+        Backstops the config-level safelist for models whose HF config
+        was not readable at CLI time (fresh download).
+        """
+        try:
+            from mlx_lm.models.cache import make_prompt_cache
+
+            caches = make_prompt_cache(model)
+        except Exception:
+            return cls._KV_CACHE_UNPROBEABLE, None
+        if not caches:
+            return cls._KV_CACHE_UNPROBEABLE, None
+        attention_reason = cls._quantized_attention_incompatibility(model)
+        if attention_reason is not None:
+            return attention_reason, None
+        from .quantized_batch_cache import supported_kv_cache_types
+
+        plain_kv_types, rotating_types = supported_kv_cache_types()
+        quantizable = sum(type(c) in plain_kv_types for c in caches)
+        rotating = sum(type(c) in rotating_types for c in caches)
+        unsupported = [
+            type(c).__name__
+            for c in caches
+            if type(c) not in plain_kv_types and type(c) not in rotating_types
+        ]
+        if unsupported:
+            return unsupported[0], None
+        if quantizable == 0:
+            reason = "RotatingKVCache" if rotating else cls._KV_CACHE_UNPROBEABLE
+            return reason, None
+        if cls._has_unsupported_cross_layer_kv_sharing(model):
+            return "cross-layer shared KV", None
+        return None, cls._QuantizedLiveCacheLayout(
+            quantizable_layers=quantizable,
+            rotating_layers=rotating,
+            total_layers=len(caches),
+            shared_borrower_layers=cls._cross_layer_kv_sharing_count(model),
+        )
+
+    @classmethod
+    def _quantized_live_cache_incompatibility(cls, model) -> str | None:
+        """Return only the compatibility result for focused callers/tests."""
+        reason, _ = cls._quantized_live_cache_probe(model)
+        return reason
+
+    @staticmethod
+    def _cross_layer_kv_sharing_count(model) -> int:
+        """Return the configured number of cache-borrowing layers."""
+        candidates = [
+            model,
+            getattr(model, "args", None),
+            getattr(model, "config", None),
+            getattr(model, "language_model", None),
+            getattr(getattr(model, "language_model", None), "args", None),
+            getattr(getattr(model, "language_model", None), "config", None),
+        ]
+        for candidate in candidates:
+            value = getattr(candidate, "num_kv_shared_layers", None)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                return value
+        return 0
+
+    @classmethod
+    def _has_unsupported_cross_layer_kv_sharing(cls, model) -> bool:
+        """Whether sharing loses metadata required for quantized attention."""
+        if cls._cross_layer_kv_sharing_count(model) == 0:
+            return False
+        language_model = getattr(model, "language_model", None)
+        return not bool(
+            getattr(model, "supports_quantized_shared_kv", False)
+            or getattr(language_model, "supports_quantized_shared_kv", False)
+        )
+
+    @classmethod
+    def _quantized_live_cache_layout(cls, model):
+        """Return only the verified layout for focused callers/tests."""
+        _, layout = cls._quantized_live_cache_probe(model)
+        return layout
+
     def _init_kv_quantization(self, model) -> None:
         """Resolve the LIVE cache's group size + install gate (#1197).
 
@@ -4202,6 +4529,58 @@ class Scheduler:
             and not getattr(self.config, "kv_cache_turboquant", None)
         ):
             return
+
+        incompatible_cache, self._kv_quant_layout = self._quantized_live_cache_probe(
+            model
+        )
+        if incompatible_cache is not None:
+            unprobeable = incompatible_cache == self._KV_CACHE_UNPROBEABLE
+            if getattr(self.config, "kv_cache_dtype_explicit", False):
+                # Fail closed (#78): an explicit quantized request must not
+                # report ready and gamble on the first request — neither on
+                # a known-incompatible layout nor on an unverifiable one.
+                from .kv_cache_dtype import KVCacheQuantizationUnsupportedError
+
+                raise KVCacheQuantizationUnsupportedError(
+                    requested=getattr(self.config, "kv_cache_dtype", "int8"),
+                    model_name=getattr(self.config, "model_name", None)
+                    or type(model).__name__,
+                    family_reason=(
+                        "the model's KV-cache layout could not be probed, so "
+                        "a supported quantized read path cannot be verified"
+                        if unprobeable
+                        else f"the loaded model is incompatible: {incompatible_cache}"
+                    ),
+                )
+            if not unprobeable:
+                self._kv_quant_live_disabled = True
+                logger.warning(
+                    "[kv-cache] live KV quantization disabled: %s; serving a "
+                    "bf16 live cache.",
+                    incompatible_cache,
+                )
+                return
+            # Unprobeable + auto-selected: the head-dim probe below keeps
+            # the pre-#78 disable behavior.
+
+        if self._kv_quant_layout is not None and self._kv_quant_layout.rotating_layers:
+            logger.info(
+                "[kv-cache] hybrid partial quantization: %d/%d full-attention "
+                "layers use int%d; %d bounded rotating layers remain bf16",
+                self._kv_quant_layout.quantizable_layers,
+                self._kv_quant_layout.total_layers,
+                getattr(self.config, "kv_cache_quantization_bits", 8),
+                self._kv_quant_layout.rotating_layers,
+            )
+        if (
+            self._kv_quant_layout is not None
+            and self._kv_quant_layout.shared_borrower_layers
+        ):
+            logger.info(
+                "[kv-cache] %d cross-layer KV borrowers reuse producer "
+                "caches and allocate no independent KV",
+                self._kv_quant_layout.shared_borrower_layers,
+            )
 
         from .quantized_batch_cache import (
             probe_kv_head_dims,
@@ -4278,8 +4657,8 @@ class Scheduler:
 
         # ``--kv-cache-dtype int8/int4`` must reach the LIVE continuous-batching
         # KV cache, not just the retained prefix cache (#1197). Swap the
-        # generator's plain ``BatchKVCache`` for a quantized, dequant-on-read
-        # ``QuantizedBatchKVCache``. TurboQuant has its own path, so this only
+        # generator's plain ``BatchKVCache`` for packed ``QuantizedBatchKVCache``
+        # storage consumed by fused quantized attention. TurboQuant only
         # runs for the plain quantization toggle. The head_dim-compatible group
         # size (and the disable-on-incompatible decision) were resolved once in
         # __init__ so the live and retained caches never diverge.
@@ -6359,23 +6738,21 @@ class Scheduler:
             # admission gate then rejects ALL new requests while active
             # stays pinned above cap — a permanent 503 wedge (the
             # D-METAL-CAP symptom) with no in-process recovery. Fix:
-            # evict the LRU prefix-index entry and drop its resident
-            # block tensors so active memory falls back under cap and
-            # admission resumes. Stale index entries are guarded by the
-            # fetch-side live check (blk.cache_data is None => miss).
+            # evict the LRU stored entry — clear its private blocks'
+            # resident tensors and release the entry — so active memory
+            # falls back under cap and admission resumes. Index entries
+            # that outlive their blocks are guarded by the fetch-side
+            # live checks (increment_ref fails on absent slots;
+            # blk.cache_data is None => miss).
             index = getattr(self.block_aware_cache, "_prefix_index", None)
             paged = self.block_aware_cache.paged_cache
-            # 1) Release the FULL-KV tensor pinned by the oldest
-            # request-table entry FIRST — this is the actual Metal
-            # allocation owner. The block slices are only views into
-            # the same underlying buffer; the entry's ``cache_data`` is
-            # what pins it. Without this, pressure eviction clears
-            # slices forever while active memory never drops (the
-            # observed D-METAL-CAP wedge: evictions_total grows, active
-            # stays pinned above cap). Pop the entry so its block
-            # ref-counts drop and the blocks can re-enter the free
-            # queue. Doing this before the index pop also guarantees
-            # full-KV entries drain even when the LRU index is empty.
+            # 1) Evict the LRU request-table entry FIRST. Since #2955 the
+            # entry retains no full-KV snapshot — blocks own independent
+            # contiguous tensor copies — so eviction means: drop the
+            # private blocks' resident tensors, then release the entry's
+            # block references so the slots re-enter the free queue.
+            # Doing this before the index pop guarantees stored entries
+            # drain even when the LRU index is empty.
             rt = getattr(self.block_aware_cache, "_request_tables", None)
             if rt:
                 # True LRU: evict the least-recently-used entry
@@ -6385,18 +6762,10 @@ class Scheduler:
                     (rid, rentry)
                     for rid in list(rt.keys())
                     if (rentry := rt.get(rid)) is not None
-                    and rentry.cache_data is not None
                 ]
                 if evictable:
                     rid, rentry = min(evictable, key=lambda kv: kv[1].last_access)
                     block_ids = rentry.block_table.block_ids
-                    # Drop this request's OWN full-KV buffer. Its per-block
-                    # tensors are independent MLX slice arrays, so this does
-                    # not invalidate a pinned or shared block's tensor — the
-                    # buffer's memory stays live through whichever slices
-                    # still reference it. Reclaiming the entry's own buffer
-                    # is worthwhile even when every block is pinned/shared.
-                    rentry.cache_data = None
                     for bid in block_ids:
                         blk = paged.allocated_blocks.get(bid)
                         if blk is None or blk.cache_data is None:
@@ -6444,102 +6813,43 @@ class Scheduler:
                                 exc_info=True,
                             )
                     logger.debug(
-                        "[D-METAL-PFX-evict] dropped full-KV entry %s "
+                        "[D-METAL-PFX-evict] dropped stored entry %s "
                         "(request_tables=%d)",
                         rid,
                         len(rt),
                     )
                     return True
-            # 2) Then evict the LRU prefix-index entry and drop its
-            # resident block tensors, so stale index entries stop
-            # pinning block slices. Stale entries are guarded by the
-            # fetch-side live check (blk.cache_data is None => miss).
+            # 2) Index-only cleanup. The prefix index owns METADATA, never
+            # a physical block reference: every live reference belongs to a
+            # stored request-table entry (drained above via release_cache)
+            # or an active fetch-held table. So this path must not clear or
+            # free ANY allocated block — a ref_count of 1 here can be an
+            # active fetch's sole reference, and clearing/freeing it would
+            # corrupt live KV or hand the slot back to the free queue while
+            # a table still points at it. We only prune entries whose
+            # recorded cumulative ownership no longer verifies (slot
+            # reallocated / identity mismatch); every other entry stays so
+            # its prefix remains reachable (pinned prefixes keep their
+            # identities and therefore always verify). Resident KV on
+            # unreferenced (ref_count == 0) free-queue slabs is reclaimed
+            # exclusively by release_paged_cache_blocks_under_pressure.
             if index:
-                # dict preserves insertion order: first key = LRU. Walk in
-                # LRU order and skip any entry whose blocks are ALL pinned
-                # or absent: popping such an entry would make the prefix
-                # unreachable while freeing nothing, and returning False on
-                # it would halt the caller's eviction loop prematurely.
+                # dict preserves insertion order: first key = LRU.
                 for oldest_hash in list(index.keys()):
                     cached_tokens, block_ids = index[oldest_hash]
                     # An index entry can outlive its physical blocks. If one
                     # of those slots was subsequently reallocated, ref_count
                     # alone cannot distinguish the new owner's live KV from
-                    # the old prefix. Prune the stale index entry without
-                    # touching any block unless every slot still owns the
-                    # token slice recorded by this prefix.
-                    stale = False
-                    bs = self.block_aware_cache.block_size
-                    for j, bid in enumerate(block_ids):
-                        blk = paged.allocated_blocks.get(bid)
-                        block_tokens = cached_tokens[j * bs : (j + 1) * bs]
-                        expected_hash = paged.compute_block_hash(block_tokens)
-                        # Missing blocks are handled by the eligibility
-                        # check below. A ``None`` hash is retained for
-                        # compatibility with legacy/unhashed fixtures; all
-                        # newly stored production blocks record ownership.
-                        if (
-                            blk is not None
-                            and blk.hash_value is not None
-                            and blk.hash_value != expected_hash
-                        ):
-                            stale = True
-                            break
-                    if stale:
+                    # the old prefix — block identities cover the whole
+                    # preceding history, not per-chunk content, so the check
+                    # recomputes the same chained hashes store_cache records
+                    # and prunes only metadata that no longer owns its
+                    # recorded prefix.
+                    if self.block_aware_cache.index_entry_is_stale(
+                        cached_tokens, block_ids
+                    ):
                         index.pop(oldest_hash)
                         return True
-                    # Skip an entry only when NONE of its blocks are
-                    # clearable — absent, pinned, or still shared with a
-                    # live request (ref_count > 1). Popping such an entry
-                    # would make the prefix unreachable while freeing
-                    # nothing and would halt the caller's eviction loop.
-                    if all(
-                        (blk := paged.allocated_blocks.get(bid)) is None
-                        or blk.is_pinned
-                        or blk.ref_count > 1
-                        for bid in block_ids
-                    ):
-                        continue
-                    index.pop(oldest_hash)
-                    evicted = 0
-                    for bid in block_ids:
-                        blk = paged.allocated_blocks.get(bid)
-                        # Never clear a pinned or still-shared block: its KV
-                        # is live for another request.
-                        if blk is None or blk.is_pinned or blk.ref_count > 1:
-                            continue
-                        # Release the block's resident KV tensor regardless
-                        # of hash registration variant. store_cache
-                        # registers blocks via register_block_hash (legacy
-                        # hash_value only, block_hash stays None), so the
-                        # chain-hash gated _maybe_evict_cached_block would
-                        # short-circuit and leak the tensor. Mirror its
-                        # cleanup directly: drop any hash mapping, clear
-                        # the tensor.
-                        if (
-                            blk.hash_value is not None
-                            and paged.hash_to_block.get(blk.hash_value) == blk.block_id
-                        ):
-                            del paged.hash_to_block[blk.hash_value]
-                        if blk.block_hash is not None:
-                            paged.cached_block_hash_to_block.pop(
-                                blk.block_hash, blk.block_id
-                            )
-                        if blk.cache_data is not None:
-                            blk.reset_hash()
-                            blk.cache_data = None  # Free tensor memory
-                            blk.cache_class_name = None
-                            paged.stats.evictions += 1
-                            evicted += 1
-                        # Return the block slot to the free queue. Unlike the
-                        # request-table path (which frees via release_cache ->
-                        # delete_block_table), the index path holds its own
-                        # ref, so clearing the tensor alone would leak the
-                        # block from the pool and eventually exhaust
-                        # max_cache_blocks. free_block decrements ref and
-                        # enqueues the (now-empty) block when it reaches 0.
-                        paged.free_block(bid)
-                    return evicted > 0
                 return False
             return False
         return False
@@ -6719,16 +7029,18 @@ class Scheduler:
             request.cache_hit_type = "miss"
             request.remaining_tokens = request.prompt_token_ids
         elif self.block_aware_cache is not None:
-            # Use paged cache
+            # Use paged cache. ``fetch_cache`` is transactional: it returns a
+            # block table only after reconstruction succeeded, so a returned
+            # hit always carries usable KV state.
             block_table, remaining = self.block_aware_cache.fetch_cache(
                 request.request_id,
                 request.prompt_token_ids,
             )
             if block_table and block_table.num_tokens > 0:
-                request.cache_hit_type = "hit"
-                # Reconstruct actual KVCache objects from stored tensor data
+                # Returns the caches the committed transaction already built.
                 reconstructed = self.block_aware_cache.reconstruct_cache(block_table)
                 if reconstructed:
+                    request.cache_hit_type = "hit"
                     request.prompt_cache = reconstructed
                     request.block_table = block_table
                     request.cached_tokens = block_table.num_tokens
@@ -6740,11 +7052,16 @@ class Scheduler:
                         f"{len(remaining)} tokens remaining, cache reconstructed"
                     )
                 else:
-                    # Reconstruction failed, treat as cache miss
+                    # Defensive: a committed fetch guarantees a
+                    # reconstructable table, so this should be unreachable.
+                    # Release the held refs and fall back to a full prefill.
+                    self.block_aware_cache.release_cache(request.request_id)
                     request.cache_hit_type = "miss"
                     request.remaining_tokens = request.prompt_token_ids
-                    logger.debug(
-                        f"Request {request.request_id}: paged cache reconstruction failed"
+                    logger.warning(
+                        f"Request {request.request_id}: paged cache "
+                        "reconstruction failed after committed fetch; "
+                        "released refs and treating as miss"
                     )
             else:
                 request.cache_hit_type = "miss"
@@ -7276,9 +7593,17 @@ class Scheduler:
                 and request_id not in self.requests
             ):
                 return False
-            return self._do_abort_request_impl(request_id)
+            return self._do_abort_request_impl(
+                request_id,
+                orphan_request=expected_orphan,
+            )
 
-    def _do_abort_request_impl(self, request_id: str) -> bool:
+    def _do_abort_request_impl(
+        self,
+        request_id: str,
+        *,
+        orphan_request: Request | None = None,
+    ) -> bool:
         """
         Actually abort a request. Must be called from the executor thread.
 
@@ -7292,7 +7617,10 @@ class Scheduler:
         Returns:
             True if any cleanup was performed, False otherwise
         """
-        request = self.requests.get(request_id)
+        # Engine cleanup deliberately removes the canonical request before the
+        # orphan reconciler reaps its still-running batch slot. Preserve that
+        # exact, identity-validated lifetime for cancellation accounting.
+        request = orphan_request or self.requests.get(request_id)
         was_waiting = False
         was_running = False
         removed_from_batch = False
@@ -7344,10 +7672,16 @@ class Scheduler:
             self.total_prompt_tokens += request.num_prompt_tokens
 
         if request is not None:
+            self.performance.record_cancelled_performance(request)
             request.set_finished(RequestStatus.FINISHED_CANCELLED)
             # Release cache references so Metal buffers can be freed
             request.prompt_cache = None
             request._extracted_cache = None
+        if self.block_aware_cache is not None:
+            # A cancelled request stores nothing, so nothing owns the block
+            # refs its fetch hit acquired — release them here. Idempotent
+            # (safe if _cleanup_finished releases again later).
+            self.block_aware_cache.release_cache(request_id)
         self.finished_req_ids.add(request_id)
         self._cleanup_detokenizer(request_id)
 
@@ -7676,10 +8010,23 @@ class Scheduler:
             _glp = getattr(request, "grammar_logits_processor", None)
             if _glp is not None:
                 request_processors.append(_glp)
+            _mtp_grammar = None
+            if _glp is not None:
+                # Request attributes are an internal seam today, but treating
+                # any lookalike object as a transactional grammar would turn a
+                # future/custom processor into speculative mutable state.  The
+                # verifier supports this exact built-in implementation only;
+                # subclasses can override the transaction methods, so keep the
+                # type check exact and fail closed to ordinary decode.
+                from .api.tool_grammar import GrammarLogitsProcessor
+
+                if type(_glp) is GrammarLogitsProcessor:
+                    _mtp_grammar = _glp
             # Prevent an exact agent loop before it reaches the streaming
             # hard-stop below.  The processor is deliberately tool-request
             # only and masks a single predicted token only after the output is
             # one full copy short of the conservative abort threshold.
+            _loop_breaker = None
             if request.has_tools:
                 _loop_breaker = AgentRepetitionLogitsProcessor(request.output_token_ids)
                 request._repetition_logits_processor = _loop_breaker
@@ -7721,18 +8068,36 @@ class Scheduler:
                     frequency_context_size=4096,
                 )
                 request_processors.extend(penalty_processors)
-            # MTP may reuse only this exact standard-penalty list. Identity
-            # (not processor count or type-name heuristics) is the fail-closed
-            # contract at the GenerationBatch handoff.
-            request._mtp_safe_logits_processors = tuple(penalty_processors)
             # Generation-time thinking-token budget (force-close </think>).
             # Appended LAST so its force-close mask (all but </think> -> -inf)
             # has final say over any penalty/grammar bias in the same step;
             # it is inert (returns logits unchanged) once thinking has ended,
             # so a chained grammar processor owns the generation phase.
             _rblp = getattr(request, "reasoning_budget_logits_processor", None)
+            _mtp_budget = None
             if _rblp is not None:
                 request_processors.append(_rblp)
+                # Same exact-type rule as the grammar above (#3044): the
+                # built-in budget implements the verifier's snapshot/restore/
+                # apply transaction; a subclass could override it, so a
+                # lookalike fails closed to ordinary decode.
+                from .api.reasoning_budget import ReasoningBudgetLogitsProcessor
+
+                if type(_rblp) is ReasoningBudgetLogitsProcessor:
+                    _mtp_budget = _rblp
+            # MTP may reuse only this exact ordered list. Standard penalties
+            # are history-derived; the built-in grammar, the tool repetition
+            # guard and the built-in thinking budget expose explicit
+            # target-row snapshot/restore contracts. Identity (not processor
+            # count or type-name heuristics) keeps suppression, tool-bias,
+            # and unknown processors fail-closed at the GenerationBatch
+            # handoff. Order mirrors ``request_processors`` exactly.
+            request._mtp_safe_logits_processors = tuple(
+                ([_mtp_grammar] if _mtp_grammar is not None else [])
+                + ([_loop_breaker] if _loop_breaker is not None else [])
+                + penalty_processors
+                + ([_mtp_budget] if _mtp_budget is not None else [])
+            )
             _stlp = getattr(request, "suppressed_tokens_logits_processor", None)
             if _stlp is not None:
                 request_processors.append(_stlp)
@@ -7930,6 +8295,7 @@ class Scheduler:
         """
         outputs = []
         finished_ids = set()
+        terminal_performance_requests: list[Request] = []
         prompt_tps_this_batch = 0.0
 
         for response in responses:
@@ -8274,6 +8640,7 @@ class Scheduler:
 
                 self.total_completion_tokens += request.num_output_tokens
                 self.num_requests_processed += 1
+                terminal_performance_requests.append(request)
 
                 logger.debug(
                     f"Request {request_id} finished: {response.finish_reason}, "
@@ -8284,6 +8651,12 @@ class Scheduler:
 
         if prompt_tps_this_batch > 0:
             self._last_prompt_tps = prompt_tps_this_batch
+        # Commit observability outcomes only after every response in the step
+        # has processed successfully. If a later response raises, EngineCore
+        # converts all pending clients to failures; recording an earlier
+        # success here would make lifetime deduplication reject that outcome.
+        for request in terminal_performance_requests:
+            self.performance.record_finished_performance(request)
         return outputs, finished_ids
 
     def _safe_disk_checkpoint(self, request: Request, response: Any) -> None:
@@ -8468,6 +8841,7 @@ class Scheduler:
                 if self.block_aware_cache is not None:
                     # Store in paged cache
                     # Key includes both prompt and output tokens for multi-turn chat caching
+                    stored_table = None
                     if (
                         hasattr(request, "_extracted_cache")
                         and request._extracted_cache is not None
@@ -8476,7 +8850,7 @@ class Scheduler:
                             full_token_sequence = list(request.prompt_token_ids) + list(
                                 request.output_token_ids
                             )
-                            self.block_aware_cache.store_cache(
+                            stored_table = self.block_aware_cache.store_cache(
                                 request_id,
                                 full_token_sequence,
                                 request._extracted_cache,
@@ -8489,9 +8863,15 @@ class Scheduler:
                             logger.debug(
                                 f"Failed to store paged cache for {request_id}: {e}"
                             )
-                    # NOTE: Do NOT call release_cache here - blocks should persist
-                    # for future requests to share. The LRU eviction will clean up
-                    # unused blocks when under memory pressure.
+                    if stored_table is None:
+                        # Nothing stored (no extracted cache, unsupported
+                        # layout, or store failure): no entry owns this
+                        # request's blocks, so release any refs a fetch hit
+                        # acquired. Idempotent no-op when nothing is held.
+                        self.block_aware_cache.release_cache(request_id)
+                    # NOTE (stored case): do NOT call release_cache — the
+                    # stored entry owns the blocks so future requests can
+                    # share them; pressure-driven LRU eviction cleans up.
 
                 elif self.memory_aware_cache is not None:
                     # Keep mid-prefill entry as prefix cache for future
@@ -8661,6 +9041,7 @@ class Scheduler:
         for request_id in list(self.running):
             request = self.running.get(request_id)
             if request is not None:
+                self.performance.record_failed_performance(request)
                 request.set_finished(RequestStatus.FINISHED_ABORTED)
             aborted_ids.add(request_id)
             self.finished_req_ids.add(request_id)
@@ -8986,12 +9367,29 @@ class Scheduler:
         """
         batch_generator = self.batch_generator
         if batch_generator is None:
+            # No active lane: clear any failure counter left by a prior
+            # recurrent request so a NEW request never inherits a stale streak
+            # (codex r7). Failures are scoped to an ACTIVE recurrent lane.
+            self._recurrent_output_chain_failures = 0
+            self._recurrent_output_chain_batch = None
             return 0
         generation_batch = getattr(batch_generator, "_generation_batch", None)
         if generation_batch is None:
             generation_batch = getattr(batch_generator, "active_batch", None)
+        # The failure streak is scoped to the ACTIVE generation batch. If the
+        # batch IDENTITY changed (idle -> recurrent, dense -> recurrent, or a
+        # direct recurrent->recurrent replacement), the counter belongs to a
+        # different geometry and must reset — otherwise a new request could
+        # inherit a stale streak and fail on its FIRST collection error (codex
+        # r7, r8#1). Everything after this point is the SAME batch, so the
+        # counter persists across its own consecutive failures.
+        if generation_batch is not self._recurrent_output_chain_batch:
+            self._recurrent_output_chain_failures = 0
+            self._recurrent_output_chain_batch = generation_batch
         cache = getattr(generation_batch, "prompt_cache", None)
         if not cache:
+            # No cache on the (possibly new) batch: nothing to materialize.
+            self._recurrent_output_chain_failures = 0
             return 0
 
         states = []
@@ -9016,9 +9414,206 @@ class Scheduler:
                 if state is not None:
                     states.append(state)
         if not states:
+            # No recurrent state to materialize (all-trimmable/dense lane): the
+            # output-chain failure counter is scoped to an ACTIVE recurrent
+            # lane, so clear any streak left by a prior recurrent request —
+            # a dense period must not let stale failures cascade into a new
+            # recurrent request (codex r7).
+            self._recurrent_output_chain_failures = 0
+            self._recurrent_output_chain_batch = None
             return 0
-        mx.eval(states)
+        # Issue #2834/#2836: realizing ``layer.state`` bounds the *cache-state*
+        # lazy graph, but the per-step decode OUTPUT chain is a separate graph
+        # surface. ``mlx_lm generate._step`` schedules ``self._next_tokens``,
+        # ``self._next_logprobs`` and the logits-processor ``token_context``
+        # via ``mx.async_eval`` but does not detach them from the prior step —
+        # on a recurrent/hybrid lane the forward pass re-invokes those async
+        # nodes each step, so the output chain can grow unboundedly and hit
+        # Metal's 499000-handle ceiling even though ``layer.state`` stays
+        # bounded (the #1834 math caps cache-state alone at ~71 units, ~150x
+        # below the ceiling). Dense lanes already returned at ``if not states``
+        # above, so this dense no-sync guarantee is untouched.
+        #
+        # Ordering + single-barrier (codex r1, r2, r3 converge): collection is
+        # Attribution (codex r2 + r6#1): a SINGLE combined ``mx.eval`` cannot
+        # say which tensors failed, and attributing by re-evaluating ``states``
+        # after a combined failure is unsound — the first call may have
+        # partially realized state, or a state failure may be transient, so a
+        # cache-state failure could be misattributed to the outputs and
+        # silently suppressed for up to ``_RECURRENT_OUTPUT_CHAIN_FAILURE_LIMIT``
+        # intervals. So the two graphs are realized SEPARATELY:
+        #
+        #   mA) cache-state realize is UNGUARDED and first — the proven-necessary
+        #       #1834 barrier; any cache-state failure propagates immediately
+        #       (r2) and is attributable to the cache (r6#1).
+        #   mB) the output-chain realize is GUARDED below — attributable to the
+        #       NEW #2834 surface alone, with retry/escalation.
+        #
+        # Firing two back-to-back synchronous ``mx.eval`` on one device stream
+        # does not meaningfully double the barrier: it runs every 8 decode
+        # steps on hybrid lanes only, and the second call finds the device
+        # already drained from the first. Dense lanes never reach here, so no
+        # per-token eval is added to a dense batch.
+        outputs, collection_error = self._collect_recurrent_outputs(generation_batch)
+        mx.eval(states)  # mA: unguarded, immediately-propagating cache barrier
+        self._retry_materialize_output_chain(outputs, collection_error=collection_error)
         return len(states)
+
+    def _retry_materialize_output_chain(
+        self, outputs, *, collection_error: Exception | None = None
+    ) -> int:
+        """Realize the per-step decode output chain (guarded retry/escalation).
+
+        The caller has ALREADY realized the cache state (unguarded, mA) and
+        hands us the collected ``outputs`` to realize SEPARATELY, so the
+        output-chain barrier is attributable to the NEW #2834 surface alone
+        (codex r6#1 — no combined eval that could misattribute a cache-state
+        failure). This surface is version-sensitive (``mlx_lm`` ``TokenBuffer``
+        / ``_next_*`` shapes), so a realize failure retries and escalates after
+        ``_RECURRENT_OUTPUT_CHAIN_FAILURE_LIMIT`` consecutive misses rather
+        than hard-crashing or silently conceding to an unbounded output graph
+        (codex r1, r3).
+
+        ``collection_error`` (codex r4/r6#2) is the first output attribute
+        whose ACCESS raised (not merely absent), or ``None``. The
+        successfully-collected outputs are still REALIZED here — a valid
+        ``_next_logprobs`` / token-context chain is never discarded (r6#2) —
+        and then the inaccessible surface counts through the SAME escalation
+        counter, else a persistently-raising surface would read as "no
+        outputs", clear the counter every step, and the unbounded chain it
+        exists to bound would never escalate. The original exception is chained
+        into ``_RecurrentOutputChainError`` so the log names the failing
+        surface (codex r8#3).
+
+        On success the dereference counter resets so a cleared transient
+        recovers. A cleanly-collected empty output list is a no-op that clears
+        the counter (the cache-state barrier already fired in the caller).
+        """
+
+        def _escalate(failure: Exception | None = None) -> int:
+            self._recurrent_output_chain_failures += 1
+            if (
+                self._recurrent_output_chain_failures
+                >= _RECURRENT_OUTPUT_CHAIN_FAILURE_LIMIT
+            ):
+                logger.error(
+                    "[recurrent-output-chain] %d consecutive realize/collect "
+                    "failures; a persistent incompatibility is leaving the "
+                    "per-step decode output chain unbounded. Failing the lane "
+                    "rather than drifting toward Metal handle exhaustion. "
+                    "Last failure: %r",
+                    self._recurrent_output_chain_failures,
+                    failure,
+                )
+                raise _RecurrentOutputChainError(
+                    "recurrent decode output chain could not be realized "
+                    f"{self._recurrent_output_chain_failures} consecutive "
+                    "times; failing the lane rather than drifting toward "
+                    "Metal handle exhaustion"
+                ) from failure
+            logger.warning(
+                "[recurrent-output-chain] realize/collect failed (attempt "
+                "%d/%d); the cache-state barrier already realized this step's "
+                "state so the graph stays bounded this interval, but a "
+                "recurring failure will escalate. Last failure: %r",
+                self._recurrent_output_chain_failures,
+                _RECURRENT_OUTPUT_CHAIN_FAILURE_LIMIT,
+                failure,
+            )
+            return 0
+
+        if outputs:
+            # Realize the successfully-collected output chain (mB, attributable
+            # to outputs alone). Cache state was already realized by the caller.
+            try:
+                mx.eval(outputs)
+            except Exception as exc:
+                return _escalate(exc)
+            if collection_error is None:
+                self._recurrent_output_chain_failures = 0
+                return len(outputs)
+            # Some surface was inaccessible, but what we gathered is now
+            # realized — never discard it (r6#2). Escalate for the surface
+            # whose access raised (r4), chaining its exception (r8#3).
+            return _escalate(collection_error)
+
+        if collection_error is not None:
+            # Nothing collectible AND a surface raised on access: escalate
+            # (cache state was already realized by the caller, r5).
+            return _escalate(collection_error)
+
+        # Cleanly empty: nothing to realize; cache-state barrier already fired.
+        self._recurrent_output_chain_failures = 0
+        return 0
+
+    def _collect_recurrent_outputs(
+        self, generation_batch
+    ) -> tuple[list, Exception | None]:
+        """Collect the per-step decode output chain tensors, returning
+        ``(outputs, collection_error)``.
+
+        Mirrors the cache-state barrier for the OTHER half of the lazy graph
+        that #1834 did not cover: the tensors ``mlx_lm generate._step`` hands
+        to ``mx.async_eval(self._next_tokens, self._next_logprobs,
+        token_context)``. On dense batches every layer is trimmable, so the
+        caller returns before ever reaching this — no per-token host sync on a
+        dense lane. Collection only (the caller realizes).
+
+        The attribute surface varies across mlx-lm patch levels, so each
+        optional surface must be tolerated. Critically (codex r4), GENUINELY
+        ABSENT attributes are not failures, but an attribute whose ACCESS
+        RAISED is — a persistently-raising surface would otherwise read as
+        "no outputs", the barrier would clear its escalation counter each step,
+        and the unbounded chain it exists to bound would never escalate.
+        ``collection_error`` is the FIRST surface access that raised (or
+        ``None``), so the caller can route it into the same retry/escalation
+        path as a realize failure AND chain the original exception into
+        escalation (codex r8#3 nit — the log names the failing surface).
+        ``_safe`` returns ``(value, exception)`` to tell the two apart.
+        """
+        outputs: list = []
+        collection_error: Exception | None = None
+
+        def _safe(attr) -> tuple[object, Exception | None]:
+            try:
+                return getattr(generation_batch, attr, None), None
+            except Exception as exc:
+                return None, exc
+
+        def _note_error(exc: Exception | None) -> None:
+            nonlocal collection_error
+            if exc is not None and collection_error is None:
+                collection_error = exc
+
+        next_tokens, exc = _safe("_next_tokens")
+        _note_error(exc)
+        if next_tokens is not None:
+            outputs.append(next_tokens)
+
+        next_logprobs, exc = _safe("_next_logprobs")
+        _note_error(exc)
+        if isinstance(next_logprobs, (list, tuple)):
+            for lp in next_logprobs:
+                if lp is not None:
+                    outputs.append(lp)
+        elif next_logprobs is not None:
+            outputs.append(next_logprobs)
+
+        token_context, exc = _safe("_token_context")
+        _note_error(exc)
+        if isinstance(token_context, (list, tuple)):
+            for tc in token_context:
+                try:
+                    tok = getattr(tc, "tokens", None)
+                except Exception as tok_exc:
+                    # A TokenBuffer whose ``tokens`` accessor raises is a
+                    # collection failure for that surface, not an absent one.
+                    _note_error(tok_exc)
+                    tok = None
+                if tok is not None:
+                    outputs.append(tok)
+
+        return outputs, collection_error
 
     def get_request(self, request_id: str) -> Request | None:
         """Get a request by ID."""
@@ -9212,6 +9807,7 @@ class Scheduler:
             "num_requests_cancelled_via_disconnect": (
                 self.num_requests_cancelled_via_disconnect
             ),
+            "model_performance": self.performance.snapshot().__dict__,
             # D-METAL-CAP / D-METAL-PFX observability — pre-fix, both
             # were silent: the cap was violated with no warning and the
             # prefix cache pinned slabs through one 32k prefill that

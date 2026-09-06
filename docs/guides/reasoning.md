@@ -233,6 +233,18 @@ Use `reasoning_max_tokens` to stop a model from over-thinking, and pair it with 
 
 If `reasoning_max_tokens` is unset, the model decides how long to think.
 
+### `reasoning_effort` (OpenAI-style)
+
+The OpenAI `reasoning_effort` knob (`none` / `minimal` / `low` / `medium` / `high` / `xhigh`, also `reasoning.effort` on `/v1/responses`) is translated per model:
+
+- `none` turns thinking off (`chat_template_kwargs.enable_thinking=false`).
+- On a model whose chat template has its own effort vocabulary (Qwen3.8 accepts `low` / `medium` / `xhigh`), the nearest native level is written into the prompt and **no** token cap is added: `low` → `low`, `medium` → `medium`, `high` → `xhigh`, `minimal` → `low`.
+- On every other thinking model the value becomes a `reasoning_max_tokens` cap: `minimal` 256, `low` 512, `medium` 2048, `high` 8192, `xhigh` 24000.
+
+Explicit knobs on the same dimension always win: `chat_template_kwargs.reasoning_effort` over the mapped level, `reasoning_max_tokens` over the tier cap, `enable_thinking` over `none`.
+
+A chat template that never reads `enable_thinking` but branches on its own boolean `reasoning` variable in an eagerly evaluated template scope (Cohere's convention; North Mini Code defaults it to on) still turns off: a resolved `enable_thinking=false` (Desktop's default, `rapid-mlx chat` without `--think`, `reasoning_effort: none`) is passed as `reasoning=false`. `reasoning` is the only such switch recognised today; it is detected from the template's own reads and reachable `if` tests, not from the model name. Deferred macro/call-block bodies and loops that may not execute do not establish a switch. A request that already sets `reasoning` or `reasoning_effort` in `chat_template_kwargs` keeps control.
+
 ## Backward Compatibility
 
 When `--reasoning-parser` is not specified, the server behaves as before:

@@ -404,7 +404,7 @@ jobs:
       - name: Install project and dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[vision]"
+          pip install -e ".[vision,image]"
           # Test infra comes from the declared `ci-apple` extra (issue #2489).
           pip install -e ".[ci-apple]"
 
@@ -430,6 +430,7 @@ jobs:
         run: |
           pytest \
             tests/test_cancellation_protocol.py \
+            tests/test_model_performance_metrics.py \
             tests/test_mllm.py \
             tests/test_server.py \
             tests/test_paged_cache.py \
@@ -446,6 +447,10 @@ jobs:
             tests/test_mllm_cache.py \
             tests/test_memory_cache.py \
             tests/test_metal_memory_budget.py \
+            tests/test_kv_cache_gemma4_gate.py \
+            tests/test_gemma4_unified_routing.py \
+            tests/test_gemma4_kv_share.py \
+            tests/test_quantized_batch_cache.py \
             tests/test_prefix_cache_eviction.py \
             tests/test_optimizations.py \
             tests/test_batching.py \
@@ -463,6 +468,7 @@ jobs:
             tests/test_speculative_request_policy.py \
             tests/test_deepseek_v4_vendored.py \
             tests/test_dspark_scheduler.py \
+            tests/test_scheduler_recurrent_cache_materialization.py \
             tests/test_prefix_cache_persistence.py \
             tests/test_prefix_boundary_path_parity.py \
             tests/test_prompt_cache_snapshot.py \
@@ -472,6 +478,8 @@ jobs:
             tests/test_routing_groups_0131.py \
             tests/test_qwen4_exp_vendored.py \
             tests/test_qwen4_fused_gdn_decode.py \
+            tests/test_qsa_block_sparse.py \
+            tests/test_qsa_indexed_splitk.py \
             tests/test_mtp_cli_wiring.py \
             tests/test_continuous_mtp_routing.py \
             tests/test_continuous_self_mtp_mlx_backend.py \
@@ -479,6 +487,11 @@ jobs:
             tests/test_glm5_next_forget_gate_quant.py \
             tests/test_glm5_next_runtime_patch.py \
             tests/test_mllm_hybrid_probe.py \
+            tests/test_hidream_o1_alias.py \
+            tests/test_sdxl_alias.py \
+            tests/test_bonsai_image_alias.py \
+            tests/test_sd35_alias.py \
+            tests/test_diffusion_engine.py \
             -v --tb=short \
             -m "not slow" \
             -k "not Integration" \

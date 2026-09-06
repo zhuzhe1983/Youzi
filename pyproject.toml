@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rapid-mlx"
-version = "0.13.3"
+version = "0.14.3"
 description = "Rapid-MLX — AI inference for Apple Silicon. Drop-in OpenAI API, up to 3x Ollama's measured throughput."
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -108,6 +108,10 @@ dependencies = [
     "uvicorn>=0.23.0",
     "mcp>=1.9.3",  # ClientSessionGroup: official multi-server lifecycle for chat
     "jsonschema>=4.18.0",
+    # Direct import used by the packaged atomic contract registry. jsonschema
+    # also depends on it today, but keeping the direct dependency explicit
+    # prevents a resolver change from breaking `rapid-mlx models --json`.
+    "referencing>=0.28.4",
     # argcomplete — shell tab completion for the `rapid-mlx` CLI. Tiny
     # pure-Python package (~50 KB) wired into argparse via the magic
     # `# PYTHON_ARGCOMPLETE_OK` marker in cli.py and a per-arg
@@ -521,9 +525,18 @@ image = [
     # coexist with the coherence-validated core runtime. Keep a minor cap so
     # image-lane API changes remain deliberate. mflux requires Python >=3.11
     # (Rapid-MLX core still supports 3.10, so the image lane preflight gives
-    # 3.10 users an explicit upgrade diagnostic). Only Apache-2.0 model
-    # families are wired.
+    # 3.10 users an explicit upgrade diagnostic). Model-weight licenses are
+    # independent of this runtime and documented per family.
     "mflux>=0.19.0,<0.20; platform_system == 'Darwin' and python_version >= '3.11'",
+    # HiDream-O1 reuses the exact Qwen3-VL runtime already validated and
+    # bundled by Desktop. Keep this pin coherent with [vision]/the sidecar.
+    "mlx-vlm==0.6.17; platform_system == 'Darwin' and python_version >= '3.11'",
+    # The vendored SDXL backend needs Pillow for PNG encoding. Keep this direct
+    # because SDXL and SD3.5 also work on Rapid's Python 3.10 floor without
+    # mflux. SD3.5's reviewed local T5 tokenizer additionally needs
+    # sentencepiece on that same floor.
+    "pillow>=10.0.0; platform_system == 'Darwin'",
+    "sentencepiece>=0.2.0; platform_system == 'Darwin'",
 ]
 
 [project.urls]
@@ -548,6 +561,7 @@ vllm_mlx = [
     "aliases.json",
     "model_recommendations.json",
     "audio/aliases.json",
+    "catalog/schemas/*.json",
     # Download-size manifest (hf_path -> footprint bytes) powering the Size
     # column in `rapid-mlx models` and the size line in `rapid-mlx info`.
     # Regenerate with scripts/gen_model_sizes.py when aliases change.
@@ -568,6 +582,20 @@ vllm_mlx = [
     "audio/sa3/LICENSE",
     "audio/sa3/NOTICE",
     "audio/sa3/README.md",
+    # Vendored HiDream-O1 MLX adapter attribution must ship in wheels and the
+    # Desktop sidecar alongside the redistributed MIT source.
+    "image/hidream_runtime/LICENSE",
+    "image/hidream_runtime/NOTICE",
+    # Vendored SDXL MLX runtime attribution must ship beside the CC0 source.
+    "image/sdxl_runtime/LICENSE",
+    "image/sdxl_runtime/NOTICE",
+    # Vendored Bonsai low-bit numerical core attribution must ship with every
+    # wheel and Desktop sidecar that contains the adapted MIT source.
+    "image/bonsai_runtime/LICENSE",
+    "image/bonsai_runtime/NOTICE",
+    # Vendored SD3.5 MLX runtime attribution must ship beside the MIT source.
+    "image/sd35_runtime/LICENSE",
+    "image/sd35_runtime/NOTICE",
 ]
 videox_fun_mlx = ["LICENSE", "NOTICE"]
 
@@ -596,6 +624,9 @@ exclude = [
     # Vendored Stability AI MLX Stable Audio 3 (models + scripts). Keep
     # formatting identical to the upstream source so future syncs stay clean.
     "vllm_mlx/audio/sa3/**/*.py",
+    # Vendored Bonsai low-bit FLUX.2 numerical core. The Rapid-owned adapter
+    # in runtime.py remains under the normal formatter.
+    "vllm_mlx/image/bonsai_runtime/_vendor/**/*.py",
     # Vendored CogVideoX-Fun MLX runtime. Keep iso-upstream.
     "videox_fun_mlx/**/*.py",
 ]
@@ -647,6 +678,19 @@ ignore = [
 # Keep lint quiet on the copy so upstream sync diffs stay clean. The engine
 # entrypoint (vllm_mlx/audio/music.py) is NOT vendored and is linted normally.
 "vllm_mlx/audio/sa3/**/*.py" = ["UP", "B", "SIM", "N", "F", "I", "E", "W"]
+# Adapted from the pinned upstream HiDream-O1 MLX runtime. Keep source-shape
+# lint exceptions local so the Rapid-owned engine integration stays strict.
+"vllm_mlx/image/hidream_runtime/*.py" = ["UP", "B", "SIM", "N", "F", "I", "E", "W"]
+# Vendored SDXL implementation. Rapid-owned adapter/runtime.py remains linted;
+# upstream-shaped model, converter, scheduler, and pipeline files stay syncable.
+"vllm_mlx/image/sdxl_runtime/{caching,configuration,hub,modeling,quantization,utils}.py" = ["UP", "B", "SIM", "N", "F", "I", "E", "W"]
+"vllm_mlx/image/sdxl_runtime/{converters,models,pipelines,schedulers}/**/*.py" = ["UP", "B", "SIM", "N", "F", "I", "E", "W"]
+# Adapted verbatim from the pinned low-bit runtime. Keep exceptions confined
+# to _vendor; the checkpoint validation and product adapter stay strict.
+"vllm_mlx/image/bonsai_runtime/_vendor/*.py" = ["UP", "B", "SIM", "N", "F", "I", "E", "W"]
+# Pinned DiffusionKit numerical core. Rapid-owned adapter/runtime.py stays
+# linted; only the source-shaped vendor directory receives exceptions.
+"vllm_mlx/image/sd35_runtime/_vendor/**/*.py" = ["UP", "B", "SIM", "N", "F", "I", "E", "W"]
 # Tensor-shape parameter names (B, H, N, D) follow ML literature
 # convention; N803 lowercase rule is incompatible.
 "scripts/bench_attention.py" = ["N803"]
@@ -665,6 +709,18 @@ python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Exact third-party numerical core; Rapid-owned runtime.py remains under the
+# repository-wide shrink-only error budget.
+module = "vllm_mlx.image.bonsai_runtime._vendor.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+# Pinned third-party numerical core; keep the Rapid-owned SD3.5 adapter under
+# the repository-wide shrink-only error budget.
+module = "vllm_mlx.image.sd35_runtime._vendor.*"
+ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -62,6 +62,10 @@ struct ContentView: View {
     /// Defaults key backing the log drawer's visibility. Shared with the View
     /// menu command in ``RapidApp`` so both toggles drive one flag.
     static let showLogsKey = "Rapid.showLogs"
+    /// Version-scoped dismissal for the lightweight update discovery card.
+    /// A dismissed release stays quiet, while the next release is eligible
+    /// without requiring the user to reset a global preference.
+    static let dismissedUpdateVersionKey = "Rapid.dismissedUpdateVersion"
 
     // There is deliberately no detail-pane height floor here. The detail is a
     // scrolling surface with no natural vertical minimum; the only vertical
@@ -107,6 +111,12 @@ struct ContentView: View {
     // restoration data. With a single main window the persistence scope is
     // the same in practice.
     @AppStorage(ContentView.showLogsKey) private var showLogs: Bool = false
+    @AppStorage(ContentView.dismissedUpdateVersionKey) private var dismissedUpdateVersion = ""
+    /// Session-only hand-off guard. Pressing Update transfers UI ownership to
+    /// Sparkle's standard panel; keeping our card visible beside it would look
+    /// like two independent updaters. Unlike dismissal, this is intentionally
+    /// not persisted: if Sparkle is cancelled, a relaunch may offer it again.
+    @State private var updateHandedOffVersion: String?
     @State private var showCommandPalette = false
     /// Per-session "browse all models" dismissal of the Quickstart card.
     @State private var quickstartDismissedThisSession: Bool = false
@@ -148,6 +158,53 @@ struct ContentView: View {
     /// the shared launch probe fails empty, permit one immediate authoritative
     /// retry without turning session restoration into a polling loop.
     @State private var catalogRestoreRetryAttempted = false
+
+    /// Phase-one presentation policy. Discovery is intentionally quiet while
+    /// onboarding or a window-level command surface owns attention. The
+    /// release remains eligible and appears as soon as that surface closes.
+    /// Dismissal is version-scoped; Sparkle hand-off is session-scoped.
+    static func shouldPresentUpdateCard(
+        releaseVersion: String?,
+        dismissedVersion: String,
+        handedOffVersion: String?,
+        onboardingVisible: Bool,
+        blockingOverlayVisible: Bool,
+        hasAction: Bool
+    ) -> Bool {
+        guard let releaseVersion, hasAction else { return false }
+        return !onboardingVisible
+            && !blockingOverlayVisible
+            && dismissedVersion != releaseVersion
+            && handedOffVersion != releaseVersion
+    }
+
+    /// Record the visual ownership transfer only after Sparkle accepts the
+    /// foreground check. Its KVO state can change after SwiftUI renders an
+    /// enabled button but before the action executes.
+    @discardableResult
+    static func handOffUpdate(
+        version: String,
+        start: () -> Bool,
+        onAccepted: (String) -> Void
+    ) -> Bool {
+        guard start() else { return false }
+        onAccepted(version)
+        return true
+    }
+
+    private var presentedUpdateRelease: UpdateChecker.Release? {
+        guard let release = updater.availableUpdate else { return nil }
+        let releaseURL = Self.missingOverlayDownloadURL(for: release)
+        guard Self.shouldPresentUpdateCard(
+            releaseVersion: release.version,
+            dismissedVersion: dismissedUpdateVersion,
+            handedOffVersion: updateHandedOffVersion,
+            onboardingVisible: quickstartVisible,
+            blockingOverlayVisible: showConversationSearch || showCommandPalette,
+            hasAction: sparkleUpdater.isEnabled || releaseURL != nil
+        ) else { return nil }
+        return release
+    }
 
     private var localModelApproval: YouziModelApprovalStore? {
         (chat.tools as? CompositeToolRegistry)?.builtin.localModels?.approval
@@ -193,6 +250,30 @@ struct ContentView: View {
         .overlay(alignment: .topTrailing) {
             downloadOverlay
         }
+        .overlay(alignment: .bottomTrailing) {
+            if let release = presentedUpdateRelease {
+                UpdateDiscoveryCard(
+                    release: release,
+                    sparkleEnabled: sparkleUpdater.isEnabled,
+                    sparkleCanCheck: sparkleUpdater.canCheckForUpdates,
+                    releaseURL: Self.missingOverlayDownloadURL(for: release),
+                    onUpdate: {
+                        Self.handOffUpdate(
+                            version: release.version,
+                            start: sparkleUpdater.checkForUpdates
+                        ) { updateHandedOffVersion = $0 }
+                    },
+                    onDismiss: {
+                        dismissedUpdateVersion = release.version
+                    }
+                )
+                .padding(16)
+            }
+        }
+        .animation(
+            reduceMotion ? nil : .easeOut(duration: 0.15),
+            value: presentedUpdateRelease?.version
+        )
         .onChange(of: commandPaletteRequest.requestID) { _, requestID in
             showCommandPaletteFromRequest(requestID)
         }
@@ -1149,6 +1230,16 @@ struct ContentView: View {
                 readiness: readiness,
                 onReadinessAction: performReadinessAction
             )
+        case .benchmark:
+            CommunityBenchmarkView(
+                catalog: catalogEntries,
+                binary: server.binaryPath,
+                prepareServer: { try await server.prepareForCommunityBenchmark() },
+                releaseServer: { server.finishCommunityBenchmark($0) },
+                retainServerDuringDeferredReap: {
+                    server.retainCommunityBenchmarkDuringDeferredReap($0)
+                }
+            )
         }
     }
 
@@ -1706,7 +1797,10 @@ struct ContentView: View {
         let rejectsAlias: (String) -> Bool = { candidate in
             ModelSizing.classify(ModelSizing.estimate(alias: candidate), on: hardware) == .tooBig
                 && !RAMBucketedDefault.isRecommendedPick(
-                    alias: candidate, physicalRAMGB: hardware.physicalRAMGB)
+                    alias: candidate,
+                    physicalRAMGB: hardware.physicalRAMGB,
+                    catalogEntry: catalogEntries.first { $0.alias == candidate }
+                )
         }
         let decision = AutoStartDecision.decide(
             lastServedAlias: launchPlan.models.chatAlias,

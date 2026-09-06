@@ -233,12 +233,23 @@ struct YouziLocalModelToolsTests {
         #expect(YouziLocalModelTools.speechModelID(fixture.speech) == fixture.speech.hfRepo)
     }
 
+    @Test("Speech voices are discoverable without loading or synthesizing")
+    func voiceDiscovery() async throws {
+        let f = Fixture()
+        let result = try await f.call("youzi_speech_voices", ["model": f.speech.alias])
+        #expect(!result.isError)
+        #expect(f.loads == 0 && f.generations == 0)
+        #expect(try json(result)["voices"] != nil)
+        #expect(YouziLocalModelTools.failureMessage(content: #"{"error":"invalid_voice","secret":"do-not-display"}"#, chinese: true)?.contains("do-not-display") == false)
+        #expect(YouziLocalModelTools.failureMessage(content: #"{"error":"private/path"}"#, chinese: false) == nil)
+    }
+
     @Test("Schemas round-trip through OpenAI function format; local skill and budget are explicit")
     func schemasAndBudget() throws {
         let definitions = YouziLocalModelTools.definitions
         let encoded = try JSONEncoder().encode(definitions)
         #expect(try JSONDecoder().decode([ToolDefinition].self, from: encoded) == definitions)
-        #expect(definitions.count == 5)
+        #expect(definitions.count == 6)
         #expect(ChatViewModel.toolExecutionBudget(enabled: definitions) == 24)
         #expect(ChatViewModel.toolExecutionBudget(enabled: [WebSearchTool.definition]) == 3)
         let messages = ChatViewModel.addingInstructionLayers(to: [ChatMessage(role: .user, content: "book")], ambientPreamble: nil,

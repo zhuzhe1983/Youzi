@@ -2646,7 +2646,26 @@ async def _load_dynamic_resident_model(
         if hasattr(engine, "_loaded") and not engine._loaded:
             await engine.start()
         engine.generate_warmup()
-    elif modality in ("video-gen", "audio"):
+    elif modality == "video-gen":
+        from .runtime.video_lane import VideoEngine, VideoRuntimeError, require_video_runtime_or_exit
+
+        def prepare_video():
+            # CLI startup used this probe, but the Desktop residency endpoint
+            # bypassed it entirely. Keep failures safe and keep the chat engine.
+            try:
+                require_video_runtime_or_exit(resolved_path)
+            except SystemExit as exc:
+                raise VideoRuntimeError(
+                    "Video runtime is unavailable. Update the Youzi client and bundled runtime; "
+                    "model weights alone are not sufficient."
+                ) from exc
+            result = VideoEngine(model_name=resolved_path)
+            # Upstream Wan/LTX owns per-job weight materialization. Preparation
+            # validates runtime + checkpoint, not a false GPU-warmup claim.
+            return result
+
+        engine = await asyncio.to_thread(prepare_video)
+    elif modality == "audio":
         raise RuntimeError(
             f"runtime residency loading is not available for modality {modality!r}"
         )

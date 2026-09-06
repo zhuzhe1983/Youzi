@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from ..config import get_config
 from ..middleware.auth import anonymous_inference_enabled, verify_api_key
+from ..kv_cache_dtype import KVCacheQuantizationUnsupportedError
 from ..middleware.exception_handlers import (
     register_request_model,
     register_request_path,
@@ -235,6 +236,10 @@ async def load_resident_model(request: ModelLoadRequest):
         )
     except HTTPException:
         raise
+    except KVCacheQuantizationUnsupportedError as exc:
+        # Explicit quantized-KV request the model can't serve (#78):
+        # reject before load with the actionable reason.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ResidentModelCapacityError as exc:
         projection = exc.replacement_projection
         if projection is None:
@@ -254,6 +259,9 @@ async def load_resident_model(request: ModelLoadRequest):
     except ResidentModelError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
+        from ..runtime.video_lane import VideoRuntimeError
+        if isinstance(exc, VideoRuntimeError):
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         raise HTTPException(
             status_code=500,
             detail=f"Failed to load resident model: {type(exc).__name__}",

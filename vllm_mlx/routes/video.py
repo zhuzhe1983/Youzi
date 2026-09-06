@@ -40,6 +40,10 @@ _VIDEO_JOB_SCHEMA_VERSION = 1
 _VIDEO_JOB_METADATA = "job.json"
 _MAX_VIDEO_JOB_METADATA_BYTES = 64 * 1024
 _VIDEO_ID_RE = re.compile(r"video_[0-9a-f]{32}\Z")
+# The registered Community Benchmark uses Wan's common 480p landscape target.
+# Wan renders through a 64-aligned working canvas and crops/scales to the
+# requested output, just like the OpenAI-compatible 720p exceptions below.
+_WAN_STANDARD_OUTPUT_SIZE = (832, 480)
 _jobs_lock = threading.Lock()
 _ephemeral_jobs_roots = {Path(tempfile.mkdtemp(prefix="rapid-mlx-videos-"))}
 _jobs_root = next(iter(_ephemeral_jobs_roots))
@@ -53,6 +57,8 @@ class _VideoJob:
     prompt: str
     seconds: str
     size: str
+    frames: int | None = None
+    fps: int | None = None
     status: str = "queued"
     progress: int = 0
     created_at: int = 0
@@ -65,6 +71,10 @@ class _VideoJob:
         value = asdict(self)
         value.pop("output_path")
         value.pop("generation_finished")
+        if value["frames"] is None:
+            value.pop("frames")
+        if value["fps"] is None:
+            value.pop("fps")
         value["object"] = "video"
         return value
 
@@ -416,6 +426,8 @@ def _load_completed_job(job_dir: Path) -> _VideoJob | None:
     size = value.get("size")
     created_at = value.get("created_at")
     completed_at = value.get("completed_at")
+    frames = value.get("frames")
+    fps = value.get("fps")
     if (
         not isinstance(model, str)
         or not model
@@ -433,6 +445,8 @@ def _load_completed_job(job_dir: Path) -> _VideoJob | None:
         or type(completed_at) is not int
         or created_at < 0
         or completed_at < created_at
+        or (frames is not None and (type(frames) is not int or frames < 1))
+        or (fps is not None and (type(fps) is not int or fps < 1))
     ):
         return None
 
@@ -442,6 +456,8 @@ def _load_completed_job(job_dir: Path) -> _VideoJob | None:
         prompt=prompt,
         seconds=seconds,
         size=size,
+        frames=frames,
+        fps=fps,
         status="completed",
         progress=100,
         created_at=created_at,
@@ -659,41 +675,75 @@ async def _run_in_generation_thread(function, /, **kwargs) -> None:
     await completed
 
 
-def _video_engine():
+def _video_engine(model_name: str = ""):
+    """Resolve the requested resident video lane without replacing chat."""
     from ..config import get_config
 
-    engine = get_config().engine
+    cfg = get_config()
+    registry = getattr(cfg, "model_registry", None)
+    engine = None
+    if model_name and registry:
+        try:
+            registry.validate_model_name(model_name)
+            engine = registry.get_engine(model_name)
+        except KeyError:
+            pass
+    elif model_name:
+        accepted = {getattr(cfg, key, None) for key in ("model_name", "model_alias", "model_path")}
+        # Test/legacy single-engine hosts can expose only the engine identity.
+        primary = getattr(cfg, "engine", None)
+        accepted.add(getattr(primary, "model_name", None))
+        profile = resolve_profile(model_name)
+        if model_name in accepted or (profile and profile.hf_path in accepted):
+            engine = primary
+    elif registry:
+        videos = [entry.engine for entry in registry.list_entries()
+                  if getattr(entry.engine, "is_video_gen", False)]
+        if len(videos) == 1:
+            engine = videos[0]
+    else:
+        engine = getattr(cfg, "engine", None)
     if engine is None or not getattr(engine, "is_video_gen", False):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": {
-                    "message": (
-                        "This server is not running a video model. Start it with "
-                        "`rapid-mlx serve ltx-2.3-mlx-q4`."
-                    ),
-                    "type": "invalid_request_error",
-                    "code": "video_model_not_loaded",
-                    "param": "model",
-                }
-            },
-        )
+        raise HTTPException(status_code=409, detail={"error": {
+            "message": "The requested video model is not ready. Load a downloaded video model in Youzi Model Settings or POST /v1/models/load.",
+            "type": "invalid_request_error", "code": "video_model_not_loaded", "param": "model",
+        }})
     return engine
 
 
-def _parse_size(value: str, *, multiple: int = 64) -> tuple[int, int]:
+@contextlib.asynccontextmanager
+async def _video_engine_lease(engine):
+    """Keep the exact engine alive through queued and uncancellable GPU work."""
+    from ..config import get_config
+    manager = getattr(get_config(), "residency_manager", None)
+    if manager is None:
+        yield engine
+        return
+    async with manager.lease(engine.model_name) as resident:
+        if resident is not engine:
+            raise RuntimeError("Video model changed before job admission; retry the job.")
+        yield resident
+
+
+def _parse_size(
+    value: str,
+    *,
+    multiple: int = 64,
+    also_supported: set[tuple[int, int]] | None = None,
+) -> tuple[int, int]:
     try:
         width, height = (int(part) for part in value.lower().split("x", 1))
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=400, detail="size must be WIDTHxHEIGHT"
         ) from exc
-    openai_sizes = {(1280, 720), (720, 1280)}
+    exceptional_sizes = {(1280, 720), (720, 1280)}
+    exceptional_sizes.update(also_supported or ())
     is_model_aligned = width % multiple == 0 and height % multiple == 0
     if not (
         256 <= width <= 1920
         and 256 <= height <= 1920
-        and (is_model_aligned or (width, height) in openai_sizes)
+        and (is_model_aligned or (width, height) in exceptional_sizes)
     ):
         raise HTTPException(
             status_code=400,
@@ -732,7 +782,7 @@ def _video_capabilities(engine) -> dict:
             "i2v": ["image-to-video"],
             "ti2v": ["text-to-video", "image-to-video"],
         }.get(model_type, ["text-to-video", "image-to-video"])
-        openai_sizes = [(1280, 720), (720, 1280)]
+        openai_sizes = [(1280, 720), (720, 1280), _WAN_STANDARD_OUTPUT_SIZE]
         supported_openai_sizes = [
             f"{width}x{height}"
             for width, height in openai_sizes
@@ -872,7 +922,7 @@ async def _run_job(
         nonlocal started
         # This inner task owns the gate, so cancellation of the request-facing
         # job never releases it while an uncancellable MLX thread is running.
-        async with generation_gate:
+        async with _video_engine_lease(engine), generation_gate:
             with _jobs_lock:
                 if job.status == "failed":
                     return False
@@ -994,7 +1044,7 @@ async def create_video(
     negative_prompt: Annotated[str | None, Form(max_length=4096)] = None,
     input_reference: UploadFile | None = File(None),
 ):
-    engine = _video_engine()
+    engine = _video_engine(model)
     is_cogvideox = getattr(engine, "video_family", "") == "cogvideox-fun"
     is_wan = getattr(engine, "video_family", "") == "wan"
     is_ltx25 = getattr(engine, "video_family", "") == "ltx-2.5"
@@ -1043,7 +1093,11 @@ async def create_video(
             )
         width, height = 672, 384
     else:
-        width, height = _parse_size(size, multiple=32 if is_ltx25 else 64)
+        width, height = _parse_size(
+            size,
+            multiple=32 if is_ltx25 else 64,
+            also_supported={_WAN_STANDARD_OUTPUT_SIZE} if is_wan else None,
+        )
     native_fps = 5 if is_cogvideox else getattr(engine, "native_fps", 24)
     request_fps = native_fps if fps is None else fps
     if not 1 <= request_fps <= 60:
@@ -1192,6 +1246,8 @@ async def create_video(
             prompt=prompt,
             seconds=str(seconds_int),
             size=f"{width}x{height}",
+            frames=request_frames,
+            fps=request_fps,
             created_at=int(time.time()),
         )
         with _jobs_lock:
@@ -1249,9 +1305,9 @@ async def create_video(
 
 
 @router.get("/v1/videos/capabilities", dependencies=[Depends(verify_api_key)])
-async def video_capabilities():
+async def video_capabilities(model: str = ""):
     """Return machine-readable limits for the currently served video model."""
-    return _video_capabilities(_video_engine())
+    return _video_capabilities(_video_engine(model))
 
 
 def _get_job(video_id: str) -> _VideoJob:

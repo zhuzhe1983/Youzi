@@ -82,7 +82,45 @@ def _collect_hf_paths() -> list[str]:
 
 
 def _size_one(repo_id: str) -> tuple[str, int | None]:
-    from vllm_mlx._download_gate import estimate_repo_size_bytes
+    from vllm_mlx._download_gate import (
+        IMAGE_MODEL_DATA_FILES,
+        IMAGE_MODEL_REVISIONS,
+        estimate_repo_size_bytes,
+        image_runtime_assets_for,
+    )
+
+    data_files = IMAGE_MODEL_DATA_FILES.get(repo_id)
+    if data_files is not None:
+        # Vendored image runtimes deliberately fetch an audited subset of a
+        # repository. Size that exact pinned payload: SDXL's repository also
+        # contains fp32, refiner, ONNX, and other unused artifacts, so the
+        # generic weight-file estimator overstates the download by >10x.
+        try:
+            from huggingface_hub import model_info
+
+            payloads = (
+                (repo_id, IMAGE_MODEL_REVISIONS[repo_id], data_files),
+                *image_runtime_assets_for(repo_id),
+            )
+            total = 0
+            for payload_repo, revision, allowlist in payloads:
+                info = model_info(
+                    payload_repo,
+                    revision=revision,
+                    files_metadata=True,
+                    timeout=5,
+                )
+                sizes = {
+                    sibling.rfilename: sibling.size
+                    for sibling in (getattr(info, "siblings", None) or [])
+                    if hasattr(sibling, "rfilename")
+                }
+                if any(path not in sizes or sizes[path] is None for path in allowlist):
+                    return repo_id, None
+                total += sum(int(sizes[path]) for path in allowlist)
+            return repo_id, total
+        except Exception:
+            return repo_id, None
 
     return repo_id, estimate_repo_size_bytes(repo_id)
 
@@ -101,8 +139,8 @@ def _size_via_subprocess(repo_id: str) -> int | None:
     guarantees a fresh HTTP session.
     """
     code = (
-        "from vllm_mlx._download_gate import estimate_repo_size_bytes;"
-        f"v=estimate_repo_size_bytes({repo_id!r});"
+        "from scripts.gen_model_sizes import _size_one;"
+        f"v=_size_one({repo_id!r})[1];"
         "print(v if v is not None else '')"
     )
     try:

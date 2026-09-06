@@ -1008,6 +1008,17 @@ def _check_disk_space(model_name: str, force: bool = False) -> None:
     if os.path.exists(model_name):
         return
 
+    # Image loaders consume their verified local snapshot directly once every
+    # runtime-required file is present.  Check that contract before comparing
+    # against the Hub's *current* revision: a repo can advance after the local
+    # snapshot was downloaded, and pricing the newer remote revision here
+    # would reject a perfectly runnable warm start as a huge new download.
+    # Text checkpoints retain the selective-loader fast path below.
+    from vllm_mlx._download_gate import mflux_missing_weights
+
+    if mflux_missing_weights(model_name) == []:
+        return
+
     # Which directory inside the repo this alias actually needs. Resolved
     # OUTSIDE the cache probe below: that probe is best-effort and swallows
     # its own failures, and folding the prefix into it meant one flaky
@@ -1298,6 +1309,15 @@ def _apply_mtp_cli_model_type_reconciliation(
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(2)
+    if (
+        _eligibility_model_type == "qwen4_exp"
+        and explicit_depth
+        and scheduler_config.mtp_max_k == 2
+    ):
+        # K=2 is qualified with compact indexed-QSA verification. Make the
+        # public opt-in self-contained while preserving an explicit operator
+        # override for fallback/debug comparisons.
+        os.environ.setdefault("RAPID_MLX_QSA_INDEXED_SPLITK", "1")
 
 
 def _resolve_mtp_depth_for_model(
@@ -1310,12 +1330,17 @@ def _resolve_mtp_depth_for_model(
 
     if model_type != "qwen4_exp":
         return requested
-    if explicit and requested != 1:
+    if not explicit:
+        # Keep the production default at the previously qualified K=1.
+        # K=2 is an explicit-only capability because its indexed-QSA speedup
+        # is qualified at ultra-long context, not across shorter prompts.
+        return 1
+    if requested not in {1, 2}:
         raise ValueError(
             "Qwen3.8 Flash-Next native MTP currently supports "
-            "num_speculative_tokens=1 only"
+            "num_speculative_tokens in [1, 2]"
         )
-    return 1
+    return requested
 
 
 def _check_alias_min_memory(user_typed: str) -> None:
@@ -1335,7 +1360,8 @@ def _check_alias_min_memory(user_typed: str) -> None:
     can still opt in. Silent no-op when:
       - The alias has no ``min_memory_gb`` metadata (every model we
         ship under 100 GB weights).
-      - The user typed an HF path directly instead of an alias.
+      - The model has no built-in alias profile (direct HF paths that match a
+        built-in profile inherit its floor through reverse-path resolution).
       - psutil is unavailable / raises.
     """
     try:
@@ -1428,7 +1454,22 @@ def _check_memory_capacity(model_name: str, *, alias: str | None = None) -> None
     # Resolve model size in bytes — local path, then HF cache, then HF API.
     model_size_bytes = 0
     try:
-        if os.path.isdir(model_name):
+        from vllm_mlx._download_gate import IMAGE_MODEL_DATA_FILES
+
+        if model_name in IMAGE_MODEL_DATA_FILES:
+            # A vendored image backend downloads an audited allowlist, not the
+            # whole Hub repository. SDXL's repository also carries fp32,
+            # refiner, ONNX, and ancillary artifacts (~72 GB total) while the
+            # runtime consumes only the checked-in 6.46 GB fp16 footprint.
+            # Querying repo metadata here therefore creates a false memory
+            # emergency before an otherwise-safe 16 GB launch.
+            from vllm_mlx.model_sizes import size_bytes
+            from vllm_mlx.runtime.resident_models import estimate_model_bytes
+
+            model_size_bytes = size_bytes(model_name) or 0
+            if catalog_working_gb is None:
+                catalog_working_gb = estimate_model_bytes(model_name) / (1024**3)
+        elif os.path.isdir(model_name):
             for root, _dirs, files in os.walk(model_name):
                 for f in files:
                     try:
@@ -1675,6 +1716,7 @@ def _try_mirror_prefetch(
     *,
     allow_patterns: list[str] | None = None,
     out: dict | None = None,
+    revision: str | None = None,
 ) -> bool:
     """Pre-fetch a HuggingFace repo via R2-first / HF-fallback (per file).
 
@@ -1722,6 +1764,7 @@ def _try_mirror_prefetch(
         on_pull_start=on_pull_start,
         allow_patterns=allow_patterns,
         out=out,
+        revision=revision,
     )
 
 
@@ -1804,6 +1847,13 @@ def _ensure_model_downloaded(
     """
     if os.path.exists(model_name):
         return
+    # Registered image checkpoints are immutable execution contracts. Resolve
+    # the contract before probing cachedness: ``_cache_runnability`` treats a
+    # pinned image repo specially and must not let a complete moving ``main``
+    # snapshot hide a missing pinned snapshot.
+    from vllm_mlx._download_gate import IMAGE_MODEL_REVISIONS
+
+    pinned_image_revision = IMAGE_MODEL_REVISIONS.get(model_name)
     # Reuse the cache inventory's single runnability probe core
     # (``_cache_runnability``, the same source ``models --cached`` uses) so
     # what counts as "already cached" is identical everywhere and spans every
@@ -1868,7 +1918,11 @@ def _ensure_model_downloaded(
         # serves every file the repo declares, populate the HF cache layout
         # ourselves and skip snapshot_download. On any miss we fall through
         # to the normal HuggingFace download below.
-        mirror_ok = _try_mirror_prefetch(model_name, on_pull_start=spinner.stop)
+        mirror_ok = _try_mirror_prefetch(
+            model_name,
+            on_pull_start=spinner.stop,
+            revision=pinned_image_revision,
+        )
     if mirror_ok:
         return
 
@@ -1904,11 +1958,14 @@ def _ensure_model_downloaded(
         size_gb = 0.0
         resolved_sha: str | None = None
         try:
+            metadata_kwargs: dict[str, object] = {"files_metadata": True}
+            if pinned_image_revision is not None:
+                metadata_kwargs["revision"] = pinned_image_revision
             info = call_with_deadline(
                 model_info,
                 _HF_RESOLVE_TIMEOUT_SECONDS,
                 model_name,
-                files_metadata=True,
+                **metadata_kwargs,
             )
             resolved_sha = getattr(info, "sha", None)
             if not resolved_sha:
@@ -1961,15 +2018,16 @@ def _ensure_model_downloaded(
                 f"fetching {model_name} from HuggingFace ..."
             )
 
-        download_kwargs = {"revision": resolved_sha} if resolved_sha else {}
+        download_revision = pinned_image_revision or resolved_sha
+        download_kwargs = {"revision": download_revision} if download_revision else {}
         if allow_patterns:
             snapshot_download(
                 model_name, allow_patterns=allow_patterns, **download_kwargs
             )
         else:
             snapshot_download(model_name, **download_kwargs)
-        if resolved_sha:
-            pin_main_ref(model_name, resolved_sha)
+        if download_revision:
+            pin_main_ref(model_name, download_revision)
         print()
     except SystemExit:
         # _check_disk_space aborts via sys.exit(1) — let it through.
@@ -3184,6 +3242,11 @@ def serve_command(args):
         getattr(args, "_original_alias", None) or getattr(args, "model", "")
     )
     _is_wan_video = False
+    from ._download_gate import IMAGE_MODEL_DATA_FILES
+
+    _owns_pinned_image_download = bool(
+        _serve_profile is not None and _serve_profile.hf_path in IMAGE_MODEL_DATA_FILES
+    )
     if _serve_profile is not None and _serve_profile.modality == "video-gen":
         from .runtime.video_lane import require_video_runtime_or_exit
         from .video.wan import is_wan_model
@@ -3404,7 +3467,22 @@ def serve_command(args):
     # revision (or uses RAPID_MLX_WAN_MODEL_DIR). The generic prefetch has no
     # revision parameter and could otherwise download repository HEAD first,
     # duplicating tens of gigabytes before the pinned snapshot is loaded.
-    if not _is_wan_video:
+    # Vendored image backends own a revision-pinned, data-file-only pull in
+    # ImageEngine. The
+    # generic prefetch resolves repository HEAD and downloads every file,
+    # including unreviewed scripts and samples, before that guarded path runs.
+    if _owns_pinned_image_download:
+        # Preserve the normal first-run disk guard even though the generic
+        # downloader is intentionally bypassed. A complete pinned snapshot is
+        # a warm no-op; cold/partial caches are checked before the multi-GB
+        # pull begins inside ImageEngine.
+        from ._download_gate import mflux_missing_weights as _image_missing
+
+        if _image_missing(args.model) != []:
+            _check_disk_space(
+                args.model, force=getattr(args, "force_disk_check", False)
+            )
+    elif not _is_wan_video:
         if getattr(args, "force_disk_check", False):
             _ensure_model_downloaded(args.model, force_disk_check=True)
         else:
@@ -4195,9 +4273,21 @@ def serve_command(args):
     # the legacy --kv-cache-quantization flag is passed, honor it
     # verbatim for backwards compatibility; the new dtype flag only
     # takes effect on operators who haven't pinned the legacy bool.
+    # Operator-explicit quantization (either CLI shape), computed BEFORE
+    # the branch below mutates ``args.kv_cache_quantization`` (#78).
+    _kv_quant_explicit = bool(args.kv_cache_quantization) or (
+        args.kv_cache_dtype != "bf16"
+    )
+    # The typed rejection must be importable at the point the
+    # scheduler/MLLM-lane backstop raises it during load_model, regardless
+    # of which KV branch ran above (#78). Imported into this function scope
+    # so the ``except`` clause below always resolves the name.
+    from .kv_cache_dtype import KVCacheQuantizationUnsupportedError
+
     kv_cache_decision = None
     if not args.kv_cache_turboquant and not args.kv_cache_quantization:
         from .kv_cache_dtype import (
+            KVCacheQuantizationUnsupportedError,
             dtype_to_quantization_bits,
             log_kv_cache_decision,
             resolve_kv_cache_dtype,
@@ -4205,17 +4295,22 @@ def serve_command(args):
 
         hf_cfg, alias_meta = _gather_kv_cache_dtype_inputs(args.model)
         _continuous_mtp = getattr(args, "mtp_continuous_batching", False)
-        kv_cache_decision = resolve_kv_cache_dtype(
-            args.kv_cache_dtype,
-            # BF16 is at least as quality-preserving as the reasoning
-            # profile's int8 cache. Continuous MTP requires the unquantized
-            # transactional cache, so the method-specific capability wins.
-            reasoning=args.reasoning and not _continuous_mtp,
-            model_name=args.model,
-            hf_path=(alias_meta or {}).get("hf_path"),
-            hf_config=hf_cfg,
-            alias_metadata=alias_meta,
-        )
+        try:
+            kv_cache_decision = resolve_kv_cache_dtype(
+                args.kv_cache_dtype,
+                # BF16 is at least as quality-preserving as the reasoning
+                # profile's int8 cache. Continuous MTP requires the unquantized
+                # transactional cache, so the method-specific capability wins.
+                reasoning=args.reasoning and not _continuous_mtp,
+                explicit=_kv_quant_explicit,
+                model_name=args.model,
+                hf_path=(alias_meta or {}).get("hf_path"),
+                hf_config=hf_cfg,
+                alias_metadata=alias_meta,
+            )
+        except KVCacheQuantizationUnsupportedError as e:
+            print(f"\n  Error: {e}\n")
+            sys.exit(2)
         if _continuous_mtp and args.reasoning:
             logging.getLogger(__name__).info(
                 "Continuous MTP cache policy: keeping BF16 KV cache; the "
@@ -4245,6 +4340,8 @@ def serve_command(args):
         from .kv_cache_dtype import (
             REASONING_KV_CACHE_DTYPE,
             KVCacheDtypeDecision,
+            KVCacheQuantizationUnsupportedError,
+            resolve_kv_cache_dtype,
         )
 
         # The two rejections that used to live here (``--reasoning`` +
@@ -4252,6 +4349,21 @@ def serve_command(args):
         # ``kv_cache_flag_conflict`` and already fired above, so anything
         # reaching this point has a legal bits value.
         legacy_dtype = "int4" if args.kv_cache_quantization_bits == 4 else "int8"
+        # The legacy flag is equally operator-explicit, so it goes through
+        # the same resolver gate as --kv-cache-dtype (#78).
+        _legacy_hf_cfg, _legacy_alias_meta = _gather_kv_cache_dtype_inputs(args.model)
+        try:
+            resolve_kv_cache_dtype(
+                legacy_dtype,
+                explicit=True,
+                model_name=args.model,
+                hf_path=(_legacy_alias_meta or {}).get("hf_path"),
+                hf_config=_legacy_hf_cfg,
+                alias_metadata=_legacy_alias_meta,
+            )
+        except KVCacheQuantizationUnsupportedError as e:
+            print(f"\n  Error: {e}\n")
+            sys.exit(2)
         # When --reasoning is set alongside the (compatible) bits=8
         # legacy flag, the operator-facing reason should still
         # advertise the reasoning profile so the startup banner is
@@ -4421,6 +4533,9 @@ def serve_command(args):
         kv_cache_quantization_bits=args.kv_cache_quantization_bits,
         kv_cache_quantization_group_size=args.kv_cache_quantization_group_size,
         kv_cache_min_quantize_tokens=args.kv_cache_min_quantize_tokens,
+        # Lane-level gates (MLLM engine, live-cache probe) hard-fail
+        # explicit requests they cannot honor (#78).
+        kv_cache_dtype_explicit=_kv_quant_explicit,
         # TurboQuant compression (R15 Phase 4: mode-aware). Shared
         # helper (#969) — ``python -m vllm_mlx.server`` calls the same
         # ``turboquant_scheduler_kwargs`` so both entrypoints stay in
@@ -4571,8 +4686,12 @@ def serve_command(args):
         )
     print(f"Stream interval: {args.stream_interval} tokens")
     if args.use_paged_cache:
+        # Echo the REQUEST, not an active cache: lane and layout capability
+        # are validated at engine startup and fail closed (#2955), so this
+        # line must not read as a running paged cache.
         print(
-            f"Paged cache: block_size={args.paged_cache_block_size}, max_blocks={args.max_cache_blocks}"
+            f"Paged cache requested: block_size={args.paged_cache_block_size}, "
+            f"max_blocks={args.max_cache_blocks} (validated at engine startup)"
         )
     elif enable_prefix_cache and not args.no_memory_aware_cache:
         cache_info = (
@@ -4734,6 +4853,15 @@ def serve_command(args):
             enable_disk_stream=getattr(args, "disk_stream", False),
             disk_stream_cache_gb=getattr(args, "disk_stream_cache_gb", 1.0),
         )
+    except KVCacheQuantizationUnsupportedError as e:
+        # The scheduler/MLLM-lane backstop (#78) rejects an explicit
+        # quantized-KV request that the CLI-time resolver could not see (a
+        # freshly-downloaded model whose config wasn't readable yet surfaces
+        # only once weights load). Surface the SAME actionable error and exit
+        # code (2) as the CLI resolver so every serving lane reports the dtype
+        # contract identically instead of a generic model-load failure.
+        print(f"\n  Error: {e}\n")
+        sys.exit(2)
     except Exception as e:
         # Opt-in telemetry (Phase 2.2 error wiring): record that a model
         # failed to load on the ``serve`` path. The payload carries only a
@@ -5583,7 +5711,8 @@ def bench_command(args):
 
         if args.use_paged_cache:
             print(
-                f"Paged cache: block_size={args.paged_cache_block_size}, max_blocks={args.max_cache_blocks}"
+                f"Paged cache requested: block_size={args.paged_cache_block_size}, "
+                f"max_blocks={args.max_cache_blocks} (validated at engine startup)"
             )
 
         # Generate prompts
@@ -6087,6 +6216,7 @@ def _cache_runnability(repo: str) -> bool | None:
     """
     try:
         from vllm_mlx._download_gate import (
+            IMAGE_MODEL_REVISIONS,
             _snapshot_is_complete_audio_model,
             _snapshot_is_complete_mflux_model,
             _snapshot_is_complete_split_model,
@@ -6116,6 +6246,13 @@ def _cache_runnability(repo: str) -> bool | None:
             # matches a lone ``model.safetensors``) must NOT mark an incomplete
             # Wan snapshot runnable. Complete -> runnable; incomplete -> not.
             return _snapshot_is_complete_wan_model(repo)
+        if repo in IMAGE_MODEL_REVISIONS:
+            # A generic complete ``refs/main`` is not interchangeable with a
+            # registered image checkpoint's pinned commit. The mflux probe
+            # resolves ``snapshots/<pinned revision>`` directly and validates
+            # all component indexes/shards there, so only that exact snapshot
+            # can suppress the foreground download.
+            return _snapshot_is_complete_mflux_model(repo)
         return (
             is_repo_cached(repo)
             or _snapshot_is_complete_split_model(repo)
@@ -6410,18 +6547,72 @@ def _recipe_free_disk_gb() -> float | None:
         return None
 
 
+def _cached_subfolder_size(repo_id: str, subfolder: str) -> int | None:
+    """Logical bytes for one complete checkpoint subfolder in the pinned cache.
+
+    A Hub repo can retain several independently runnable quantizations. The
+    repo-level cache probe intentionally follows the currently selected
+    variant, so inventory needs this exact-artifact probe instead.
+    """
+    import os
+
+    from huggingface_hub.constants import HF_HUB_CACHE
+
+    from vllm_mlx._download_gate import (
+        _resolved_snapshot_sha,
+        _snapshot_is_complete,
+        _valid_variant_subfolder,
+    )
+    from vllm_mlx.model_metadata import resolve_unreferenced_cached_subfolder
+
+    if not _valid_variant_subfolder(subfolder):
+        return None
+    repo_root = os.path.join(
+        HF_HUB_CACHE,
+        f"models--{repo_id.replace('/', '--')}",
+    )
+    sha = _resolved_snapshot_sha(repo_root)
+    if sha is not None:
+        snapshot = os.path.join(repo_root, "snapshots", sha)
+        checkpoint = os.path.join(snapshot, *subfolder.split("/"))
+        snapshot_real = os.path.realpath(snapshot)
+        checkpoint_real = os.path.realpath(checkpoint)
+        if not checkpoint_real.startswith(snapshot_real + os.sep):
+            return None
+        if not _snapshot_is_complete(checkpoint):
+            return None
+    else:
+        unreferenced = resolve_unreferenced_cached_subfolder(repo_id, subfolder)
+        if unreferenced is None:
+            return None
+        checkpoint = str(unreferenced)
+
+    total = 0
+    try:
+        for directory, _, filenames in os.walk(checkpoint, followlinks=False):
+            for filename in filenames:
+                path = os.path.join(directory, filename)
+                if os.path.isfile(path):
+                    total += os.path.getsize(path)
+    except OSError:
+        return None
+    return total if total > 0 else None
+
+
 def _cached_models_json_payload() -> dict:
     """Structured form of the ``models --cached`` view — the same rows the
     text table renders, with stable keys instead of fixed-width columns.
 
-    Sizes are raw bytes; ``state`` is one of ``ok`` / ``unmapped`` /
+    Sizes are raw bytes; ``subfolder`` is the exact catalog checkpoint folder
+    for mapped aliases (``None`` means repository root); ``state`` is one of
+    ``ok`` / ``unmapped`` /
     ``incomplete`` / ``external`` mirroring the alias column's parenthesized
     tags; ``alias`` is ``None`` for any non-``ok`` row (those are not
     launchable by alias). Sorted biggest-first, like the table.
     """
     import time as _time
 
-    from vllm_mlx.model_aliases import list_profiles
+    from vllm_mlx.model_aliases import list_profiles, resolve_subfolder
 
     rows = _scan_hf_cache_models()
     external_rows = _scan_external_model_dirs() + _scan_exact_model_links()
@@ -6429,9 +6620,11 @@ def _cached_models_json_payload() -> dict:
     external_rows = [r for r in external_rows if r[0] not in runnable_hub_repos]
 
     profiles = list_profiles()
-    hf_to_alias: dict[str, str] = {}
+    repo_artifacts: dict[str, list[tuple[str, str | None]]] = {}
     for alias, p in profiles.items():
-        hf_to_alias.setdefault(p.hf_path, alias)
+        artifact = (alias, p.subfolder)
+        if artifact not in repo_artifacts.setdefault(p.hf_path, []):
+            repo_artifacts[p.hf_path].append(artifact)
 
     now = _time.time()
     tagged = [(*row, False) for row in rows] + [(*row, True) for row in external_rows]
@@ -6440,25 +6633,50 @@ def _cached_models_json_payload() -> dict:
     for repo, size, mtime, is_external in tagged:
         total_bytes += size
         if is_external:
-            alias, state = None, "external"
-        elif not _cache_entry_is_runnable(repo):
-            alias, state = None, "incomplete"
+            artifacts: list[tuple[str | None, str | None, int, str]] = [
+                (None, None, size, "external")
+            ]
         else:
-            mapped = hf_to_alias.get(repo)
-            alias, state = (mapped, "ok") if mapped is not None else (None, "unmapped")
-        models.append(
-            {
-                "alias": alias,
-                "repo": repo,
-                "size_bytes": int(size),
-                "modified_epoch": int(mtime) if mtime and mtime > 0 else None,
-                "age_seconds": int(max(0, now - mtime))
-                if mtime and mtime > 0
-                else None,
-                "state": state,
-                "external": is_external,
-            }
-        )
+            artifacts = []
+            seen_artifacts: set[tuple[str, str | None]] = set()
+            for alias, subfolder in repo_artifacts.get(repo, []):
+                key = (repo, subfolder)
+                if key in seen_artifacts:
+                    continue
+                if subfolder is None:
+                    # A root alias is runnable only when repo-level resolution
+                    # also means root. A multi-variant repo's current/default
+                    # subfolder must not masquerade as its root artifact.
+                    artifact_size = (
+                        size
+                        if resolve_subfolder(repo) is None
+                        and _cache_entry_is_runnable(repo)
+                        else None
+                    )
+                else:
+                    artifact_size = _cached_subfolder_size(repo, subfolder)
+                if artifact_size is not None:
+                    artifacts.append((alias, subfolder, artifact_size, "ok"))
+                    seen_artifacts.add(key)
+            if not artifacts:
+                state = "unmapped" if _cache_entry_is_runnable(repo) else "incomplete"
+                artifacts = [(None, None, size, state)]
+
+        for alias, subfolder, artifact_size, state in artifacts:
+            models.append(
+                {
+                    "alias": alias,
+                    "repo": repo,
+                    "subfolder": subfolder,
+                    "size_bytes": int(artifact_size),
+                    "modified_epoch": int(mtime) if mtime and mtime > 0 else None,
+                    "age_seconds": int(max(0, now - mtime))
+                    if mtime and mtime > 0
+                    else None,
+                    "state": state,
+                    "external": is_external,
+                }
+            )
     models.sort(key=lambda m: -m["size_bytes"])
     return {"cached": models, "count": len(models), "total_bytes": int(total_bytes)}
 
@@ -6484,6 +6702,12 @@ def _available_models_json_payload() -> dict:
             raw = size_bytes(p.hf_path)
         except Exception:
             raw = None
+        modality = _modality(p)
+        default_steps = None
+        if modality == "image-gen":
+            from vllm_mlx.image.engine import default_steps_for_model
+
+            default_steps = default_steps_for_model(p.hf_path)
         return {
             "alias": alias,
             "hf_path": p.hf_path,
@@ -6499,14 +6723,16 @@ def _available_models_json_payload() -> dict:
             "mtp_continuous_batching_tier": getattr(
                 p, "mtp_continuous_batching_tier", "unknown"
             ),
-            "modality": _modality(p),
+            "modality": modality,
             "video_modes": list(p.video_modes or ()),
             "min_memory_gb": p.min_memory_gb,
+            "default_steps": default_steps,
             # Desktop consumes these as a launch-safety contract. Only
             # curated aliases may opt into eager MLLM loading, and an
             # explicit text-only pin always wins over name inference.
             "is_builtin": alias in builtin_aliases,
             "is_text_only": bool(getattr(p, "is_text_only", False)),
+            "supports_image_input": bool(getattr(p, "supports_image_input", False)),
         }
 
     text, video, image = {}, {}, {}
@@ -6535,6 +6761,19 @@ def _available_models_json_payload() -> dict:
         ]
     except Exception:
         payload["audio"] = []
+    # Atomic catalog shadow. Existing bucket keys remain byte-compatible for
+    # older Desktop builds; new consumers read this joined model/alias graph.
+    # It is deliberately read-only: legacy registries still resolve launches
+    # until the migration report stays clean through a release window.
+    try:
+        from vllm_mlx.catalog import build_catalog_bundle
+
+        payload["atomic"] = build_catalog_bundle()
+    except Exception:
+        # Shadow data must never take the legacy discovery surface down. CI
+        # validates every checked-in registry; an installed optional/corrupt
+        # audio registry still degrades exactly as it did before atomic mode.
+        pass
     return payload
 
 
@@ -6554,6 +6793,25 @@ def models_command(args):
     from vllm_mlx._version_check import print_staleness_warning_if_any
     from vllm_mlx.model_aliases import list_profiles
     from vllm_mlx.model_sizes import format_size
+
+    search_display = (getattr(args, "search", None) or "").strip()
+    search_term = search_display.casefold()
+    search_active = bool(search_term)
+    modality = getattr(args, "modality", None)
+
+    # The narrowing contract currently targets the human available-models
+    # catalog.  Do not silently accept the flags on the cached or stable JSON
+    # surfaces and then return an unfiltered payload: that looks successful to
+    # scripts while doing the opposite of what the caller requested.
+    if (search_active or modality) and (
+        getattr(args, "json", False) or getattr(args, "cached", False)
+    ):
+        print(
+            "rapid-mlx models: --search/--modality cannot be combined with "
+            "--json or --cached",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     # JSON mode emits ONLY the payload on stdout — no staleness banner, no
     # table — so a caller can pipe it straight into a parser.
@@ -6602,8 +6860,116 @@ def models_command(args):
         for a, p in all_profiles.items()
         if a not in video_profiles and a not in image_profiles
     }
+
+    # #2355: narrow the 200+-line catalog so a new user isn't forced to
+    # grep it externally. ``--search`` is a case-insensitive substring match
+    # on the alias name; ``--modality`` restricts to a single tagged section
+    # (text chat, video-gen, image-gen, or audio). When a modality/scoped
+    # search is requested the OTHER sections are suppressed so the terminal
+    # settles on exactly the requested slice. The default (no flags) keeps
+    # the full catalog + the existing recommendation pointer.
+    # The title shows the stripped original (user-facing case preserved) so
+    # ``--search " qwen "`` doesn't claim it matched the literal ``' qwen '``
+    # while actually matching ``qwen`` (codex r6 NIT).
+
+    def _matches_search(alias: str) -> bool:
+        return not search_active or search_term in alias.casefold()
+
+    if modality == "text":
+        # ``--modality text``: show ONLY the text chat table — blank every
+        # tagged section (video / image / audio) so the view really is
+        # text-only, unlike the default full catalog. (codex review #1)
+        profiles = {a: p for a, p in profiles.items() if _matches_search(a)}
+        video_profiles = {}
+        image_profiles = {}
+    elif modality in ("video-gen", "image-gen", "audio"):
+        # A non-text modality request: blank every OTHER section (text chat
+        # table + the other tagged sections) and show only the requested one
+        # below (search applies within it).
+        profiles = {}
+        if modality == "video-gen":
+            video_profiles = {
+                a: p for a, p in video_profiles.items() if _matches_search(a)
+            }
+            image_profiles = {}
+        elif modality == "image-gen":
+            video_profiles = {}
+            image_profiles = {
+                a: p for a, p in image_profiles.items() if _matches_search(a)
+            }
+        else:  # audio
+            video_profiles = {}
+            image_profiles = {}
+    else:
+        # No modality filter (full catalog): apply search to the chat table
+        # and, if a search is active, to the tagged sections too
+        # (whole-catalog grep).
+        profiles = {a: p for a, p in profiles.items() if _matches_search(a)}
+        if search_active:
+            video_profiles = {
+                a: p for a, p in video_profiles.items() if _matches_search(a)
+            }
+            image_profiles = {
+                a: p for a, p in image_profiles.items() if _matches_search(a)
+            }
+
+    # Load + filter the audio registry ONCE so the title count and the
+    # rendered section (below) share the same snapshot (codex r4 NIT) — a
+    # broken/missing registry degrades to [] (never a crash), a non-audio
+    # modality request blanks it, and a search filters it, exactly like the
+    # video/image sections above. Audio aliases live in their own registry
+    # (``vllm_mlx/audio/aliases.json``), separate from the text profiles.
+    #
+    # Catch only the expectable "registry unavailable / malformed" failures
+    # (absent optional module or attribute, missing/unreadable aliases.json,
+    # malformed JSON). A genuine bug in ``list_audio_aliases`` itself (e.g. a
+    # TypeError) must surface loudly rather than silently render an empty
+    # audio catalog (codex r5 NIT). ``ImportError`` also covers the bare-module
+    # monkeypatch used by the broken-registry coverage test.
+    try:
+        from vllm_mlx.audio.registry import list_audio_aliases
+    except (ImportError, ModuleNotFoundError):
+        _all_audio = []
+    else:
+        try:
+            _all_audio = list_audio_aliases()
+        except (FileNotFoundError, OSError, ValueError):
+            _all_audio = []
+    if modality and modality != "audio":
+        audio_entries = []
+    elif search_active:
+        audio_entries = [e for e in _all_audio if search_term in e.alias.casefold()]
+    else:
+        audio_entries = _all_audio
+
     print()
-    print(f"  Available models ({len(profiles)} aliases)")
+    title = "Available models"
+    if modality:
+        title = f"Models [{modality}]"
+    if search_active:
+        title += f" matching '{search_display}'"
+    # The count reflects the section actually shown (a modality view empties
+    # the text ``profiles`` but presents its own tagged section). (codex #3)
+    if modality == "video-gen":
+        shown = len(video_profiles)
+    elif modality == "image-gen":
+        shown = len(image_profiles)
+    elif modality == "audio":
+        shown = len(audio_entries)
+    else:
+        shown = len(profiles)
+        if search_active:
+            # Whole-catalog ``--search`` shows the text table AND any tagged
+            # sections (video / image / audio) with matching entries. The
+            # title count must reflect every matching section — counting just
+            # the text table would print a misleading "(0 aliases)" for a
+            # search that matches only, say, a video model. (codex r3 BLOCKING)
+            # The default (no search) keeps the legacy contract: the top title
+            # counts the main text table and each tagged section carries its
+            # own ``(N aliases)`` sub-count.
+            shown = shown + len(video_profiles) + len(image_profiles)
+            shown += len(audio_entries)
+    print(f"  {title} ({shown} aliases)")
 
     # Alias width is computed from the actual registry so new long names
     # (e.g. ``deepseek-coder-v2-lite-16b-4bit``, 31 chars) don't push the
@@ -6711,15 +7077,9 @@ def models_command(args):
     # they had to read the docs site. Now the audio registry
     # (vllm_mlx/audio/aliases.json) feeds the same table so
     # ``rapid-mlx models`` is the canonical "what can I serve?" view
-    # across every lane.
-    try:
-        from vllm_mlx.audio.registry import list_audio_aliases
-
-        audio_entries = list_audio_aliases()
-    except Exception:
-        # A malformed audio registry must NOT break the text alias
-        # listing — silently degrade by skipping the audio section.
-        audio_entries = []
+    # across every lane. ``audio_entries`` is already loaded + gated up
+    # above (before the title count) so the count and this table agree on
+    # the same snapshot (codex r4 NIT); nothing to re-load here.
 
     if audio_entries:
         audio_alias_width = max(
@@ -6817,6 +7177,9 @@ def models_command(args):
         "  Size is an approximate download footprint (weight+tokenizer); "
         "“—” = unknown. The exact size is confirmed at pull time."
     )
+    print("  Narrow: `rapid-mlx models --search <term>` (alias match)")
+    print("          `rapid-mlx models --modality text|audio|video-gen|image-gen`")
+    print("  Pick a model: run `rapid-mlx recipe` for RAM-fit recommendations")
     print("  Tip: `rapid-mlx info <alias>` for the full per-model profile")
     print("       `rapid-mlx pull <alias>` to download")
     print("       `rapid-mlx chat <alias>` for an interactive REPL")
@@ -7166,7 +7529,12 @@ def _sync_pulled_variant_marker(repo_id: str, variant: str | None) -> None:
         pass
 
 
-def _pull_repository(args, *, allow_patterns_override: list[str] | None = None):
+def _pull_repository(
+    args,
+    *,
+    allow_patterns_override: list[str] | None = None,
+    revision_override: str | None = None,
+):
     """Download one repository through the normal mirror/HF pipeline."""
     import time
 
@@ -7248,7 +7616,9 @@ def _pull_repository(args, *, allow_patterns_override: list[str] | None = None):
     # R2-first / HuggingFace-fallback per file. Default mirror is
     # ``https://models.rapidmlx.com``; set ``RAPID_MLX_MODEL_MIRROR=""``
     # to force HF only. The function prints its own progress + summary.
-    if _try_mirror_prefetch(repo_id, allow_patterns=variant_allow, out=_mirror_out):
+    if revision_override is None and _try_mirror_prefetch(
+        repo_id, allow_patterns=variant_allow, out=_mirror_out
+    ):
         from pathlib import Path
 
         try:
@@ -7318,7 +7688,7 @@ def _pull_repository(args, *, allow_patterns_override: list[str] | None = None):
         # catalog subfolder (one checkpoint per quantization).
         if allow_patterns_override is not None:
             _allow = variant_allow
-            print("  Fetching only the runtime assets declared by the audio catalog.")
+            print("  Fetching only the runtime data files declared by Rapid-MLX.")
         elif variant_allow is not None:
             _allow = variant_allow
             # Literal folder name the user asked for (e.g. "4bit"). Derived
@@ -7368,10 +7738,11 @@ def _pull_repository(args, *, allow_patterns_override: list[str] | None = None):
         _mirror_fetched = _mirror_out.get("network_fetch", False)
         _cache_root = _hf_cache_root(repo_id)
         _before = _blob_identifier(_cache_root)
+        download_kwargs = {"revision": revision_override} if revision_override else {}
         path = (
-            snapshot_download(repo_id, allow_patterns=_allow)
+            snapshot_download(repo_id, allow_patterns=_allow, **download_kwargs)
             if _allow
-            else snapshot_download(repo_id)
+            else snapshot_download(repo_id, **download_kwargs)
         )
         _after = _blob_identifier(_cache_root)
         _was_cached = (_before == _after and _before != ()) and not _mirror_fetched
@@ -7419,6 +7790,12 @@ def pull_command(args):
 
     import copy
 
+    from vllm_mlx._download_gate import (
+        IMAGE_MODEL_DATA_FILES,
+        IMAGE_MODEL_REVISIONS,
+        SD35_REPO,
+        image_runtime_assets_for,
+    )
     from vllm_mlx.audio.registry import runtime_assets_for, runtime_requirements_for
     from vllm_mlx.audio.runtime_requirements import (
         AudioRuntimePreparationError,
@@ -7426,7 +7803,47 @@ def pull_command(args):
     )
 
     primary_repo = args.model
-    _pull_repository(args)
+    primary_args = args
+    # ``main()`` normally resolves aliases before dispatch, but keep this
+    # data-only security boundary fail-closed for direct/internal calls too.
+    from vllm_mlx.model_aliases import resolve_model
+
+    resolved_primary = resolve_model(primary_repo)
+    if resolved_primary in IMAGE_MODEL_DATA_FILES and resolved_primary != primary_repo:
+        primary_args = copy.copy(args)
+        primary_args._original_alias = (
+            getattr(args, "_original_alias", None) or primary_repo
+        )
+        primary_args.model = resolved_primary
+        primary_repo = resolved_primary
+
+    if primary_repo == SD35_REPO:
+        print(
+            "\n  Model terms: Stable Diffusion 3.5 weights are subject to the "
+            "Stability AI Community License and Acceptable Use Policy. Review "
+            "https://stability.ai/license before commercial or hosted use."
+        )
+
+    if primary_repo in IMAGE_MODEL_DATA_FILES:
+        _pull_repository(
+            primary_args,
+            allow_patterns_override=list(IMAGE_MODEL_DATA_FILES[primary_repo]),
+            revision_override=IMAGE_MODEL_REVISIONS[primary_repo],
+        )
+    else:
+        _pull_repository(primary_args)
+    for asset_repo, revision, allow_patterns in image_runtime_assets_for(primary_repo):
+        print(f"\n  Runtime assets: {asset_repo}")
+        dependency_args = copy.copy(args)
+        dependency_args.model = asset_repo
+        dependency_args._original_alias = asset_repo
+        dependency_args.bits = None
+        dependency_args.format = None
+        _pull_repository(
+            dependency_args,
+            allow_patterns_override=list(allow_patterns),
+            revision_override=revision,
+        )
     for asset in runtime_assets_for(primary_repo):
         if asset.repo_id == primary_repo:
             continue
@@ -10289,6 +10706,29 @@ Examples:
     serve_parser = subparsers.add_parser(
         "serve",
         help="Start OpenAI-compatible server",
+        description=(
+            "Start a local OpenAI-compatible inference server.\n"
+            "\n"
+            "  rapid-mlx serve qwen3.5-4b-4bit\n"
+            "    <model>    pick yours: a short alias (rapid-mlx models) or HF repo\n"
+            "    --port     bind port (default 8000)\n"
+            "    --host     bind host (default 127.0.0.1, loopback-only)\n"
+            "    --api-key  require a bearer token on every request\n"
+            "\n"
+            "Once warmed up the server prints its 'Ready:' URL; the "
+            "OpenAI-compatible\n"
+            "endpoints (/v1/models, /v1/chat/completions, /v1/audio/*, ...) "
+            "serve from\n"
+            "that base URL. Most options below are advanced tuning; the "
+            "common journey\n"
+            "needs only a model (--port/--host default to local use)."
+        ),
+        epilog=(
+            "First-time tips:\n"
+            "  rapid-mlx models  lists what you can serve;\n"
+            "  rapid-mlx recipe  recommends the best model for this Mac."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         allow_abbrev=False,
     )
     serve_parser.add_argument(
@@ -10307,6 +10747,17 @@ Examples:
             "Skip the pre-flight disk-space check that aborts when the model "
             "is larger than free disk. Use only if you know the HF cache lives "
             "on a different filesystem (e.g. external drive via HF_HOME)."
+        ),
+    )
+    serve_parser.add_argument(
+        "--image-weight-precision",
+        choices=("q4", "bf16"),
+        default=None,
+        help=(
+            "Explicit FLUX.2 Klein weight precision. q4 keeps the compact "
+            "default checkpoint; bf16 selects the full-precision checkpoint "
+            "measured faster on an M2 Pro large-matrix image workload. "
+            "Currently limited to FLUX.2 Klein; no automatic hardware switch."
         ),
     )
     # Disk-streaming MoE weight loading (PRD-rapid-mlx-integration.md).
@@ -10586,8 +11037,10 @@ Examples:
             "KV cache 2x/4x for memory-constrained hosts, but the live-cache "
             "dequant-on-read costs O(context) per decode step — measured "
             "-27%% (int4) / -36%% (int8) at 16k context (#1853). "
-            "Sliding-window (Gemma 3, GPT-OSS) and MLA (DeepSeek V3+, "
-            "Kimi K2.5) models auto-downgrade to bf16. Use --reasoning "
+            "An explicit int8/int4 on a sliding-window (Gemma 3/4, "
+            "GPT-OSS) or MLA (DeepSeek V3+, Kimi K2.5) model is rejected "
+            "before the server reports ready; only auto/profile-selected "
+            "quantization downgrades to bf16. Use --reasoning "
             "for AIME / hard math."
         ),
     )
@@ -10930,7 +11383,12 @@ Examples:
     serve_parser.add_argument(
         "--use-paged-cache",
         action="store_true",
-        help="Use paged KV cache for memory efficiency (experimental)",
+        help=(
+            "Use paged KV cache for memory efficiency (experimental). "
+            "Requires a model whose prompt cache is plain full-attention "
+            "KV on every layer; startup fails with an actionable error "
+            "for rotating/hybrid/recurrent/quantized cache layouts."
+        ),
     )
     serve_parser.add_argument(
         "--paged-cache-block-size",
@@ -11416,6 +11874,7 @@ Examples:
     bench_parser.add_argument(
         "model", type=str, help="Model to benchmark"
     ).completer = alias_completer
+
     bench_parser.add_argument(
         "--force-disk-check",
         action="store_true",
@@ -11542,7 +12001,12 @@ Examples:
     bench_parser.add_argument(
         "--use-paged-cache",
         action="store_true",
-        help="Use paged KV cache for memory efficiency (experimental)",
+        help=(
+            "Use paged KV cache for memory efficiency (experimental). "
+            "Requires a model whose prompt cache is plain full-attention "
+            "KV on every layer; startup fails with an actionable error "
+            "for rotating/hybrid/recurrent/quantized cache layouts."
+        ),
     )
     bench_parser.add_argument(
         "--paged-cache-block-size",
@@ -11662,6 +12126,80 @@ Examples:
     )
     _add_pflash_args(bench_parser)
 
+    # Local-first, model-first Community Benchmark workspace. Keep the legacy
+    # freeform `bench` command intact while this replacement matures. Register
+    # this only after every `bench_parser` argument so AST-based docs contract
+    # checks continue to attribute the legacy defaults to `bench`.
+    community_parser = subparsers.add_parser(
+        "benchmark", help="Run or inspect reproducible local benchmarks"
+    )
+    community_subparsers = community_parser.add_subparsers(
+        dest="benchmark_action", required=True
+    )
+    community_catalog = community_subparsers.add_parser(
+        "catalog", help="List models with a registered benchmark protocol"
+    )
+    community_catalog.add_argument("--memory-gib", type=positive_int, default=None)
+    community_catalog.add_argument("--json", action="store_true")
+    community_plan = community_subparsers.add_parser(
+        "plan", help="Preview the exact local workload for a model"
+    )
+    community_plan.add_argument("benchmark_model")
+    community_plan.add_argument("--json", action="store_true")
+    community_run = community_subparsers.add_parser(
+        "run", help="Run the registered protocol and save the result locally"
+    )
+    community_run.add_argument("benchmark_model")
+    community_run.add_argument("--json", action="store_true")
+    community_run.add_argument(
+        "--inherit-process-group",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    community_results = community_subparsers.add_parser(
+        "results", help="List locally saved benchmark results"
+    )
+    community_results.add_argument(
+        "--limit", type=positive_int, default=None, help="Return only the latest N runs"
+    )
+    community_results.add_argument("--json", action="store_true")
+    community_inspect = community_subparsers.add_parser(
+        "inspect", help="Print one locally saved benchmark result"
+    )
+    community_inspect.add_argument("run_id")
+    community_inspect.add_argument("--json", action="store_true")
+    community_share = community_subparsers.add_parser(
+        "share", help="Explicitly upload one locally saved benchmark result"
+    )
+    community_share.add_argument("run_id")
+    community_share.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm upload (for callers that already presented a consent dialog)",
+    )
+    community_share.add_argument(
+        "--preview",
+        action="store_true",
+        help="Print the exact upload payload without writing or sending it",
+    )
+    community_share.add_argument(
+        "--install-id",
+        help=argparse.SUPPRESS,
+    )
+    community_share.add_argument(
+        "--payload-digest",
+        help=argparse.SUPPRESS,
+    )
+    community_share.add_argument(
+        "--body-digest",
+        help=argparse.SUPPRESS,
+    )
+    community_share.add_argument(
+        "--target",
+        help=argparse.SUPPRESS,
+    )
+    community_share.add_argument("--json", action="store_true")
+
     # Models command. ``ls`` is registered as a top-level alias that
     # defaults to ``models --cached`` (the locally-cached view) — two
     # muscle-memory entry points, one underlying impl.
@@ -11680,6 +12218,25 @@ Examples:
         help="Emit the model list as machine-readable JSON instead of the "
         "human table (stable keys; pairs with --cached). Prefer this over "
         "scraping the text columns.",
+    )
+    models_parser.add_argument(
+        "--search",
+        metavar="TERM",
+        default=None,
+        help="Case-insensitive substring match against the alias name. "
+        "Narrows the 200+-line catalog to rows containing TERM "
+        "(e.g. --search qwen picks only qwen aliases). Applies to the "
+        "human available-models table; cannot be combined with --json or "
+        "--cached.",
+    )
+    models_parser.add_argument(
+        "--modality",
+        choices=("text", "video-gen", "image-gen", "audio"),
+        default=None,
+        help="Show only models of this modality (text, audio, video-gen, "
+        "image-gen). Omit the flag to show the full catalog: the text chat "
+        "table plus every tagged section. Applies to the human "
+        "available-models table; cannot be combined with --json or --cached.",
     )
     recipe_parser = subparsers.add_parser(
         "recipe", help="Recommend the smart and fast models for this Mac"
@@ -11980,6 +12537,13 @@ Examples:
         help="Agent version for version-specific config (e.g. 0.8.5)",
     )
 
+    # Start command — one-command agent startup (#150). Deferred-import so
+    # ``vllm_mlx.run`` (and its heavy deps: recommendations, agents, etc.)
+    # are only loaded when the verb is actually used.
+    from vllm_mlx.run.cli import register as _register_start
+
+    _register_start(subparsers)
+
     # Connect command — the single place to learn "the server is up, now
     # point a tool at it." Renders from the same SSOT as the serve banner
     # (:mod:`vllm_mlx.connect`) so ``ready``/``openai``/``anthropic`` and the
@@ -12121,6 +12685,15 @@ Examples:
     from vllm_mlx.launch.cli import register as _register_launch
 
     _register_launch(subparsers)
+
+    # Service subcommand — supported headless macOS service lifecycle
+    # (system LaunchDaemon). GH issue #2859. Lives in headless_service to
+    # stay distinct from vllm_mlx.service (the engine's helper/post-process
+    # layer). Registered after launch so the help ordering keeps the common
+    # interactive verbs first.
+    from vllm_mlx.headless_service.cli import register as _register_service
+
+    _register_service(subparsers)
 
     return parser
 
@@ -12454,15 +13027,36 @@ def main():
         # and falls through to the same gate a bare ``rapid-mlx chat`` always
         # used, so scripted callers are unchanged (no new exit-1 path).
 
+    # An explicit image precision selects a concrete curated alias BEFORE the
+    # ordinary alias/download gates run. That ordering makes the 15.98 GB bf16
+    # download visible to the existing confirmation and disk-space checks; a
+    # late engine-only switch would silently gate the 4.6 GB q4 source and then
+    # download a much larger checkpoint on first generation.
+    _image_weight_precision = getattr(args, "image_weight_precision", None)
+    if _image_weight_precision is not None:
+        from vllm_mlx.image.precision import resolve_image_weight_precision
+
+        try:
+            args.model = resolve_image_weight_precision(
+                getattr(args, "model", ""), _image_weight_precision
+            )
+        except ValueError as exc:
+            print(f"\n  Error: {exc}", file=sys.stderr)
+            raise SystemExit(2) from None
+
     # Resolve model aliases before dispatch.
     #
     # The doctor subcommand is exempt for historical reasons (and as a
     # belt-and-suspenders guard now that doctor doesn't take ``--model``):
     # an env-health probe should never trigger an alias→path lookup.
+    # ``service`` is exempt for the same class of reason: it embeds the
+    # model string verbatim into the plist and runs its own (dry-run safe,
+    # unit-testable) validation — it must not hard-fail here on an unknown
+    # alias nor swallow the user's spelling under a resolved HF path.
     if (
         hasattr(args, "model")
         and args.model
-        and getattr(args, "command", None) != "doctor"
+        and getattr(args, "command", None) not in ("doctor", "service")
     ):
         from vllm_mlx.model_aliases import RetiredModelAliasError, resolve_model
         from vllm_mlx.user_aliases import UserAliasError
@@ -12655,6 +13249,12 @@ def main():
         serve_command(args)
     elif args.command == "bench":
         bench_command(args)
+    elif args.command == "benchmark":
+        from vllm_mlx.community_bench.cli import (
+            benchmark_command as community_benchmark_command,
+        )
+
+        raise SystemExit(community_benchmark_command(args))
     elif args.command == "models":
         models_command(args)
     elif args.command == "recipe":
@@ -12706,6 +13306,12 @@ def main():
         info_command(args)
     elif args.command == "agents":
         agents_command(args)
+    elif args.command == "start":
+        from vllm_mlx.run.cli import start_command
+
+        code = start_command(args)
+        if code:
+            raise SystemExit(code)
     elif args.command == "connect":
         connect_command(args)
     elif args.command == "doctor":
@@ -12722,6 +13328,10 @@ def main():
         from vllm_mlx.launch.cli import launch_command
 
         launch_command(args)
+    elif args.command == "service":  # pragma: no cover - dispatch boundary
+        from vllm_mlx.headless_service.cli import service_command
+
+        service_command(args)
     elif (
         getattr(args, "command", None) is None
         and sys.stdout.isatty()

@@ -125,6 +125,9 @@ ALLOWED_RAPID_MLX_ENV_VARS: frozenset[str] = frozenset(
         "RAPID_MLX_RUNTIME_PYTHON",
         "RAPID_MLX_DISABLE_VERSION_CHECK",  # opt-out of version check
         "RAPID_MLX_PROFILE_VERBOSE",  # debug verbosity for profile logs
+        # Local-only archive location for reproducible benchmark records. It
+        # changes storage placement, never model/task/parser selection.
+        "RAPID_MLX_BENCHMARK_HOME",
         # Security policy knobs, none of which selects a model, parser, tier,
         # or engine route. TRUST_REMOTE_CODE only constrains whether an
         # already-selected checkpoint may import repository Python;
@@ -154,6 +157,16 @@ ALLOWED_RAPID_MLX_ENV_VARS: frozenset[str] = frozenset(
         # fires, which tier engages — none of that changes. Read by
         # ``moe_fusion.fuse_gate_up()`` only.
         "RAPID_MLX_MOE_GATE_UP_FUSION",
+        # Opt-in direct QSA block-sparse attention on an already-selected
+        # Qwen4-Exp model. This changes only the prefill kernel after a measured
+        # context crossover; model, parser, tier, and engine routing are
+        # unchanged. Unsupported layouts and the default path remain dense.
+        "RAPID_MLX_QSA_BLOCK_SPARSE",
+        # Opt-in indexed split-K kernel for the compact QSA selection of an
+        # already-selected Qwen4-Exp model. The model/parser/lane are unchanged;
+        # unqualified query shapes, MLX builds, and Metal architectures remain
+        # on the existing dense attention implementation.
+        "RAPID_MLX_QSA_INDEXED_SPLITK",
         # Opt-out of the blocked-seq GDN prefill Metal kernel
         # (vllm_mlx/gdn_prefill.py). Same shape as DISABLE_FUSED_SAMPLER —
         # a kernel-selection perf toggle computing the exact same

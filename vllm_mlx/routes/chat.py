@@ -5,18 +5,19 @@ import asyncio
 import gc
 import json
 import logging
+import math
 import os
 import re
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncGenerator, AsyncIterator
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
-from ..api.errors import CHAT_RESPONSE_FORMAT_PARAM
+from ..api.errors import CHAT_RESPONSE_FORMAT_PARAM, GuidedGenerationCancelledError
 from ..api.models import (
     AssistantMessage,
     ChatCompletionChoice,
@@ -86,6 +87,7 @@ from ..service.helpers import (
     _build_prompt_with_thinking_compat,
     _build_usage,
     _check_admission_or_503,
+    _consume_guided_lifecycle_cancel,
     _disconnect_guard,
     _effective_enable_thinking,
     _extract_streaming_token_logprobs,
@@ -119,6 +121,7 @@ from ..service.helpers import (
     maybe_auto_disable_thinking_for_casual_chat,
     maybe_auto_disable_thinking_for_tools,
     repair_messages_fit_context,
+    served_chat_template,
 )
 
 logger = logging.getLogger(__name__)
@@ -2850,12 +2853,28 @@ def _repair_forced_call_arguments(tool_calls, raw_text, target, tools):
     # NEXT TO valid ones the recovery would lift a VALID call's
     # arguments into the broken one (codex r3). Ambiguous cases repair
     # to "{}".
-    recovered = (
+    retrieved = (
         _recover_partial_tool_args(raw_text, expected_name=target)
         if len(broken) == 1 and len(tool_calls or []) == 1
         else None
     )
-    repaired = recovered if recovered is not None else "{}"
+    # #2502: when no object is recoverable from the raw text, the broken call's
+    # ORIGINAL ``arguments`` may itself be a bare scalar the model intended as
+    # the single required argument of the target's object schema (e.g. hermes
+    # emits ``"arguments": "San Francisco"`` for a ``{"city"}: required`` tool).
+    # The scalar-schema salvage maps it onto the required property so a concrete
+    # forced named call yields a valid object instead of collapsing to ``"{}"``
+    # and 422ing. Only unambiguous single-broken-call turns participate.
+    scalar_salvaged = None
+    if retrieved is None and len(broken) == 1:
+        scalar_salvaged = _salvage_forced_scalar_arguments(
+            target, broken[0].function.arguments, tools
+        )
+    repaired = (
+        retrieved
+        if retrieved is not None
+        else (scalar_salvaged if scalar_salvaged is not None else "{}")
+    )
     for tc in broken:
         # Log shape only — tool arguments can carry user data / secrets
         # and must not persist in production logs (codex r2).
@@ -2868,7 +2887,9 @@ def _repair_forced_call_arguments(tool_calls, raw_text, target, tools):
             len(tc.function.arguments)
             if isinstance(tc.function.arguments, str)
             else "-",
-            "recovered object" if recovered is not None else '"{}"',
+            "recovered object"
+            if retrieved is not None
+            else ("salvaged scalar" if scalar_salvaged is not None else '"{}"'),
         )
         tc.function.arguments = repaired
         err = _forced_synth_schema_error(target, repaired, tools)
@@ -2878,7 +2899,11 @@ def _repair_forced_call_arguments(tool_calls, raw_text, target, tools):
 
 
 def _synthesize_forced_tool_call(
-    name: str, arguments: str = "{}", *, raw_text: str | None = None
+    name: str,
+    arguments: str = "{}",
+    *,
+    raw_text: str | None = None,
+    tools=None,
 ):
     """Build a single ``ToolCall`` for a forced ``tool_choice`` whose
     text parser surfaced no calls (#571).
@@ -2922,13 +2947,167 @@ def _synthesize_forced_tool_call(
     # ``"arguments"`` candidates paired with a DIFFERENT tool's
     # ``"name"`` literal (codex r4 BLOCKING #1).
     recovered = _recover_partial_tool_args(raw_text, expected_name=name)
-    final_args = recovered if recovered is not None else arguments
+    if recovered is not None:
+        final_args = recovered
+    else:
+        # #2502: the small-model habit of emitting a BARE value (``"arguments":
+        # "San Francisco"`` or ``"arguments": 7``) for a single-argument object
+        # tool. When the caller supplied such a scalar as ``arguments`` and the
+        # target tool's schema has a single required property the scalar maps
+        # onto, synth ``{prop: value}`` so the forced call is schema-valid
+        # instead of an empty object that 422s. ``tools`` makes the mapping
+        # possible; without it we keep the unchanged default. The result still
+        # runs the #1256 schema gate downstream. (Raw-text scalar recovery is
+        # deliberately NOT attempted here — the verified #2502 path is the
+        # parser-surfaced repair in ``_repair_forced_call_arguments``; guessing
+        # a scalar out of free-form text is how structural-parse edge cases leak
+        # in, so we stay conservative.)
+        if arguments != "{}":
+            _salvaged = _salvage_forced_scalar_arguments(name, arguments, tools)
+        else:
+            _salvaged = None
+        final_args = _salvaged if _salvaged is not None else arguments
 
     return ToolCall(
         id=f"call_{uuid.uuid4().hex[:8]}",
         type="function",
         function=FunctionCall(name=name, arguments=final_args),
     )
+
+
+def _salvage_forced_scalar_arguments(
+    name: str, arguments: str | None, tools
+) -> str | None:
+    """Return a schema-valid ``{prop: value}`` arguments string when a forced
+    tool choice produced a bare scalar, else ``None`` (#2502).
+
+    Small parsers (hermes / qwen3_coder / …) pushed to call a function with an
+    OBJECT parameter schema whose single argument is required often emit just
+    the VALUE — ``"arguments": "San Francisco"`` or a bare ``7`` — instead of
+    the full ``{"city": "San Francisco"}`` wrapper. The generic forced-call
+    repair has no schema to map that scalar onto, so it collapses to ``"{}"``
+    and the #1256 schema gate then 422s on the missing required property.
+
+    This is the schema-aware bridge: when the target tool is an OBJECT-schema
+    tool with EXACTLY ONE required property and the recovered ``arguments`` is a
+    bare scalar whose type matches that property's declared type, synthesise
+    ``{<prop>: <value>}`` so a forced named call reliably yields schema-valid
+    arguments instead of a wording-retry 422.
+
+    Gated tightly (never guess):
+      * only an object-schema tool whose ``required`` is a single property;
+      * only a bare scalar (string / number / boolean) — an object, array, or
+        explicit JSON ``null`` never salvages (those take the normal validation
+        path, including failing closed);
+      * only when the scalar's type matches the required property's ``type``;
+      * any ambiguity — multiple required props, no required props, a missing/
+        unmatched property type, a ``$ref``-only schema we can't resolve — stays
+        ``None`` so the caller's existing fail-closed 422 is preserved (#1256).
+
+    Returns the reparsed JSON object as a string, or ``None`` when not
+    applicable. The returned value still runs the full draft-aware
+    ``jsonschema`` validation downstream — salvage never short-circuits the
+    safety gate, it only upgrades a would-be ``{}`` into the object the model
+    actually intended.
+    """
+    if not arguments:
+        return None
+    # Resolve the target tool's parameter schema (mirrors
+    # ``_forced_synth_schema_error``'s lookup).
+    schema = None
+    for tool in tools or []:
+        fn = getattr(tool, "function", None)
+        if not isinstance(fn, dict) and isinstance(tool, dict):
+            fn = tool.get("function")
+        if not isinstance(fn, dict) or fn.get("name") != name:
+            continue
+        schema = fn.get("parameters")
+        break
+    if not isinstance(schema, dict) or schema.get("type") != "object":
+        return None
+    required = schema.get("required")
+    if (
+        not isinstance(required, list)
+        or len(required) != 1
+        or not isinstance(required[0], str)
+    ):
+        return None  # multi/zero required or a non-string entry → never guess
+    prop = required[0]
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        return None  # malformed ``"properties"`` (e.g. a list) → fail closed
+    prop_schema = props.get(prop)
+    if not isinstance(prop_schema, dict):
+        return None
+    ptype = prop_schema.get("type")
+    if ptype not in ("string", "integer", "number", "boolean"):
+        return None  # untyped / exotic → don't guess
+
+    # Decode the scalar. A bare non-JSON string (e.g. ``San Francisco``) is a
+    # legitimately intended string value; a valid JSON scalar decodes to its
+    # typed value. Objects, arrays, and an explicit JSON ``null`` never salvage
+    # (``null`` is a real decoded value, not a parse failure — codex r3).
+    try:
+        decoded = json.loads(arguments)
+        parsed = True
+    except (ValueError, TypeError):
+        decoded = None
+        parsed = False
+    if not parsed:
+        # Bare unquoted text that wouldn't parse as JSON — only meaningful as a
+        # string scalar. An empty string offers nothing to salvage. Reject text
+        # that STARTS with structural characters — i.e. was clearly aiming at a
+        # JSON object/array — so we never mis-map a fragment of an intended
+        # structure onto a string property. A legitimate scalar like
+        # ``https://example.com`` (contains ``:``) is NOT structural-led and is
+        # accepted (codex); ``{"unbalanced": ...`` / ``["bad`` are rejected.
+        if not isinstance(arguments, str) or not arguments.strip():
+            return None
+        # Inspect the first NON-WHITESPACE char so a whitespace-prefixed broken
+        # object/array fragment (`  {"unbalanced": ...`) still fails closed.
+        if arguments.lstrip()[0] in '{}["':
+            return None
+        value: str | int | float | bool = arguments
+    elif isinstance(decoded, (str, int, float, bool)):
+        value = decoded
+    else:
+        # A JSON object / array / explicit ``null`` never salvages.
+        return None
+
+    # Reject non-finite numbers (``NaN`` / ``Infinity`` are not strict JSON —
+    # ``json.loads`` accepts them, ``json.loads(json.dumps(x))`` breaks). Never
+    # ship a value a strict JSON client cannot round-trip (codex BLOCKING #3).
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+
+    # Type-match gate: the scalar must fit the single required property's type.
+    if ptype == "string":
+        if isinstance(value, (str,)) and not isinstance(value, bool):
+            return json.dumps({prop: value})
+        return None
+    if ptype == "integer":
+        if isinstance(value, bool):
+            return None  # never coerce bool → number
+        # JSON Schema defines a number with a zero fractional part (``72.0``,
+        # ``1e3``) as a valid integer, and the downstream draft-aware jsonschema
+        # validator accepts it (verified empirically). Accept genuine ints and
+        # INTEGRAL floats; serialize a float VERBATIM (never ``int()``-coerce —
+        # that could silently corrupt a large value already rounded by
+        # json.loads), so the downstream validator sees the exact parsed number.
+        if isinstance(value, int) or (isinstance(value, float) and value.is_integer()):
+            return json.dumps({prop: value})
+        return None  # a non-integral float cannot satisfy an integer property
+    if ptype == "number":
+        if isinstance(value, bool):
+            return None  # never coerce bool → number
+        if isinstance(value, (int, float)):
+            return json.dumps({prop: value})
+        return None
+    if ptype == "boolean":
+        if isinstance(value, bool):
+            return json.dumps({prop: value})
+        return None
+    return None  # pragma: no cover - ptype was exhaustively restricted above
 
 
 def _forced_synth_schema_error(name: str, arguments: str | None, tools) -> str | None:
@@ -2975,8 +3154,21 @@ def _forced_synth_schema_error(name: str, arguments: str | None, tools) -> str |
     else:
         try:
             instance = json.loads(arguments)
+            _parsed = True
         except (ValueError, TypeError):
             instance = {}
+            _parsed = False
+        # #2502: a bare-scalar ``arguments`` value (the small-model habit of
+        # emitting ``"arguments": "San Francisco"`` or ``7`` for a single-arg
+        # object tool) is not a dict. Salvage it onto the tool's single required
+        # property BEFORE validating, so a concrete forced named call yields
+        # schema-valid args instead of a false 422. Non-dict scalars that do not
+        # map a single required property stay as-is and fail closed below; an
+        # explicit JSON ``null`` is a real value and is never coerced.
+        if not _parsed or not isinstance(instance, dict):
+            _saved = _salvage_forced_scalar_arguments(name, arguments, tools)
+            if _saved is not None:
+                instance = json.loads(_saved)
 
     # Validate the synthesised arguments against the tool's parameter schema
     # with a DRAFT-AWARE ``jsonschema`` validator — the single source of truth,
@@ -4196,13 +4388,17 @@ async def _create_chat_completion_impl(
     # ``reasoning_effort="none"`` request registers its enable_thinking
     # preference first (the tool auto-disable then no-ops on it) and a
     # graded value lands its ``reasoning_max_tokens`` cap from one source.
-    if maybe_apply_reasoning_effort(request):
+    if maybe_apply_reasoning_effort(
+        request, chat_template=served_chat_template(engine)
+    ):
         logger.info(
-            "#448 reasoning_effort=%s translated on /v1/chat/completions "
-            "(none→enable_thinking=False; minimal/low/medium/high→"
-            "reasoning_max_tokens tier). Explicit client enable_thinking / "
-            "reasoning_max_tokens always wins.",
+            "#448/#3043 reasoning_effort=%s translated on /v1/chat/completions "
+            "(template reasoning_effort=%s, reasoning_max_tokens=%s). "
+            "Explicit client enable_thinking / chat_template_kwargs."
+            "reasoning_effort / reasoning_max_tokens always wins.",
             request.reasoning_effort,
+            (request.chat_template_kwargs or {}).get("reasoning_effort"),
+            request.reasoning_max_tokens,
         )
 
     # R12-T1F (0.8.16 operator dogfood) — auto-disable thinking when
@@ -5268,6 +5464,15 @@ async def _create_chat_completion_impl(
                     raw_request,
                     timeout=timeout,
                 )
+            except GuidedGenerationCancelledError as exc:
+                # Engine-owned cancellation is lifecycle control, never a
+                # guided failure eligible for unconstrained fallback.
+                if _consume_guided_lifecycle_cancel(engine, exc):
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Request cancelled by model replacement",
+                    ) from exc
+                raise asyncio.CancelledError() from exc
             except HTTPException:
                 raise
             except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
@@ -5752,6 +5957,7 @@ async def _create_chat_completion_impl(
                         _synthesize_forced_tool_call(
                             _solo_name,
                             raw_text=output.raw_text or output.text,
+                            tools=request.tools,
                         )
                     ]
                     # #1256: never report a successful forced call whose
@@ -5829,6 +6035,7 @@ async def _create_chat_completion_impl(
                         _synthesize_forced_tool_call(
                             _target,
                             raw_text=output.raw_text or output.text,
+                            tools=request.tools,
                         )
                     ]
                     # #1256: refuse a synthesised pinned call whose arguments
@@ -7024,7 +7231,9 @@ async def stream_chat_completion(
                     _synth_target = None
             if _synth_target:
                 _synth_call = _synthesize_forced_tool_call(
-                    _synth_target, raw_text=_raw_text
+                    _synth_target,
+                    raw_text=_raw_text,
+                    tools=request.tools,
                 )
                 # #1256: on the streaming surface headers are already on the
                 # wire so we cannot 422 mid-flight. If the synthesised call's
@@ -7766,6 +7975,56 @@ async def stream_chat_completion_guided(
         )
         _sse_suffix = "}}]}\n\n"
 
+        def _cancelled_terminal_events() -> tuple[str, str]:
+            chunk = ChatCompletionChunk(
+                id=response_id,
+                created=_sse_created,
+                model=_resolve_model_name(request.model),
+                choices=[
+                    ChatCompletionChunkChoice(
+                        delta=ChatCompletionChunkDelta(),
+                        finish_reason="cancelled",
+                    )
+                ],
+            )
+            return (
+                f"data: {chunk.model_dump_json(exclude_none=True)}\n\n",
+                "data: [DONE]\n\n",
+            )
+
+        def _model_replacement_terminal_events() -> tuple[str, str]:
+            error_data = json.dumps(
+                {
+                    "error": {
+                        "message": "Request cancelled by model replacement",
+                        "type": "server_error",
+                        "code": "model_replacement",
+                    }
+                }
+            )
+            return f"data: {error_data}\n\n", "data: [DONE]\n\n"
+
+        def _finish_guided_handoff() -> tuple[bool, object | None]:
+            finish = getattr(engine, "finish_guided_handoff", None)
+            if not callable(finish):
+                return False, None
+            outcome = finish(response_id)
+            # Compatibility for lightweight engines implementing the earlier
+            # bool-returning internal hook.
+            if isinstance(outcome, bool):
+                return outcome, None
+            return bool(getattr(outcome, "cancelled", False)), getattr(
+                outcome, "lifecycle_task", None
+            )
+
+        def _handoff_cancel_terminal_events(
+            lifecycle_task: object | None,
+        ) -> tuple[str, str]:
+            exc = GuidedGenerationCancelledError(lifecycle_task=lifecycle_task)
+            if _consume_guided_lifecycle_cancel(engine, exc):
+                return _model_replacement_terminal_events()
+            return _cancelled_terminal_events()
+
         # Run guided generation buffered. If it raises, fall through to
         # the unconstrained streaming helper — this preserves request
         # liveness (constraints best-effort, response always emitted)
@@ -7780,9 +8039,10 @@ async def stream_chat_completion_guided(
         # ``self.chat(...)`` on guided-engine failure and returns a
         # buffered unconstrained ``GenerationOutput``. From this
         # helper's POV that looks like a successful guided result and
-        # we would emit one giant content chunk at the end —
-        # defeating SSE for clients/proxies that rely on early chunks
-        # (codex Round 2 finding).
+        # we would emit one giant content chunk at the end. The admission
+        # frame below deliberately carries no role or content; after it, a
+        # successful guided result remains buffered and strict failures still
+        # occur before any assistant content (codex Round 2 finding).
         # Codex r5 BLOCKING parity: prevent a kwargs collision with
         # the explicit ``raise_on_failure=True`` below. If ``kwargs``
         # ever contained ``raise_on_failure`` it would TypeError
@@ -7792,14 +8052,53 @@ async def stream_chat_completion_guided(
         # guided-generation failure (silent fallback to unconstrained
         # streaming, which IS the case strict callers cannot
         # tolerate). Sanitize so the strict caller OWNS the value.
-        _guided_kwargs = {k: v for k, v in kwargs.items() if k != "raise_on_failure"}
-        try:
-            output = await engine.generate_with_schema(
+        _guided_kwargs = {
+            k: v
+            for k, v in kwargs.items()
+            if k not in {"raise_on_failure", "request_id", "request_admitted_event"}
+        }
+        _guided_kwargs["retain_guided_request_on_failure"] = True
+        request_admitted_event = asyncio.Event()
+        guided_task = asyncio.create_task(
+            engine.generate_with_schema(
                 messages=messages,
                 json_schema=json_schema,
                 raise_on_failure=True,
+                request_id=response_id,
+                request_admitted_event=request_admitted_event,
                 **_guided_kwargs,
             )
+        )
+        admission_task = asyncio.create_task(request_admitted_event.wait())
+        try:
+            done, _pending = await asyncio.wait(
+                {guided_task, admission_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            # Production engines set the event immediately after registering
+            # the public id. Compatibility stubs may finish without an event;
+            # task completion is itself proof that no unaddressable live work
+            # remains, so publishing the stable id is still safe.
+            if guided_task in done and not admission_task.done():
+                admission_task.cancel()
+
+            # Publish the high-entropy identity before waiting for prefill or
+            # constrained decode. Clients can now pass this exact id to the
+            # existing /v1/requests/{id}/cancel endpoint.
+            # Admission frame: publish only the stable id with an empty delta.
+            # The role frame remains buffered until guided output has passed
+            # strict validation, preserving the existing error-before-content
+            # contract if decoding or post-validation later fails.
+            yield f"{_sse_prefix}{_sse_suffix}"
+            output = await guided_task
+        except GuidedGenerationCancelledError as exc:
+            if _consume_guided_lifecycle_cancel(engine, exc):
+                for event in _model_replacement_terminal_events():
+                    yield event
+                return
+            for event in _cancelled_terminal_events():
+                yield event
+            return
         except Exception as guided_err:
             # Log only the schema's top-level shape, not the full body —
             # user-supplied schemas may embed PII (default values),
@@ -7826,6 +8125,11 @@ async def stream_chat_completion_guided(
             # (mirror of the post-decode shape) + DONE, and DO NOT
             # enter the unconstrained fallback.
             if strict_mode:
+                was_cancelled, lifecycle_task = _finish_guided_handoff()
+                if was_cancelled:
+                    for event in _handoff_cancel_terminal_events(lifecycle_task):
+                        yield event
+                    return
                 incr_strict_violation()
                 logger.warning(
                     "Strict json_schema streaming guided generation "
@@ -7864,18 +8168,46 @@ async def stream_chat_completion_guided(
             # tracks the completion id across the guided→unconstrained
             # handoff sees two different ids/timestamps for what is
             # logically one request (DeepSeek pr_validate round 5).
-            async for chunk in stream_chat_completion(
-                engine,
-                messages,
-                request,
-                response_id=response_id,
-                created=_sse_created,
-                request_id=response_id,
-                caller_agent=caller_agent,
-                **kwargs,
-            ):
-                yield chunk
+            fallback_stream = cast(
+                AsyncGenerator[str, None],
+                stream_chat_completion(
+                    engine,
+                    messages,
+                    request,
+                    response_id=response_id,
+                    created=_sse_created,
+                    request_id=response_id,
+                    caller_agent=caller_agent,
+                    **kwargs,
+                ),
+            )
+            handoff_finished = False
+            try:
+                async for chunk in fallback_stream:
+                    if not handoff_finished:
+                        # The fallback helper publishes its first chunk only
+                        # after scheduler admission. Transfer ownership under
+                        # the guided-registry lock before exposing that chunk.
+                        was_cancelled, lifecycle_task = _finish_guided_handoff()
+                        handoff_finished = True
+                        if was_cancelled:
+                            await engine.abort_request(response_id)
+                            for event in _handoff_cancel_terminal_events(
+                                lifecycle_task
+                            ):
+                                yield event
+                            return
+                    yield chunk
+            finally:
+                if not handoff_finished:
+                    _finish_guided_handoff()
+                await fallback_stream.aclose()
             return
+        finally:
+            if not admission_task.done():
+                admission_task.cancel()
+            if not guided_task.done():
+                guided_task.cancel()
 
         content = output.text or ""
 

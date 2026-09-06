@@ -51,6 +51,7 @@ def _reset_video_job_lifecycle():
 
 def test_wan_aliases_route_to_video_lane() -> None:
     expected = {
+        "wan2.1-t2v-1.3b-bf16": "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
         "wan2.2-ti2v-5b-q8": "Anes1032/Wan2.2-TI2V-5B-mlx-q8",
         "wan2.2-ti2v-5b-bf16": "rickylin20260522/Wan2.2-TI2V-5B-mlx",
         "wan2.2-i2v-a14b-q8": "Anes1032/Wan2.2-I2V-A14B-mlx-q8",
@@ -276,7 +277,7 @@ async def test_wan_job_uses_native_fps_and_async_video_contract(
 
     engine = FakeWanEngine()
     engine._wan_engine = engine
-    monkeypatch.setattr(video, "_video_engine", lambda: engine)
+    monkeypatch.setattr(video, "_video_engine", lambda model="": engine)
     created = await video.create_video(
         prompt="ocean sunrise",
         model="wan2.2-ti2v-5b-q8",
@@ -305,6 +306,55 @@ async def test_wan_job_uses_native_fps_and_async_video_contract(
 
 
 @pytest.mark.asyncio
+async def test_wan_route_accepts_registered_community_benchmark_size(
+    monkeypatch,
+) -> None:
+    captured: dict = {}
+
+    class FakeWanEngine:
+        model_name = "Anes1032/Wan2.2-TI2V-5B-mlx-q8"
+        video_family = "wan"
+        native_fps = 24
+        _wan_engine = None
+
+        def validate_request(self, **kwargs):
+            captured["validated"] = kwargs
+
+        def generate(self, *, output_path: Path, **kwargs):
+            captured.update(kwargs)
+            output_path.write_bytes(b"mp4")
+
+    engine = FakeWanEngine()
+    engine._wan_engine = engine
+    monkeypatch.setattr(video, "_video_engine", lambda model="": engine)
+
+    created = await video.create_video(
+        prompt="ocean sunrise",
+        model="wan2.2-ti2v-5b-q8",
+        seconds="ignored",
+        size="832x480",
+        seed=9,
+        frames=81,
+        fps=24,
+        guidance_scale=5.0,
+        input_reference=None,
+    )
+    for _ in range(100):
+        current = await video.retrieve_video(created["id"])
+        if current["status"] == "completed":
+            break
+        await asyncio.sleep(0.01)
+
+    assert current["status"] == "completed"
+    assert current["size"] == "832x480"
+    assert captured["width"] == 832
+    assert captured["height"] == 512
+    assert captured["output_width"] == 832
+    assert captured["output_height"] == 480
+    await video.delete_video(created["id"])
+
+
+@pytest.mark.asyncio
 async def test_wan_route_rejects_non_native_fps(monkeypatch) -> None:
     class FakeWanEngine:
         model_name = "Anes1032/Wan2.2-TI2V-5B-mlx-q8"
@@ -314,7 +364,7 @@ async def test_wan_route_rejects_non_native_fps(monkeypatch) -> None:
 
     engine = FakeWanEngine()
     engine._wan_engine = engine
-    monkeypatch.setattr(video, "_video_engine", lambda: engine)
+    monkeypatch.setattr(video, "_video_engine", lambda model="": engine)
     with pytest.raises(HTTPException, match="output fps is fixed"):
         await video.create_video(
             prompt="test",
@@ -337,7 +387,7 @@ async def test_wan_route_rejects_invalid_explicit_frame_shape(monkeypatch) -> No
 
     engine = FakeWanEngine()
     engine._wan_engine = engine
-    monkeypatch.setattr(video, "_video_engine", lambda: engine)
+    monkeypatch.setattr(video, "_video_engine", lambda model="": engine)
     with pytest.raises(HTTPException, match=r"Wan frames must be 4n\+1"):
         await video.create_video(
             prompt="test",
@@ -364,7 +414,7 @@ async def test_wan_route_returns_model_validation_as_400(monkeypatch) -> None:
 
     engine = FakeWanEngine()
     engine._wan_engine = engine
-    monkeypatch.setattr(video, "_video_engine", lambda: engine)
+    monkeypatch.setattr(video, "_video_engine", lambda model="": engine)
     with pytest.raises(HTTPException) as error:
         await video.create_video(
             prompt="test",
@@ -386,7 +436,7 @@ async def test_wan_route_rejects_oversized_pixel_frame_workload(monkeypatch) -> 
         native_fps = 24
         _wan_engine = object()
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeWanEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model="": FakeWanEngine())
     with pytest.raises(HTTPException) as error:
         await video.create_video(
             prompt="test",

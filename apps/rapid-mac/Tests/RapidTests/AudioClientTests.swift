@@ -73,6 +73,27 @@ struct AudioClientTests {
         #expect(body?["speed"] as? Double == 1.1)
     }
 
+    @MainActor
+    @Test("A language used as voice is rejected before synthesis; speaker casing is canonicalized")
+    func invalidLocalNarrationVoice() async throws {
+        let client = makeClient()
+        AudioStubProtocol.response = (200, [:], Data(#"{"voices":["Vivian","Serena"]}"#.utf8))
+        let entry = ModelEntry(alias: "voice", hfRepo: "local/voice", sizeOnDisk: nil,
+            cached: true, kind: .audio, audioCapability: .speech)
+        do {
+            _ = try await YouziLocalModelTools.synthesizeLocally(text: "Hello", entry: entry,
+                voice: "Chinese", port: 8123, bearer: nil, client: client)
+            Issue.record("Invalid speaker should fail before generation")
+        } catch let error as YouziLocalModelTools.Failure {
+            #expect(error == .invalid_voice)
+        }
+        #expect(AudioStubProtocol.requests.map { $0.url?.path } == ["/v1/audio/voices"])
+        _ = try await YouziLocalModelTools.synthesizeLocally(text: "Hello", entry: entry,
+            voice: "vivian", port: 8123, bearer: nil, client: client)
+        let body = try JSONSerialization.jsonObject(with: #require(AudioStubProtocol.bodies.last)) as? [String: Any]
+        #expect(body?["voice"] as? String == "Vivian")
+    }
+
     @Test("Transcription uploads multipart audio with model and bearer")
     @MainActor
     func transcriptionRequest() async throws {

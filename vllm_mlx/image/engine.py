@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-"""mflux-backed image generation engine.
+"""MLX-native image generation engine.
 
-Thin wrapper over `mflux <https://github.com/filipstrand/mflux>`_ — an
-MLX-native, line-by-line port of the FLUX / Qwen-Image model families with
-built-in 4/8-bit quantization. Rapid-MLX owns request validation, the lazy
-load / process-lock lifecycle and the OpenAI-compatible transport; mflux owns
-the diffusion pipeline and weight loading.
+Unified adapter over mflux and the pinned native MLX runtimes used by image
+families outside mflux. Rapid-MLX owns request validation, the lazy-load /
+process-lock lifecycle, checkpoint boundaries, and the OpenAI-compatible
+transport; each family backend owns its diffusion pipeline and weight loading.
 
-Only Apache-2.0-licensed families are wired here so the whole surface stays
-commercially clean:
+Each wired family has an explicit runtime and model-license contract. Some
+checkpoints are permissive; others require the user to accept model-specific
+terms before commercial use:
 
 * ``flux2-klein``      — text→image + image edit (``FLUX.2-klein-4B``),
   4B/4-step, the fast default: ~3 s @ 512² / ~10 s @ 1024² on an M3 Ultra,
@@ -18,6 +18,14 @@ commercially clean:
 * ``flux-schnell``     — text→image (``black-forest-labs/FLUX.1-schnell``), 12B
 * ``qwen-image``       — text→image (``Qwen/Qwen-Image``), strongest text-in-image
 * ``qwen-image-edit``  — instruction edit (``Qwen/Qwen-Image-Edit-2509``)
+* ``hidream-o1-dev``   — text→image (``HiDream-O1-Image-Dev``), 28-step,
+  VAE-free unified pixel transformer (MIT)
+* ``sdxl-base``        — text→image (``Stable Diffusion XL Base 1.0``),
+  30-step, dual-CLIP + UNet + VAE pipeline (OpenRAIL++)
+* ``bonsai-image``     — text→image (ternary ``FLUX.2-klein-4B``), 4-step,
+  prepacked MLX 2-bit transformer with a 4-bit Qwen3 encoder (Apache-2.0)
+* ``sd35-large``       — text→image (``Stable Diffusion 3.5 Large``), 28-step,
+  triple-encoder MMDiT pipeline (Stability AI Community License)
 
 ``flux2-klein`` and ``z-image`` supersede the older/larger families for the
 interactive tab: Klein is ~3× faster than schnell/z-image at the same
@@ -32,11 +40,14 @@ from __future__ import annotations
 
 import gc
 import io
+import math
 import os
 import re
 import threading
 import time
 from pathlib import Path
+
+from .precision import is_packaged_bf16_model
 
 # A pre-quantized mflux repo carries a quant tag in its id — either the
 # ``<n>bit`` / ``<n>-bit`` convention (``FLUX.1-schnell-mflux-4bit``) or the
@@ -107,6 +118,19 @@ class _ProgressReporter:
 def _detect_family(model_name: str) -> str:
     """Map an alias hf_path (or local dir) to a supported mflux family."""
     name = (model_name or "").casefold()
+    if "bonsai-image" in name or "bonsai_image" in name:
+        return "bonsai-image"
+    if "hidream-o1" in name or "hidream_o1" in name:
+        return "hidream-o1-dev"
+    if (
+        "stable-diffusion-3.5" in name
+        or "stable_diffusion_3.5" in name
+        or "sd3.5" in name
+        or "sd35" in name
+    ):
+        return "sd35-large"
+    if "stable-diffusion-xl" in name or "sdxl" in name:
+        return "sdxl-base"
     # Klein first — its repos ("FLUX.2-klein-4B-mflux-4bit") also contain
     # "flux", so the distinctive "klein" / "flux2" token must win before the
     # generic FLUX.1 checks below.
@@ -124,14 +148,17 @@ def _detect_family(model_name: str) -> str:
         return "flux-dev"
     raise ImageRuntimeError(
         f"Unsupported image model '{model_name}'. Supported families: "
-        "flux2-klein, z-image, flux-schnell, qwen-image, qwen-image-edit."
+        "flux2-klein, z-image, flux-schnell, qwen-image, qwen-image-edit, "
+        "hidream-o1-dev, sdxl-base, bonsai-image, sd35-large."
     )
 
 
 # Families whose ``generate_image`` takes NO ``negative_prompt`` parameter.
 # FLUX.2 Klein omits it (Flux1 / Qwen-Image / Z-Image all accept it), and
 # passing an unknown kwarg raises — so the engine drops it for these.
-_NO_NEGATIVE_PROMPT_FAMILIES = frozenset({"flux2-klein"})
+_NO_NEGATIVE_PROMPT_FAMILIES = frozenset(
+    {"flux2-klein", "hidream-o1-dev", "bonsai-image"}
+)
 
 # Per-family default denoise steps when the request pins none. Distilled/turbo
 # models converge in a handful of steps; a non-distilled model needs many more.
@@ -142,7 +169,16 @@ _DEFAULT_STEPS_BY_FAMILY = {
     "flux-dev": 20,  # non-distilled
     "qwen-image": 20,  # non-distilled 20B
     "qwen-image-edit": 20,
+    "hidream-o1-dev": 28,
+    "sdxl-base": 30,
+    "bonsai-image": 4,
+    "sd35-large": 28,
 }
+
+
+def default_steps_for_model(model_name: str) -> int:
+    """Public catalog view of the same family default used at generation."""
+    return _DEFAULT_STEPS_BY_FAMILY.get(_detect_family(model_name), 4)
 
 
 def _looks_like_prequantized(model_name: str) -> bool:
@@ -181,11 +217,23 @@ class ImageGenerationEngine:
         self.default_edit_steps = 4 if self.family == "flux2-klein" else 20
         self.default_edit_guidance = None if self.family == "flux2-klein" else 4.0
         self.supports_negative_prompt = self.family not in _NO_NEGATIVE_PROMPT_FAMILIES
-        self._prequantized = _looks_like_prequantized(model_name)
-        # ``None`` when the repo is already quantized — passing a quantize width
-        # for a pre-quantized checkpoint makes mflux re-quantize and error.
-        self._quantize = None if self._prequantized else quantize
+        self._prequantized = self.family in {
+            "hidream-o1-dev",
+            "sdxl-base",
+            "bonsai-image",
+            "sd35-large",
+        } or _looks_like_prequantized(model_name)
+        # Native backends, pre-quantized mflux repos, and the curated Klein BF16
+        # repo all own a packaged local checkpoint that must be handed through
+        # ``model_path``. BF16 remains distinct from ``_prequantized`` so the
+        # runtime state describes the weights truthfully while still disabling
+        # on-load quantization.
+        self._packaged_checkpoint = self._prequantized or is_packaged_bf16_model(
+            model_name
+        )
+        self._quantize = None if self._packaged_checkpoint else quantize
         self._model = None
+        self._prompt_tokenizer = None
         # FLUX.2 uses distinct mflux classes for generation and editing. Only
         # one stays resident at a time so switching modes does not duplicate
         # the checkpoint in unified memory.
@@ -221,7 +269,7 @@ class ImageGenerationEngine:
     def _model_path_for_mflux(self) -> str | None:
         """``model_path`` to hand mflux: a local directory whenever we have one.
 
-        A pre-quantized repo / local dir is handed to mflux verbatim; a canonical
+        A packaged mflux repo / local dir is handed to mflux verbatim; a canonical
         repo is selected through ``ModelConfig`` instead (``None``) so mflux
         downloads the official weights and quantizes on load.
 
@@ -236,9 +284,13 @@ class ImageGenerationEngine:
         ourselves at the exact verified commit rather than let mflux resolve
         and download whatever ``main`` currently points to.
         """
-        if not self._prequantized:
+        if not self._packaged_checkpoint:
             return None
-        from .._download_gate import IMAGE_MODEL_REVISIONS, mflux_local_snapshot
+        from .._download_gate import (
+            IMAGE_MODEL_DATA_FILES,
+            IMAGE_MODEL_REVISIONS,
+            mflux_local_snapshot,
+        )
 
         snapshot = mflux_local_snapshot(self.model_name)
         if snapshot is not None:
@@ -248,7 +300,15 @@ class ImageGenerationEngine:
             return self.model_name
         from huggingface_hub import snapshot_download
 
-        downloaded = snapshot_download(self.model_name, revision=pinned_revision)
+        kwargs = {}
+        allow_patterns = IMAGE_MODEL_DATA_FILES.get(self.model_name)
+        if allow_patterns is not None:
+            # Vendored runtimes execute only reviewed local code. Fetch the
+            # pinned model data they consume, never repository scripts.
+            kwargs["allow_patterns"] = list(allow_patterns)
+        downloaded = snapshot_download(
+            self.model_name, revision=pinned_revision, **kwargs
+        )
         # A pinned cold pull bypasses ``_verify_weights_complete()``'s
         # normal preflight — at the time it ran (in ``_ensure_loaded``,
         # right before this method), there was nothing cached yet to
@@ -261,6 +321,57 @@ class ImageGenerationEngine:
 
     def _build_model(self):
         """Instantiate the backing mflux model (import-lazy)."""
+        if self.family == "bonsai-image":
+            from .bonsai_runtime import BONSAI_IMAGE_REPO, BonsaiImage
+
+            if self.model_name != BONSAI_IMAGE_REPO:
+                raise ImageRuntimeError(
+                    "Bonsai Image currently supports only the pinned official "
+                    f"checkpoint '{BONSAI_IMAGE_REPO}'."
+                )
+            model_path = self._model_path_for_mflux()
+            if model_path is None:
+                raise ImageRuntimeError("Bonsai Image requires a local model snapshot.")
+            return BonsaiImage(model_path)
+        if self.family == "hidream-o1-dev":
+            from .hidream_runtime import HiDreamO1
+
+            model_path = self._model_path_for_mflux()
+            if model_path is None:
+                raise ImageRuntimeError("HiDream-O1 requires a local model snapshot.")
+            return HiDreamO1(model_path, on_step=self._report_hidream_step)
+
+        if self.family == "sdxl-base":
+            from .sdxl_runtime import SDXL
+
+            model_path = self._model_path_for_mflux()
+            if model_path is None:
+                raise ImageRuntimeError("SDXL requires a local model snapshot.")
+            return SDXL(model_path, on_step=self._report_native_step)
+
+        if self.family == "sd35-large":
+            from .._download_gate import (
+                SD35_SHARED_REPO,
+                SD35_T5_TOKENIZER_REPO,
+                pinned_image_snapshot,
+            )
+            from .sd35_runtime import SD35Large
+
+            model_path = self._model_path_for_mflux()
+            shared_path = pinned_image_snapshot(SD35_SHARED_REPO)
+            t5_tokenizer_path = pinned_image_snapshot(SD35_T5_TOKENIZER_REPO)
+            if not model_path or not shared_path or not t5_tokenizer_path:
+                raise ImageRuntimeError(
+                    "SD3.5 Large requires its pinned model and text-encoder assets. "
+                    "Re-run the model download to finish them."
+                )
+            return SD35Large(
+                model_path,
+                shared_path,
+                t5_tokenizer_path,
+                on_step=self._report_native_step,
+            )
+
         from mflux.models.common.config.model_config import ModelConfig
 
         model_path = self._model_path_for_mflux()
@@ -300,6 +411,55 @@ class ImageGenerationEngine:
         return Flux1(
             quantize=self._quantize, model_path=model_path, model_config=config
         )
+
+    def _report_native_step(self, step: int, total: int) -> None:
+        """Bridge a vendored runtime into the shared progress/cancel contract."""
+        self._progress["running"] = True
+        self._progress["step"] = int(step)
+        self._progress["total"] = int(total)
+        if self._is_cancelled():
+            raise ImageGenerationCancelled("Generation cancelled.")
+
+    def _report_hidream_step(self, step: int, total: int) -> None:
+        """Backward-compatible HiDream callback name used by existing tests."""
+        self._report_native_step(step, total)
+
+    def _validate_hidream_prompt_tokens(self, prompt: str) -> None:
+        """Reject token-dense prompts before constructing the 17 GB model."""
+
+        from .._download_gate import IMAGE_MODEL_REVISIONS, mflux_local_snapshot
+        from .hidream_runtime.runtime import MAX_PROMPT_TOKENS, _encode_prompt_ids
+
+        processor = getattr(self._model, "processor", None)
+        if processor is None:
+            if self._prompt_tokenizer is None:
+                from transformers import AutoTokenizer
+
+                local = mflux_local_snapshot(self.model_name)
+                source = local or self.model_name
+                kwargs: dict[str, object] = {"trust_remote_code": False}
+                revision = IMAGE_MODEL_REVISIONS.get(self.model_name)
+                if local is None and revision is not None:
+                    kwargs["revision"] = revision
+                try:
+                    self._prompt_tokenizer = AutoTokenizer.from_pretrained(
+                        source, **kwargs
+                    )
+                except Exception as exc:  # noqa: BLE001 — clean API boundary
+                    raise ImageRuntimeError(
+                        f"Could not load the HiDream prompt tokenizer: {exc}"
+                    ) from exc
+            processor = self._prompt_tokenizer
+        try:
+            token_count = int(_encode_prompt_ids(prompt, processor).shape[-1])
+        except Exception as exc:  # noqa: BLE001 — clean API boundary
+            raise ImageRuntimeError(
+                f"Could not tokenize the HiDream prompt: {exc}"
+            ) from exc
+        if token_count > MAX_PROMPT_TOKENS:
+            raise ImageRuntimeError(
+                f"HiDream-O1 prompts are limited to {MAX_PROMPT_TOKENS} tokens."
+            )
 
     def _build_edit_model(self):
         """Instantiate the edit variant for a model that accepts input images."""
@@ -360,6 +520,32 @@ class ImageGenerationEngine:
             "generating with it would produce noise rather than an image. "
             f"Missing: {', '.join(missing)}. Re-run the download to finish it."
         )
+
+    def _ensure_runtime_assets(self) -> None:
+        """Fetch pinned auxiliary image data needed by a vendored runtime."""
+        if Path(self.model_name).expanduser().is_dir():
+            return
+        from .._download_gate import image_runtime_assets_for, pinned_image_snapshot
+
+        assets = image_runtime_assets_for(self.model_name)
+        if not assets:
+            return
+        from huggingface_hub import snapshot_download
+
+        for repo_id, revision, allow_patterns in assets:
+            if pinned_image_snapshot(repo_id) is not None:
+                continue
+            try:
+                snapshot_download(
+                    repo_id,
+                    revision=revision,
+                    allow_patterns=list(allow_patterns),
+                )
+            except Exception as exc:  # noqa: BLE001 — clean runtime boundary
+                raise ImageRuntimeError(
+                    f"Could not download required image runtime assets "
+                    f"'{repo_id}' at pinned revision {revision}: {exc}"
+                ) from exc
 
     # Hidden size mflux hardcodes for the Qwen2 text encoder backing both
     # qwen-image and qwen-image-edit (``QwenEncoderLayer.__init__``'s
@@ -573,6 +759,7 @@ class ImageGenerationEngine:
             self._loaded_mode = None
             _release_allocator_cache()
         if self._model is None:
+            self._ensure_runtime_assets()
             self._verify_weights_complete()
             try:
                 self._model = (
@@ -643,6 +830,107 @@ class ImageGenerationEngine:
                 f"{self.family} is text-to-image only and does not accept input images; "
                 "use an image-edit capable model."
             )
+        if self.family == "hidream-o1-dev":
+            if len(prompt) > 4096:
+                raise ImageRuntimeError(
+                    "HiDream-O1 prompts are limited to 4096 characters."
+                )
+            if num_inference_steps != 28:
+                raise ImageRuntimeError(
+                    "HiDream-O1 Dev supports its published 28-step schedule only."
+                )
+            if (
+                width is None
+                or height is None
+                or not (256 <= width <= 2048)
+                or not (256 <= height <= 2048)
+            ):
+                raise ImageRuntimeError(
+                    "HiDream-O1 dimensions must be between 256 and 2048 pixels."
+                )
+            if width % 32 or height % 32:
+                raise ImageRuntimeError(
+                    "HiDream-O1 dimensions must be multiples of 32."
+                )
+            if guidance is not None:
+                raise ImageRuntimeError(
+                    "HiDream-O1 Dev does not expose classifier-free guidance; "
+                    "omit the guidance field."
+                )
+            if negative_prompt is not None:
+                raise ImageRuntimeError(
+                    "HiDream-O1 Dev does not support negative_prompt."
+                )
+        elif self.family == "sdxl-base":
+            if (
+                width is None
+                or height is None
+                or not (256 <= width <= 2048)
+                or not (256 <= height <= 2048)
+            ):
+                raise ImageRuntimeError(
+                    "SDXL dimensions must be between 256 and 2048 pixels."
+                )
+            if width % 8 or height % 8:
+                raise ImageRuntimeError("SDXL dimensions must be multiples of 8.")
+        elif self.family == "bonsai-image":
+            if len(prompt) > 4096:
+                raise ImageRuntimeError(
+                    "Bonsai Image prompts are limited to 4096 characters."
+                )
+            if num_inference_steps != 4:
+                raise ImageRuntimeError(
+                    "Bonsai Image supports its published 4-step schedule only."
+                )
+            if (
+                width is None
+                or height is None
+                or not (256 <= width <= 2048)
+                or not (256 <= height <= 2048)
+            ):
+                raise ImageRuntimeError(
+                    "Bonsai Image dimensions must be between 256 and 2048 pixels."
+                )
+            if width % 32 or height % 32:
+                raise ImageRuntimeError(
+                    "Bonsai Image dimensions must be multiples of 32."
+                )
+            if guidance not in (None, 1.0):
+                raise ImageRuntimeError(
+                    "Bonsai Image uses guidance 1.0; omit guidance or set it to 1.0."
+                )
+            if negative_prompt is not None:
+                raise ImageRuntimeError(
+                    "Bonsai Image does not support negative_prompt."
+                )
+        elif self.family == "sd35-large":
+            if len(prompt) > 4096:
+                raise ImageRuntimeError(
+                    "SD3.5 Large prompts are limited to 4096 characters."
+                )
+            if num_inference_steps != 28:
+                raise ImageRuntimeError(
+                    "SD3.5 Large supports its validated 28-step schedule only."
+                )
+            if (
+                width is None
+                or height is None
+                or not (256 <= width <= 1536)
+                or not (256 <= height <= 1536)
+            ):
+                raise ImageRuntimeError(
+                    "SD3.5 Large dimensions must be between 256 and 1536 pixels."
+                )
+            if width % 16 or height % 16:
+                raise ImageRuntimeError(
+                    "SD3.5 Large dimensions must be multiples of 16."
+                )
+            if guidance is not None and (
+                not math.isfinite(guidance) or not (0.0 <= guidance <= 20.0)
+            ):
+                raise ImageRuntimeError(
+                    "SD3.5 Large guidance must be a finite value between 0 and 20."
+                )
 
         with self._lock:
             # Claim a run sequence and arm progress BEFORE loading, so a Cancel
@@ -662,6 +950,10 @@ class ImageGenerationEngine:
                 started_at=time.time(),
             )
             try:
+                if self.family == "hidream-o1-dev":
+                    self._validate_hidream_prompt_tokens(prompt)
+                    if self._is_cancelled():
+                        raise ImageGenerationCancelled("Generation cancelled.")
                 model = self._ensure_loaded(for_edit=editing)
                 # Honor a cancel that landed during the warm-up load before we
                 # commit to the denoise loop.
@@ -700,13 +992,26 @@ class ImageGenerationEngine:
                         ),
                     )
                 else:
-                    result = model.generate_image(
-                        height=height,
-                        width=width,
-                        **self._gen_kwargs(
-                            seed, prompt, num_inference_steps, guidance, negative_prompt
-                        ),
-                    )
+                    if self.family == "hidream-o1-dev":
+                        result = model.generate_image(
+                            height=height,
+                            width=width,
+                            seed=seed,
+                            prompt=prompt,
+                            num_inference_steps=num_inference_steps,
+                        )
+                    else:
+                        result = model.generate_image(
+                            height=height,
+                            width=width,
+                            **self._gen_kwargs(
+                                seed,
+                                prompt,
+                                num_inference_steps,
+                                guidance,
+                                negative_prompt,
+                            ),
+                        )
             except ImageRuntimeError:
                 raise  # cancellation + already-clean errors pass straight through
             except Exception as exc:  # noqa: BLE001 — surface a clean API error

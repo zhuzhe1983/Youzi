@@ -5,10 +5,16 @@ extension YouziLocalModelTools {
     static func synthesizeLocally(text: String, entry: ModelEntry, voice: String?, port: Int,
                                   bearer: String?, client: AudioClient = AudioClient()) async throws -> SynthesizedAudio {
         let modelID = speechModelID(entry)
+        let available = try await client.voices(model: modelID, port: port, bearer: bearer)
         let resolvedVoice: String?
-        if let voice { resolvedVoice = voice }
-        else {
-            let available = try await client.voices(model: modelID, port: port, bearer: bearer)
+        if let voice {
+            // Language names (e.g. Chinese) are not speaker IDs. Never send an
+            // invented speaker to the runtime or silently replace a requested one.
+            guard let canonical = available.first(where: { $0.caseInsensitiveCompare(voice) == .orderedSame }) else {
+                throw Failure.invalid_voice
+            }
+            resolvedVoice = canonical
+        } else {
             resolvedVoice = client.generationDefaults.voice(for: entry.alias, available: available)
         }
         return try await client.synthesize(text: text, model: modelID, voice: resolvedVoice, port: port, bearer: bearer)
@@ -67,6 +73,11 @@ extension YouziLocalModelTools {
                     return Asset(id: artifact.id, name: artifact.title, kind: artifact.kind,
                                  mime: artifact.kind == .image ? "image/png" : "audio/wav", data: data)
                 }
+            },
+            voices: { [weak server] entry in
+                guard let server else { throw Failure.model_not_ready }
+                return try await AudioClient().voices(model: speechModelID(entry),
+                    port: server.activePort, bearer: server.activeBearer)
             }
         ))
     }

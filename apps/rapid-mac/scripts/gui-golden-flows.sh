@@ -907,16 +907,20 @@ settle_transcript_at_bottom() {
                     and .bounds.height > .bounds.width
                     and .bounds.x > $compose_x)]
         | sort_by(.bounds.x) | .[0].bounds.x // empty' "$destination")"
-    [[ -n "$scroll_x" ]] \
-        || die "could not identify the transcript scrollbar beside the compose surface"
-    before_value="$(jq -r --argjson scroll_x "$scroll_x" '
-        [.data.ui_elements[]?
-         | select(.role == "AXScrollBar"
-                  and (.value | type) == "number"
-                  and ((.bounds.x - $scroll_x) | fabs) < 1)
-         | .value] | first // empty' "$destination")"
-    [[ -n "$before_value" ]] \
-        || die "transcript exposes no measurable scroll position before Jump to latest"
+    # AppKit does not expose an AXScrollBar when the completed transcript fits
+    # its viewport. That is a valid at-tail state, not a missing-control
+    # failure. Keep the correlated scrollbar when one exists; otherwise the
+    # stability loop below must prove the visible assistant tail twice.
+    if [[ -n "$scroll_x" ]]; then
+        before_value="$(jq -r --argjson scroll_x "$scroll_x" '
+            [.data.ui_elements[]?
+             | select(.role == "AXScrollBar"
+                      and (.value | type) == "number"
+                      and ((.bounds.x - $scroll_x) | fabs) < 1)
+             | .value] | first // empty' "$destination")"
+        [[ -n "$before_value" ]] \
+            || die "transcript exposes no measurable scroll position before Jump to latest"
+    fi
     if jq -e '.data.ui_elements[]?
               | select(.identifier == "Transcript.JumpToBottom")' \
         "$destination" >/dev/null; then
@@ -938,12 +942,15 @@ settle_transcript_at_bottom() {
     for _ in {1..60}; do
         see_main "$destination"
         local current_value tail_marker_visible tail_key=""
-        current_value="$(jq -r --argjson scroll_x "$scroll_x" '
-            [.data.ui_elements[]?
-             | select(.role == "AXScrollBar"
-                      and (.value | type) == "number"
-                      and ((.bounds.x - $scroll_x) | fabs) < 1)
-             | .value] | first // empty' "$destination")"
+        current_value=""
+        if [[ -n "$scroll_x" ]]; then
+            current_value="$(jq -r --argjson scroll_x "$scroll_x" '
+                [.data.ui_elements[]?
+                 | select(.role == "AXScrollBar"
+                          and (.value | type) == "number"
+                          and ((.bounds.x - $scroll_x) | fabs) < 1)
+                 | .value] | first // empty' "$destination")"
+        fi
         # AppKit may remove an overlay scrollbar once a short transcript fits
         # entirely inside its viewport. In that state, the last assistant
         # action row being fully visible is stronger physical evidence than a
@@ -2404,7 +2411,13 @@ flow_download_progress() {
 
 flow_settings_persistence() {
     log "2/6 settings and persistence"
-    start_persona settings-persistence
+    # This flow asserts both cards selected by the recommendation SSOT, so its
+    # fake catalog and hardware must expose the same deterministic lowest tier
+    # instead of depending on the hosted runner's RAM or an unrelated one-row
+    # catalog fixture.
+    start_persona settings-persistence FAKE_INCLUDE_STARTER=1 \
+        RAPID_GUI_HARDWARE_FIXTURE=1 RAPID_HARDWARE_RAM_GB=$GOLDEN_RAM_GB \
+        RAPID_HARDWARE_BRAND="$GOLDEN_BRAND"
     dismiss_first_run
     open_settings
     wait_settings_stable "$OUT/settings-root.json"
@@ -2437,21 +2450,24 @@ flow_settings_persistence() {
     baseline settings-persistence.performance-saved "$OUT/performance-saved.json"
     press "$OUT/performance-saved.json" Settings.Category.modelManagement "$OUT/settings-models-open.json"
     wait_settings_stable "$OUT/models-before.json" Settings.Models.ShowAllModelsToggle
+    # The toggle mounts before the asynchronous multi-modality catalog has
+    # finished populating. Wait for the fixture's capability tabs so a slower
+    # app bundle cannot snapshot the valid one-kind intermediate state.
+    wait_identifier Settings.ModelManagement.CapabilityTabs "$OUT/models-before.json"
     # GoldenFlow coverage for the recommendation SSOT: the running GUI must
     # render exactly the smart + fast aliases selected from the same JSON the
     # CLI consumes. This catches a missing app resource, a decoder drift, and a
     # third recommendation accidentally creeping back into a tier.
     local recommendation_json="$ROOT/../../vllm_mlx/model_recommendations.json"
-    local ram_bytes
-    ram_bytes="$(sysctl -n hw.memsize)"
+    local ram_mib=$((GOLDEN_RAM_GB * 1024))
     local expected_recommendations
-    expected_recommendations="$(python3 - "$recommendation_json" "$ram_bytes" <<'PY'
+    expected_recommendations="$(python3 - "$recommendation_json" "$ram_mib" <<'PY'
 import json, sys
 payload = json.load(open(sys.argv[1], encoding="utf-8"))
-ram_gb = int(sys.argv[2]) / (1 << 30)
+ram_mib = int(sys.argv[2])
 tier = payload["tiers"][0]
 for candidate in payload["tiers"]:
-    if ram_gb >= candidate["floor_gb"]:
+    if ram_mib >= candidate["minimum_memory_mib"]:
         tier = candidate
 print("\n".join(pick["alias"] for pick in tier["picks"]))
 PY
@@ -3638,9 +3654,28 @@ flow_catalog_integrity() {
     see_main "$OUT/catalog-settings.json"
     press "$OUT/catalog-settings.json" Settings.Category.modelManagement \
         "$OUT/catalog-open-mm.json"
-    see_main "$OUT/catalog-model-management.json"
-    jq -e '.data.walk.complete == true' "$OUT/catalog-model-management.json" >/dev/null \
-        || die "could not completely observe Model Management"
+    # Opening the panel starts its own asynchronous, cross-modality catalog
+    # refresh. The chat picker above is not a completion barrier for that
+    # separate task: on a fast host it can expose the cached chat rows before
+    # the image inventory has joined the snapshot. Wait for the exact largest
+    # managed fixture this flow is about, rather than asserting against a
+    # partially rendered but otherwise complete accessibility tree.
+    local management_ready=0
+    for _ in {1..40}; do
+        see_main "$OUT/catalog-model-management.json"
+        if jq -e '.data.walk.complete == true
+                  and any(.data.ui_elements[]?;
+                          .identifier == "Settings.ModelManagement.LargestModel"
+                          and ([.title // "", .value // "", .description // ""]
+                               | join(" ") | contains("fake-image-alias")))' \
+               "$OUT/catalog-model-management.json" >/dev/null; then
+            management_ready=1
+            break
+        fi
+        sleep 0.25
+    done
+    [[ "$management_ready" == 1 ]] \
+        || die "complete cross-modality Model Management inventory was not observed"
     jq -e '.data.ui_elements[]? | select(.identifier == "Settings.ModelManagement.Row.fake-alias")' \
         "$OUT/catalog-model-management.json" >/dev/null \
         || die "Model Management inventory was not observed"

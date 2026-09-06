@@ -19,6 +19,16 @@ credits"** link opens.
   design. The required in-product attribution appears in Settings → Privacy.
   https://github.com/youssofal/mtplx
 
+* **HiDream-O1 MLX runtime** — mrbizarro and contributors — MIT License
+  Rapid adapts the pinned text-to-image path for the local Images backend.
+  Its license and provenance notice ship inside the Python sidecar package.
+  https://huggingface.co/mlx-community/HiDream-O1-Image-Dev-mlx-bf16
+
+* **SDXL MLX runtime** — Amirhossein Razlighi and contributors — CC0 1.0
+  Rapid adapts the pinned text-to-image path for the local Images backend.
+  Its license and provenance notice ship inside the Python sidecar package.
+  https://github.com/amirhossein-razlighi/mlx_diffuser
+
 **Scope.** Components this project declares directly: the Swift packages
 in `Package.swift` (plus the transitive ones actually linked into the
 binary), the engine requirements in the monorepo's root `pyproject.toml`,
@@ -68,6 +78,18 @@ time of writing. Run that command for the exact revisions in your build.
   files in `Contents/Resources/mathFonts.bundle`.
   https://github.com/mgriebling/SwiftMath
   LaTeX rendering for math/STEM model responses.
+
+* **mermaid** — Mermaid contributors — MIT License
+  Vendored at 11.17.0 under `Vendor/mermaid`, pinned by
+  `Vendor/mermaid/mermaid.min.js.sha256`. The complete upstream MIT text is
+  kept at `Vendor/mermaid/LICENSE`. Vendored rather than resolved by SwiftPM
+  because it is not a Swift package; `scripts/build.sh` stages it into
+  `Contents/Resources/` and fails the build if it is missing or does not match
+  its digest.
+  https://github.com/mermaid-js/mermaid
+  Draws the diagram behind a fenced `mermaid` block's Preview button, in an
+  offscreen web view that is denied the network three ways and is snapshotted
+  to an image before anything reaches the screen.
 
 ### Transitive, but linked into the shipped binary
 
@@ -164,6 +186,11 @@ dependency closures:
 | mflux | `==0.19.0` | MIT | https://github.com/filipstrand/mflux |
 | mlx-video-with-audio | `==0.1.36` | MIT | https://pypi.org/project/mlx-video-with-audio/ |
 | mlx-arsenal | `==0.12.1` | MIT | https://pypi.org/project/mlx-arsenal/ |
+| LTX 2 MLX runtime (`ltx-core-mlx`, `ltx-pipelines-mlx`) | `0.14.15` (`57952288076766abe27dda3a774b2c24f7346977`) | MIT | https://github.com/MrMoferFRAN/ltx-2-mlx |
+
+The complete audited LTX runtime source archive and its MIT license ship under
+`Contents/Resources/rapid-mlx/licenses/`. The archive SHA-256 is
+`fa9a66a0c78721c3dce51d0f1dadcabad060682410303be748e529a846a9d5c9`.
 
 ### Video encoder
 
@@ -205,6 +232,7 @@ The largest and most self-contained components:
 | Component | Upstream | Upstream license | In-tree |
 | --- | --- | --- | --- |
 | MLX Stable Audio 3 | https://github.com/Stability-AI/stable-audio-3 | MIT | `vllm_mlx/audio/sa3/` (`LICENSE`, `NOTICE`) |
+| Bonsai Image low-bit FLUX.2 core | https://github.com/PrismML-Eng/mflux-prism (`bcd13e8`) | MIT | `vllm_mlx/image/bonsai_runtime/_vendor/` (`LICENSE`, `NOTICE`) |
 | CogVideoX-Fun MLX | https://github.com/dgrauet/VideoX-Fun-mlx | Apache-2.0 | `videox_fun_mlx/` (`LICENSE`, `NOTICE`) |
 | TurboQuant Metal kernels | https://github.com/arozanov/turboquant-mlx | Apache-2.0 | `vllm_mlx/kernels/turboquant_fused.metal` |
 | GLM-5 Next image processor | https://github.com/jundot/omlx (`c520d7e`) | Apache-2.0 | `vllm_mlx/patches/glm5_next_processor.py` |
@@ -212,6 +240,7 @@ The largest and most self-contained components:
 | Gemma 4 model classes | https://github.com/Blaizzy/mlx-vlm (v0.6.3) | MIT | `vllm_mlx/models/gemma4_vendored/` |
 | Hunyuan 3 model class | https://github.com/ml-explore/mlx-lm (PR #1211) | MIT | `vllm_mlx/models/hy_v3.py` |
 | DeepSeek V4 model classes | https://github.com/ml-explore/mlx-lm (`_ds4` branch, © Apple Inc.) | MIT | `vllm_mlx/models/deepseek_v4.py`, `deepseek_v4_cache.py`, `deepseek_v4_hyper_connection.py`, `deepseek_v4_switch.py` |
+| Stable Diffusion 3.5 Large MLX runtime | https://github.com/argmaxinc/DiffusionKit (`498e5db`) | MIT | `vllm_mlx/image/sd35_runtime/` (`LICENSE`, `NOTICE`) |
 | MTP speculative-decoding head + generator | https://github.com/ml-explore/mlx-lm (PR #990) | MIT | `vllm_mlx/spec_decode/mtp/head.py`, `generator.py` |
 | Request/status model, adapted | https://github.com/vllm-project/vllm | Apache-2.0 | `vllm_mlx/request.py` |
 | Several tool parsers, ported | https://github.com/vllm-project/vllm, https://github.com/sgl-project/sglang | Apache-2.0 | `vllm_mlx/tool_parsers/` |

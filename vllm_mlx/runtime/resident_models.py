@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import enum
 import gc
 import logging
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, TypedDict
 
 from .model_registry import ModelEntry, ModelRegistry
 from .process_memory import get_phys_footprint
@@ -26,17 +27,173 @@ class ResidentModelError(RuntimeError):
     """Base class for resident-model control-plane failures."""
 
 
+class ResidentRole(str, enum.Enum):
+    """Closed set of roles the shared residency lifecycle can budget.
+
+    The shared process residency ceiling is owned by the manager and must be
+    able to reject an unsafe admission *before* any weights load, with a
+    conflict that names the resident roles involved. Non-exhaustive open
+    strings would let an unknown lane charge the ceiling or let a consumer
+    guess at roles that were never defined, so every role string entering
+    :meth:`ResidentModelManager.admit_role` / ``release_role`` is coerced to
+    this closed enum before touching the ledger.
+
+    Wire values preserve the legacy reservation strings (``"alignment"`` and
+    the dash-form ``"speech-input"`` used by the forced-alignment route's
+    ``release_exclusive_role``) so existing callers keep working unchanged.
+    """
+
+    ASSISTANT = "assistant"
+    SPEECH_INPUT = "speech-input"
+    SPEECH_OUTPUT = "speech-output"
+    ALIGNMENT = "alignment"
+    IMAGE_GENERATION = "image-generation"
+    VIDEO_GENERATION = "video-generation"
+
+    @classmethod
+    def coerce(cls, value: ResidentRole | str | None) -> ResidentRole | None:
+        """Validate a role string against the closed set.
+
+        Accepts a ``ResidentRole`` member, a member's dash-form wire value, or
+        the canonical underscore alias (e.g. ``speech_input``); raises
+        ``ResidentModelError`` for any other string rather than silently
+        admitting an unknown lane. ``None`` (the assistant/replacement path)
+        maps to ``None``.
+        """
+        if value is None or isinstance(value, ResidentRole):
+            return value
+        if not isinstance(value, str):
+            raise ResidentModelError(
+                f"invalid role {value!r}: expected one of "
+                f"{sorted(member.value for member in cls)}"
+            )
+        member = (
+            cls(value)
+            if value in cls._value2member_map_
+            else _ROLE_INPUT_ALIASES.get(value)
+        )
+        if member is None:
+            raise ResidentModelError(
+                f"unknown resident role {value!r}: must be one of "
+                f"{sorted(member.value for member in cls)}"
+            )
+        return member
+
+
+# Server-declared VALID recovery actions per role, the stable contract the
+# typed 507 envelope exposes so the downstream UX (#2306) can offer the user
+# concrete, actionable choices instead of guessing at capacity or deriving
+# roles from model aliases. Owned here (data-driven) rather than re-derived
+# by callers; the manager pulls from this one table.
+_ALLOWED_RECOVERY_ACTIONS: dict[ResidentRole, tuple[str, ...]] = {
+    ResidentRole.SPEECH_INPUT: (
+        "select_smaller_speech_input",
+        "stop_speech_output",
+        "unload_assistant",
+    ),
+    ResidentRole.SPEECH_OUTPUT: ("stop_speech_output",),
+    ResidentRole.ALIGNMENT: ("unload_assistant",),
+    ResidentRole.ASSISTANT: (),
+    ResidentRole.IMAGE_GENERATION: (),
+    ResidentRole.VIDEO_GENERATION: (),
+}
+
+
+def _recovery_actions_for(role: ResidentRole) -> list[str]:
+    """Return the server-declared recovery actions for a validated role."""
+    return list(_ALLOWED_RECOVERY_ACTIONS[role])
+
+
+# Canonical underscore aliases accepted on role input (e.g. ``speech_input``)
+# alongside the dash-form wire values, so callers may use either without
+# silently inventing a role. Kept OUTSIDE the enum class: a ``str``-mixin enum
+# auto-converts a class-level dict of strings into an unexpected member.
+_ROLE_INPUT_ALIASES: dict[str, ResidentRole] = {
+    "assistant": ResidentRole.ASSISTANT,
+    "speech_input": ResidentRole.SPEECH_INPUT,
+    "speech_output": ResidentRole.SPEECH_OUTPUT,
+    "alignment": ResidentRole.ALIGNMENT,
+    "image_generation": ResidentRole.IMAGE_GENERATION,
+    "video_generation": ResidentRole.VIDEO_GENERATION,
+}
+
+
 class ResidentModelCapacityError(ResidentModelError):
-    """The configured ceiling cannot admit a model after eligible eviction."""
+    """The configured ceiling cannot admit a model/role after eligible eviction.
+
+    Two admission shapes share this error while keeping their wire contracts
+    distinct:
+
+    * **Assistant/replacement admission** keeps the legacy ``message`` +
+      ``replacement_projection`` shape so ``/v1/models/load`` can return its
+      established projection-based 507 envelope unchanged.
+    * **Protected-role admission** (``residency.admit_role``) carries the
+      typed role fields below, surfaced via :meth:`envelope` as the stable
+      ``insufficient_capacity_error`` 507 for lanes like forced alignment.
+    """
 
     def __init__(
         self,
         message: str,
         *,
         replacement_projection: ReplacementProjection | None = None,
+        reason: str | None = None,
+        requested_bytes: int | None = None,
+        limit_bytes: int | None = None,
+        used_bytes: int | None = None,
+        requested_role: str | None = None,
+        resident_roles: list[dict[str, object]] | None = None,
+        recovery_actions: list[str] | None = None,
     ) -> None:
-        super().__init__(message)
         self.replacement_projection = replacement_projection
+        self.reason = reason
+        self.requested_bytes = requested_bytes
+        self.limit_bytes = limit_bytes
+        self.used_bytes = used_bytes
+        self.requested_role = requested_role
+        self.resident_roles = resident_roles
+        self.recovery_actions = recovery_actions
+        super().__init__(message)
+
+    def envelope(self) -> dict[str, object]:
+        """Return the stable machine-readable 507 role-capacity contract.
+
+        Populated only when the error was raised from ``admit_role`` (role
+        fields present). A legacy replacement/assistant capacity error has no
+        typed role envelope — its caller keeps using ``replacement_projection``.
+
+        The role envelope is ADDITIVE-SAFE: consumers that cannot parse the
+        newer role fields keep working from ``reason``/bytes, while consumers
+        that can parse them use ``requested_role`` / ``resident_roles`` /
+        ``recovery_actions`` without guessing capacity or deriving roles.
+        """
+        if self.reason is None:
+            return {
+                "error": {
+                    "message": str(self),
+                    "type": "insufficient_capacity_error",
+                    "code": "insufficient_capacity_error",
+                    "param": "model",
+                }
+            }
+        envelope: dict[str, object] = {
+            "message": str(self),
+            "type": "insufficient_capacity_error",
+            "code": "insufficient_capacity_error",
+            "reason": self.reason,
+            "param": "model",
+            "requested_bytes": self.requested_bytes,
+            "limit_bytes": self.limit_bytes,
+            "used_bytes": self.used_bytes,
+            "requested_role": self.requested_role,
+            "resident_roles": self.resident_roles
+            if self.resident_roles is not None
+            else [],
+            "recovery_actions": self.recovery_actions
+            if self.recovery_actions is not None
+            else [],
+        }
+        return {"error": envelope}
 
 
 class ResidentModelBusyError(ResidentModelError):
@@ -160,8 +317,12 @@ def resolve_resident_performance(
 
     lookup_name = model_path or model_name
     hf_config, alias_metadata = _gather_kv_cache_dtype_inputs(lookup_name)
+    # A control-plane dtype is operator-explicit: an unsupported family
+    # raises KVCacheQuantizationUnsupportedError before any weights load
+    # (mapped to 422 by the residency route, #78).
     decision = resolve_kv_cache_dtype(
         performance.kv_cache_dtype,
+        explicit=True,
         model_name=model_name,
         hf_path=model_path or (alias_metadata or {}).get("hf_path"),
         hf_config=hf_config,
@@ -210,6 +371,99 @@ class ResidencyRecord:
     @property
     def model_id(self) -> str:
         return self.entry.model_name
+
+
+@dataclass
+class _Retirement:
+    """Manager-owned record of an engine that stopped being routable but whose
+    stop()/allocator cleanup has not yet completed (or failed truthfully).
+
+    A retirement is keyed by the engine object identity (``id(engine)``), not
+    the model alias, because distinct engines may legitimately share an alias
+    across a replacement. While present in ``ResidentModelManager._retiring``
+    the record stays memory-charged (see ``_accounted_usage``) so nobody claims
+    freed bytes before the cleanup actually finishes.
+    """
+
+    record: ResidencyRecord
+    reason: str
+    count: bool
+    # "retiring" while the offline cleanup task runs, "failed" once stop() has
+    # raised and a truthful cleanup_failed note has been recorded. The record
+    # only leaves _retiring on success or shutdown drain.
+    state: str = "retiring"
+    cleanup_failed: str | None = None
+    # The original stop() exception (retained so an under-lock caller that needs
+    # the failure propagated -- evict-first admission -- can re-raise it) while
+    # keeping the record + bytes charged either way.
+    cleanup_error: BaseException | None = None
+    task: asyncio.Task | None = None
+
+
+def _sanitize_error(exc: Exception) -> str:
+    """Bounded, single-line snapshot of an engine cleanup failure."""
+    printable = "".join(
+        character if character.isprintable() else " " for character in str(exc)
+    )
+    text = " ".join(printable.split()) or type(exc).__name__
+    return text[:500]
+
+
+@dataclass
+class ResidentRoleReservation:
+    """A non-registry role charged to the process residency ceiling.
+
+    Auxiliary lanes (forced alignment today; dictation speech-input under the
+    companion role work) own their MLX engine outside the model registry, so
+    their footprints cannot be ledgers through ``ResidencyRecord``. This
+    reservation charges them to the same shared ceiling so admission can
+    reject before their weights load.
+    """
+
+    role: str
+    model_id: str
+    reserved_bytes: int
+    capacity_source: str
+    state: str
+    loaded_at: float
+
+
+@dataclass
+class ResidentRoleAdmission:
+    """Transaction handle for replacing one auxiliary role reservation."""
+
+    record: ResidentRoleReservation
+    previous: ResidentRoleReservation | None = None
+    previous_retired: bool = False
+    exclusive_retired: bool = False
+    committed: bool = False
+
+    def retire_previous(self) -> None:
+        """Signal that the prior engine was dropped; do not restore on rollback."""
+        self.previous_retired = True
+
+    def retire_exclusive(self) -> None:
+        """Signal that the mutually-exclusive sibling's engine was discarded.
+
+        Called by the alignment lane the INSTANT the ASR engine evicted by
+        ``_evict_other_lane_sync("aligner")`` is actually gone. After this
+        point the retained ``speech-input`` reservation points at a phantom
+        engine, so a rollback must DROP it rather than leave a charge for an
+        engine that no longer exists. Before the discard the sibling is still
+        its engine's true reservation and stays in the ledger.
+        """
+        self.exclusive_retired = True
+
+    def commit(self) -> None:
+        """Mark the new engine as resident even when the caller re-raises.
+
+        Used by the alignment lane when its weight load completed on the model
+        worker (the engine was published) but the async handler is being
+        cancelled: the weights are loaded, so the reservation must be kept
+        rather than rolled back into a ledger desync.
+        """
+        self.committed = True
+        self.record.state = "resident"
 
 
 Loader = Callable[..., Awaitable[ModelEntry]]
@@ -285,8 +539,42 @@ def estimate_model_bytes(model_name: str) -> int:
 
     folded = model_name.casefold()
     known_image_gib = {
+        # Conservative admission charge for the 15.98 GB mflux-layout bf16
+        # payload plus generation activations. The alias itself requires a
+        # 32 GB Mac; this fallback prevents a dynamic load from inheriting the
+        # q4 checkpoint's measured 5.9 GiB charge merely because both names
+        # contain "flux2-klein-4b".
+        "flux2-klein-4b-mflux-bf16": 18.0,
+        "flux2-klein-4b-bf16": 18.0,
         "flux2-klein-4b": 5.9,
+        # Published 3.62 GiB fixed payload (2-bit transformer, 4-bit text
+        # encoder, FP16 VAE). Keep 7 GiB of admission room for 1024²
+        # activations, Metal compilation, tiled decode, and output encoding;
+        # dogfood records the measured allocator peak before landing.
+        "bonsai-image": 7.0,
+        "bonsai_image": 7.0,
+        # mflux-community/flux-1-schnell-mflux-q4, measured after a real
+        # 1024x1024 4-step generation (`/usr/bin/time -l`): 9.46 GiB peak RSS.
+        # Keep one decimal place and round up so alias-only admission never
+        # falls through to the generic 4 GiB estimate.
+        "flux-schnell": 9.5,
         "z-image-turbo": 5.9,
+        # BF16 unified backbone + custom diffusion heads. Rapid's 1024² server
+        # dogfood measured 17.43 GiB max RSS; round up to retain allocator and
+        # output headroom (docs/engineering/performance/2026-09-04-hidream-o1-dev-dogfood.md).
+        "hidream-o1": 18.0,
+        "hidream_o1": 18.0,
+        # Official fp16 checkpoint converted to an 8-bit UNet at load. Real
+        # 1024² / 30-step dogfood measured up to 12.49 GiB MLX peak; retain
+        # allocator/output headroom while the catalog keeps a 16 GiB minimum.
+        "sdxl-base": 14.0,
+        "stable-diffusion-xl": 14.0,
+        # 15.25 GiB of revision-pinned MMDiT + CLIP/T5/tokenizer payloads.
+        # The low-memory runtime stages text encoding, denoising and decoding;
+        # keep a conservative 20 GiB admission charge pending broader hardware
+        # measurements, while the public alias requires a 32 GiB Mac.
+        "sd35-large": 20.0,
+        "stable-diffusion-3.5": 20.0,
         # 6-bit-transformer Qwen-Image (20B) — measured peak RSS during a
         # real generation at 1024x1024 (mflux-community/qwen-image-mflux-q6,
         # the API/GUI default resolution; `/usr/bin/time -l`): ~55.7 GiB.
@@ -382,6 +670,34 @@ def _release_allocator_cache() -> None:
         pass
 
 
+class _SnapshotModelDict(TypedDict):
+    """Per-model row of :meth:`ResidentModelManager.snapshot`.
+
+    Typing the heterogeneous snapshot rows lets mypy check the ``max`` on
+    ``estimated_bytes``/``measured_bytes`` as real ``int`` comparisons instead
+    of joining every value type into one broad dict union.
+    """
+
+    id: str
+    model_path: str
+    aliases: list[str]
+    modality: str
+    role: str
+    serving_lane: object
+    serving_lane_reason: object
+    state: str
+    pinned: bool
+    primary: bool
+    active_requests: int
+    lifecycle: object
+    estimated_bytes: int
+    measured_bytes: int | None
+    idle_seconds: float
+    performance: dict[str, object] | None
+    replacement_projection: dict[str, object] | None
+    cleanup_failed: str | None
+
+
 class ResidentModelManager:
     """Own dynamic engines and enforce a process-wide residency ceiling.
 
@@ -417,6 +733,11 @@ class ResidentModelManager:
         self._on_primary_changed = on_primary_changed
         self._records: dict[str, ResidencyRecord] = {}
         self._index: dict[str, str] = {}
+        self._roles: dict[str, ResidentRoleReservation] = {}
+        # Engine identity -> in-flight retirement. The engine bytes stay
+        # charged to _accounted_usage() and visible in snapshot() until the
+        # offline cleanup task completes or fails truthfully.
+        self._retiring: dict[int, _Retirement] = {}
         self._lock = asyncio.Lock()
         self._ttl_task: asyncio.Task | None = None
         self.evictions_total = 0
@@ -443,6 +764,13 @@ class ResidentModelManager:
         for key in [key for key, value in self._index.items() if value == canonical]:
             self._index.pop(key, None)
         return record
+
+    def _drop_record_if_same(self, record: ResidencyRecord) -> bool:
+        """Drop manager routing only while ``record`` still owns its key."""
+        if self._records.get(record.model_id) is not record:
+            return False
+        self._drop_record(record.model_id)
+        return True
 
     def register_primary(
         self, entry: ModelEntry, *, estimated_bytes: int | None = None
@@ -480,12 +808,90 @@ class ResidentModelManager:
             for record in self._records.values()
             if record.state == "resident"
         )
+        # Retiring engines are no longer routable but their stop() has not
+        # finished (or failed), so their bytes must not be reported free.
+        reserved += sum(
+            max(retirement.record.estimated_bytes, retirement.record.measured_bytes)
+            for retirement in self._retiring.values()
+        )
+        reserved += sum(
+            record.reserved_bytes
+            for record in self._roles.values()
+            if record.state in {"loading", "resident"}
+        )
         # Some engines (notably mflux) construct lazy MLX arrays without
         # faulting all weight pages into the process. The footprint delta at
         # load time can therefore be much smaller than the memory the first
         # request will materialize. Keep the catalog/heuristic reservation in
         # force until the actual process footprint grows past it.
         return max(measured, reserved)
+
+    def _coerce_role(self, role: str | ResidentRole | None) -> ResidentRole | None:
+        """Validate a role against the closed enum before it touches the ledger.
+
+        Central location so every role string entering ``admit_role`` /
+        ``release_role`` — and thus ``self._roles`` — is checked against the
+        closed set rather than silently accepted.
+        """
+        return ResidentRole.coerce(role)
+
+    def _resident_roles_snapshot(self) -> list[dict[str, object]]:
+        """Snapshot every live role charged by the typed 507 envelope.
+
+        Capacity accounting combines registry-backed models in ``_records``
+        with auxiliary reservations in ``_roles``. The conflict envelope must
+        describe that same set; otherwise it can recommend unloading the
+        assistant while omitting the assistant from ``resident_roles``.
+        """
+
+        def model_role(record: ResidencyRecord) -> str:
+            group = _replacement_group(record.entry)
+            return {
+                "image-gen": ResidentRole.IMAGE_GENERATION.value,
+                "video-gen": ResidentRole.VIDEO_GENERATION.value,
+            }.get(group, group)
+
+        model_roles = [
+            {
+                "role": model_role(record),
+                "model_id": record.model_id,
+                "reserved_bytes": max(
+                    record.estimated_bytes,
+                    record.measured_bytes,
+                ),
+                "state": record.state,
+            }
+            for record in self._records.values()
+        ]
+        retiring_roles = [
+            {
+                "role": model_role(retirement.record),
+                "model_id": retirement.record.model_id,
+                "reserved_bytes": max(
+                    retirement.record.estimated_bytes,
+                    retirement.record.measured_bytes,
+                ),
+                "state": retirement.state,
+            }
+            for retirement in self._retiring.values()
+        ]
+        auxiliary_roles = [
+            {
+                "role": record.role,
+                "model_id": record.model_id,
+                "reserved_bytes": record.reserved_bytes,
+                "state": record.state,
+            }
+            for record in self._roles.values()
+        ]
+        return sorted(
+            [*model_roles, *retiring_roles, *auxiliary_roles],
+            key=lambda item: (str(item["role"]), str(item["model_id"])),
+        )
+
+    def _recovery_actions_for(self, role: ResidentRole) -> list[str]:
+        """Return the server-declared recovery actions for a role."""
+        return _recovery_actions_for(role)
 
     def contains(self, model_name: str) -> bool:
         return self._canonical(model_name) is not None
@@ -510,12 +916,37 @@ class ResidentModelManager:
             except asyncio.CancelledError:
                 pass
 
+        cleanups: dict[int, asyncio.Future] = {}
         async with self._lock:
+            existing_retirements = list(self._retiring.values())
             dynamic = [
                 record for record in self._records.values() if not record.primary
             ]
             for record in dynamic:
-                await self._evict_locked(record, reason="shutdown", count=False)
+                cleanups[id(record.entry.engine)] = self._begin_evict_locked(
+                    record, reason="shutdown", count=False
+                )
+            # Join any retirement already in flight (spawned offline by a prior
+            # cancelled or replaced operation) so shutdown drains them too.
+            for retirement in existing_retirements:
+                cleanups[id(retirement.record.entry.engine)] = self._begin_evict_locked(
+                    retirement.record,
+                    reason="shutdown",
+                    count=False,
+                )
+        # Drain every retirement OUTSIDE the lock: a suspended stop must never
+        # hold self._lock while unrelated residency operations are waiting.
+        await self._await_cleanups(list(cleanups.values()))
+        failures = self._cleanup_failures(cleanups)
+        if failures:
+            details = "; ".join(
+                f"{model_id}: {message}" for model_id, message, _error in failures
+            )
+            error = ResidentModelError(f"resident model cleanup failed: {details}")
+            first_cause = failures[0][2]
+            if first_cause is not None:
+                raise error from first_cause
+            raise error
 
     async def _ttl_loop(self) -> None:
         interval = min(60.0, max(1.0, self.idle_ttl_seconds / 4.0))
@@ -526,6 +957,8 @@ class ResidentModelManager:
     async def evict_expired(self) -> list[str]:
         if self.idle_ttl_seconds <= 0:
             return []
+        cleanups: list[asyncio.Future] = []
+        attempted: list[tuple[str, int]] = []
         async with self._lock:
             now = self._clock()
             expired = sorted(
@@ -540,25 +973,62 @@ class ResidentModelManager:
                 ),
                 key=lambda record: record.last_used_at,
             )
-            evicted = []
+            evicted: list[str] = []
             for record in expired:
-                evicted.append(record.model_id)
-                await self._evict_locked(record, reason="idle_ttl")
-            return evicted
+                attempted.append((record.model_id, id(record.entry.engine)))
+                cleanups.append(self._begin_evict_locked(record, reason="idle_ttl"))
+        await self._await_cleanups(cleanups)
+        failed = {
+            identity for _model_id, identity in attempted if identity in self._retiring
+        }
+        evicted.extend(
+            model_id for model_id, identity in attempted if identity not in failed
+        )
+        return evicted
 
-    async def _evict_for_locked(self, incoming_bytes: int, exclude: set[str]) -> None:
+    async def _evict_for_locked(
+        self,
+        incoming_bytes: int,
+        exclude: set[str],
+        *,
+        requested_role: str | None = None,
+        usage_credit_bytes: int = 0,
+    ) -> None:
         if self.memory_limit_bytes <= 0:
             return
-        while self._accounted_usage() + incoming_bytes > self.memory_limit_bytes:
+        while (
+            max(0, self._accounted_usage() - usage_credit_bytes) + incoming_bytes
+            > self.memory_limit_bytes
+        ):
             candidates = self._eviction_candidates_locked(exclude)
             if not candidates:
                 usage = self._accounted_usage()
+                if requested_role is None:
+                    raise ResidentModelCapacityError(
+                        "resident model memory ceiling exceeded: "
+                        f"usage={usage / _GIB:.2f} GiB, "
+                        f"incoming={incoming_bytes / _GIB:.2f} GiB, "
+                        f"limit={self.memory_limit_bytes / _GIB:.2f} GiB; "
+                        "no idle unpinned model is eligible for eviction"
+                    )
+                coerced_role = self._coerce_role(requested_role)
+                assert coerced_role is not None
                 raise ResidentModelCapacityError(
-                    "resident model memory ceiling exceeded: "
-                    f"usage={usage / _GIB:.2f} GiB, "
-                    f"incoming={incoming_bytes / _GIB:.2f} GiB, "
-                    f"limit={self.memory_limit_bytes / _GIB:.2f} GiB; "
-                    "no idle unpinned model is eligible for eviction"
+                    (
+                        "insufficient capacity for role "
+                        f"{requested_role!r}: requested="
+                        f"{incoming_bytes / _GIB:.2f} GiB, "
+                        f"used={usage / _GIB:.2f} GiB, "
+                        f"limit={self.memory_limit_bytes / _GIB:.2f} GiB; "
+                        "no idle unpinned model is eligible for eviction"
+                    ),
+                    reason=f"role_capacity_{requested_role.replace('-', '_')}",
+                    requested_bytes=incoming_bytes,
+                    limit_bytes=self.memory_limit_bytes,
+                    used_bytes=usage,
+                    requested_role=requested_role,
+                    resident_roles=self._resident_roles_snapshot(),
+                    recovery_actions=self._recovery_actions_for(coerced_role),
                 )
             await self._evict_locked(candidates[0], reason="memory_pressure")
 
@@ -578,6 +1048,261 @@ class ResidentModelManager:
             ),
             key=lambda record: record.last_used_at,
         )
+
+    @asynccontextmanager
+    async def admit_role(
+        self,
+        *,
+        role: str,
+        model_id: str,
+        requested_bytes: int | None,
+        capacity_source: str,
+        replace_existing: bool = False,
+        release_exclusive_role: str | None = None,
+    ):
+        """Reserve a protected auxiliary role before its weights load.
+
+        Mirrors the shared ledger's transaction discipline: admission is
+        decided with the footprint known (``requested_bytes`` from catalog or
+        local-cache metadata), and the reservation is committed only on
+        success or rolled back on failure/cancellation so no leaked
+        reservation desyncs the ledger.
+
+        ``replace_existing=True`` charges the new footprint against the old
+        role's reservation (crediting the previous bytes) and, on rollback,
+        restores the previous reservation unless the caller retired it via
+        :meth:`ResidentRoleAdmission.retire_previous`.
+
+        ``release_exclusive_role`` adds a SECOND mutually-exclusive auxiliary
+        role to the same transaction (e.g. alignment retiring the dictation
+        ``speech-input`` role whose ASR engine the aligner evicts). The
+        sibling's reservation is RETAINED in ``self._roles`` — the real
+        auxiliary ledger, never the ``snapshot()`` projection — for the whole
+        transaction and its bytes are CREDITED against the new role's admission,
+        so the two are never double-charged (no false 507) yet no concurrent
+        admission can consume the sibling's capacity (no steal window). The new
+        role's admission and the sibling's retention happen under the SAME
+        ``self._lock`` critical section. On success (commit) — including a load
+        that finished under cancellation — the sibling is retired when the
+        aligner evicts its engine. On failure/cancellation the sibling stays in
+        the ledger (matching its still-resident engine) unless the load evicted
+        it first, in which case the caller's
+        :meth:`ResidentRoleAdmission.retire_exclusive` signal drops the now
+        phantom reservation. A still-resident engine is never left unaccounted,
+        and the configured ceiling is never breached by a restore.
+        """
+
+        # Validate every role string against the closed enum BEFORE it touches
+        # the ledger: an unknown lane must never charge the shared ceiling or
+        # read the ledger under a role the lifecycle does not own.
+        coerced_role = self._coerce_role(role)
+        assert coerced_role is not None  # role is required for role admission
+        # Store only the enum wire value.  Merely validating an accepted alias
+        # is insufficient: keeping ``speech_input`` as a dictionary key would
+        # let a later ``speech-input`` admission create a second reservation
+        # for the same logical role, and release through the other spelling
+        # would miss it.
+        role = coerced_role.value
+        coerced_exclusive_role = self._coerce_role(release_exclusive_role)
+        release_exclusive_role = (
+            coerced_exclusive_role.value if coerced_exclusive_role is not None else None
+        )
+
+        async with self._lock:
+            previous = self._roles.get(role)
+            # Capture the mutually-exclusive sibling WITHOUT removing it. The
+            # sibling's reservation is RETAINED in ``_roles`` for the whole
+            # transaction — its bytes stay accounted, so NO concurrent admission
+            # can consume them and a rollback can never be forced to choose
+            # between an unaccounted engine and an over-ceiling ledger (pr_validate
+            # round-19). ``self._roles`` is the authoritative auxiliary-role
+            # ledger (in contrast to ``snapshot()["roles"]``, which mixes in
+            # synthesized projection entries for ordinary models and would let a
+            # caller release the wrong thing / a non-reservation).
+            exclusive_sibling = None
+            if release_exclusive_role is not None and release_exclusive_role != role:
+                exclusive_sibling = self._roles.get(release_exclusive_role)
+            try:
+                if previous is not None and not replace_existing:
+                    raise ResidentModelError(f"role {role!r} is already resident")
+                # A role must never host two concurrent in-flight LOADS: an
+                # overwrite here would orphan the earlier load's reservation and,
+                # if that earlier load later rolls back, could resurrect a stale
+                # ``"loading"`` record. Callers serialise per-lane (the STT lane
+                # lock), so this is a defensive invariant at the ledger layer
+                # itself — reject rather than corrupt.
+                if previous is not None and previous.state == "loading":
+                    raise ResidentModelError(
+                        f"role {role!r} already has a loading admission in flight"
+                    )
+                # Credit the new role against BOTH the same-role previous and the
+                # retained mutually-exclusive sibling: the aligner admission nets
+                # out the ASR engine bytes it will evict, so it is not falsely
+                # rejected while the ASR engine is still resident.
+                usage_credit = (
+                    previous.reserved_bytes if previous is not None else 0
+                ) + (
+                    exclusive_sibling.reserved_bytes
+                    if exclusive_sibling is not None
+                    else 0
+                )
+                used = self._accounted_usage()
+                if self.memory_limit_bytes > 0 and requested_bytes is None:
+                    raise ResidentModelCapacityError(
+                        (
+                            f"insufficient capacity for role {role!r}: the requested "
+                            "model has no catalog or local-cache size metadata and "
+                            f"limit={self.memory_limit_bytes / _GIB:.2f} GiB; "
+                            "refusing blind admission under a configured ceiling"
+                        ),
+                        reason="role_capacity_unknown",
+                        requested_bytes=None,
+                        limit_bytes=self.memory_limit_bytes,
+                        used_bytes=used,
+                        requested_role=role,
+                        resident_roles=self._resident_roles_snapshot(),
+                        recovery_actions=self._recovery_actions_for(coerced_role),
+                    )
+                reserved_bytes = max(0, int(requested_bytes or 0))
+                await self._evict_for_locked(
+                    reserved_bytes,
+                    exclude=set(),
+                    requested_role=role,
+                    usage_credit_bytes=usage_credit,
+                )
+                record = ResidentRoleReservation(
+                    role=role,
+                    model_id=model_id,
+                    reserved_bytes=reserved_bytes,
+                    capacity_source=capacity_source,
+                    state="loading",
+                    loaded_at=self._clock(),
+                )
+                self._roles[role] = record
+                admission = ResidentRoleAdmission(record=record, previous=previous)
+            except BaseException:
+                # Any failure BEFORE admission is decided (capacity error,
+                # invariant conflict) leaves the retained sibling untouched in
+                # ``_roles`` — nothing to restore, nothing leaked.
+                raise
+        try:
+            yield admission
+        except BaseException:
+            if admission.committed:
+                # The engine was already published on the model worker (e.g.
+                # the load finished under cancellation); keep it accounted. The
+                # successful load evicted the ASR engine -> drop the retained
+                # (by now phantom) sibling reservation.
+                async with self._lock:
+                    if (
+                        exclusive_sibling is not None
+                        and release_exclusive_role is not None
+                        and self._roles.get(release_exclusive_role) is exclusive_sibling
+                    ):
+                        # Only retire the sibling WE retained — preserve any
+                        # NEWER reservation a concurrent admission installed for
+                        # this role while the aligner loaded (its engine is
+                        # authoritative and still resident).
+                        self._roles.pop(release_exclusive_role, None)
+                raise
+            async with self._lock:
+                if self._roles.get(role) is record:
+                    if previous is not None and not admission.previous_retired:
+                        self._roles[role] = previous
+                    else:
+                        self._roles.pop(role, None)
+                # The retained sibling was never removed, so it needs no
+                # "restore". If the load evicted its engine before failing
+                # (``retire_exclusive`` -> ``exclusive_retired`` — the round-18
+                # case), the reservation now guards a phantom engine and must be
+                # dropped; otherwise it stays charged, exactly matching its
+                # still-resident engine. Identity-check so a concurrently
+                # installed NEWER reservation for the role is never erased.
+                if (
+                    exclusive_sibling is not None
+                    and release_exclusive_role is not None
+                    and admission.exclusive_retired
+                    and self._roles.get(release_exclusive_role) is exclusive_sibling
+                ):
+                    self._roles.pop(release_exclusive_role, None)
+            raise
+        else:
+            # Success finalization runs under a cancellation SHIELD (pr_validate
+            # round-22): after the route's ``admission.commit()`` the engine is
+            # already resident, so a cancellation arriving while the success-path
+            # ``await self._lock`` is blocked must NOT skip the finalization —
+            # that would leave the committed engine's reservation stuck in
+            # ``"loading"`` and the evicted sibling (if any) charged forever.
+            # The shield lets the finalize run to completion; if the surrounding
+            # task is cancelled, we wait for the shielded finalize first and
+            # THEN re-raise, never leaking a phantom sibling charge.
+            finalize = asyncio.ensure_future(
+                self._finalize_role_commit(
+                    role=role,
+                    record=record,
+                    exclusive_sibling=exclusive_sibling,
+                    release_exclusive_role=release_exclusive_role,
+                )
+            )
+            try:
+                await asyncio.shield(finalize)
+            except asyncio.CancelledError:
+                # Un-cancellable drain: the shielded ``finalize`` task must run
+                # to completion BEFORE we propagate cancellation (pr_validate
+                # round-23). A second cancellation while this handler awaits is
+                # itself re-raised as ``CancelledError`` inside the loop, which
+                # we swallow and re-arm the shield until ``finalize.done()`` —
+                # so callers can never observe a stale ``"loading"`` record or
+                # a retained phantom sibling charge after cancelling here.
+                while not finalize.done():
+                    try:
+                        await asyncio.shield(finalize)
+                    except asyncio.CancelledError:
+                        continue
+                raise
+
+    async def _finalize_role_commit(
+        self,
+        *,
+        role: str,
+        record: ResidentRoleReservation,
+        exclusive_sibling,
+        release_exclusive_role: str | None,
+    ) -> None:
+        """Complete the success-path role commit under a shielded lock.
+
+        Marks the admitted record resident and retires the retained
+        mutually-exclusive sibling (the aligner evicted its engine). Runs inside
+        :meth:`admit_role`'s success finalization, shielded from cancellation so
+        a committed engine is never left ``"loading"`` and a phantom sibling
+        charge is never leaked when the context is cancelled mid-commit.
+        """
+        async with self._lock:
+            if self._roles.get(role) is record:
+                record.state = "resident"
+                record.loaded_at = self._clock()
+            # Success: the aligner loaded and evicted the ASR engine ->
+            # retire the retained sibling reservation, but ONLY if it is still
+            # the reservation WE retained — a concurrent admission may have
+            # replaced the role with a newer (authoritative) reservation while
+            # the aligner loaded, and must not be erased here.
+            if (
+                exclusive_sibling is not None
+                and release_exclusive_role is not None
+                and self._roles.get(release_exclusive_role) is exclusive_sibling
+            ):
+                self._roles.pop(release_exclusive_role, None)
+
+    async def release_role(self, role: str) -> None:
+        """Stop charging a role after its owning lane released the engine."""
+
+        # Gate release against the closed enum too: an unknown role must not be
+        # silently popped (which would imply the lifecycle owned a lane it never
+        # defined), keeping ``_roles`` consistent with the closed role set.
+        coerced_role = self._coerce_role(role)
+        assert coerced_role is not None  # role is required for release
+        async with self._lock:
+            self._roles.pop(coerced_role.value, None)
 
     async def load(
         self,
@@ -601,6 +1326,8 @@ class ResidentModelManager:
         if memory_policy not in {"keep_then_commit", "evict_first_if_needed"}:
             raise ResidentModelError(f"unsupported memory policy {memory_policy!r}")
 
+        retirement_plan: list[tuple[ResidencyRecord, str]] = []
+        paused_engines: list[object] = []
         async with self._lock:
             canonical = self._canonical(model_name)
             if canonical is not None:
@@ -632,9 +1359,10 @@ class ResidentModelManager:
                         )
                         did_reload = True
                         if group is not None:
-                            await self._commit_group_replacement_locked(
+                            reload_plan = await self._commit_group_replacement_locked(
                                 existing_record, group, reload_candidates
                             )
+                            retirement_plan.extend(reload_plan)
                     except BaseException:
                         await self._resume_engines(reload_paused_engines)
                         raise
@@ -642,190 +1370,205 @@ class ResidentModelManager:
                 if pin:
                     existing_record.pinned = True
                 if group is not None and not did_reload:
-                    await self._replace_group_locked(
-                        existing_record, group, replace_mode
+                    retirement_plan.extend(
+                        await self._replace_group_locked(
+                            existing_record, group, replace_mode
+                        )
                     )
-                return existing_record
-
-            record: ResidencyRecord | None = None
-            candidates: list[ResidencyRecord] = []
-            paused_engines: list[object] = []
-            destructive_handoff: PrimaryHandoffLease | None = None
-            destructive_primary = False
-            destructive_primary_publish_attempted = False
-            destructive_replacement = False
-            projection: ReplacementProjection | None = None
-            try:
-                if replace_group is not None:
-                    if resolved_group is not None and resolved_group != replace_group:
-                        raise ResidentModelError(
-                            f"model {model_name!r} belongs to replacement group "
-                            f"{resolved_group!r}, not {replace_group!r}"
-                        )
-                    if replace_mode == "reject":
-                        # Preserve the established busy-before-capacity
-                        # contract without evicting anything: the zero-timeout
-                        # pause closes admission while the projection is read.
-                        (
-                            candidates,
-                            paused_engines,
-                        ) = await self._quiesce_replacement_group_locked(
-                            replace_group, replace_mode
-                        )
-                    else:
-                        candidates = self._replacement_candidates_locked(
-                            replace_group,
-                            replace_mode=replace_mode,
-                        )
-                    projection = self._replacement_projection_locked(
-                        estimate,
-                        candidates,
-                        (
-                            memory_policy
-                            if resolved_group == replace_group
-                            else "keep_then_commit"
-                        ),
-                    )
-                    if projection.reason == "role_capacity_insufficient_after_eviction":
-                        raise ResidentModelCapacityError(
-                            "resident model memory ceiling exceeded after projected "
-                            "assistant replacement",
-                            replacement_projection=projection,
-                        )
-                    evict_first = projection.strategy == "evict_first"
-                    if evict_first:
-                        if replace_mode != "reject":
+                result = existing_record
+            else:
+                record: ResidencyRecord | None = None
+                candidates: list[ResidencyRecord] = []
+                destructive_handoff: PrimaryHandoffLease | None = None
+                destructive_primary = False
+                destructive_primary_publish_attempted = False
+                destructive_replacement = False
+                projection: ReplacementProjection | None = None
+                try:
+                    if replace_group is not None:
+                        if (
+                            resolved_group is not None
+                            and resolved_group != replace_group
+                        ):
+                            raise ResidentModelError(
+                                f"model {model_name!r} belongs to replacement group "
+                                f"{resolved_group!r}, not {replace_group!r}"
+                            )
+                        if replace_mode == "reject":
+                            # Preserve the established busy-before-capacity
+                            # contract without evicting anything: the zero-timeout
+                            # pause closes admission while the projection is read.
                             (
                                 candidates,
                                 paused_engines,
                             ) = await self._quiesce_replacement_group_locked(
                                 replace_group, replace_mode
                             )
-                        (
-                            destructive_handoff,
-                            destructive_primary,
-                        ) = await self._evict_replacement_before_load_locked(
-                            candidates,
-                            replace_group,
-                        )
-                        destructive_replacement = True
-                        paused_engines = []
-                    elif paused_engines:
-                        await self._resume_engines(paused_engines)
-                        paused_engines = []
-                await self._evict_for_locked(
-                    estimate,
-                    exclude={model_name, *(item.model_id for item in candidates)},
-                )
-                before = self._read_memory()
-                if image_mode is None:
-                    entry = await self.loader(model_name, model_path, performance)
-                else:
-                    entry = await self.loader(
-                        model_name, model_path, performance, image_mode
-                    )
-                now = self._clock()
-                after = self._read_memory()
-                delta = max(0, after - before) if before and after else 0
-                record = ResidencyRecord(
-                    entry=entry,
-                    estimated_bytes=estimate,
-                    measured_bytes=delta,
-                    loaded_at=now,
-                    last_used_at=now,
-                    pinned=pin,
-                    performance=performance,
-                    replacement_projection=projection,
-                )
-                group = _effective_replace_group(record.entry, replace_group)
-                if destructive_replacement:
-                    record.primary = destructive_primary
-                    if destructive_primary:
-                        record.pinned = True
-                elif replace_group is not None:
-                    if replace_mode != "reject":
-                        (
-                            candidates,
-                            paused_engines,
-                        ) = await self._quiesce_replacement_group_locked(
-                            replace_group,
-                            replace_mode,
-                        )
-                    else:
-                        paused_engines = await self._quiesce_records_locked(
-                            candidates,
-                            replace_mode,
-                        )
-                elif group is not None and replace_group is None:
-                    candidates, paused_engines = await self._quiesce_group_locked(
-                        record, group, replace_mode
-                    )
-                # Keep the replacement private until the old inference engines
-                # have reached the policy boundary. Publication only makes the
-                # already-quiesced replacement visible to residency readers.
-                self.registry.add(entry, is_default=record.primary)
-                self._index_record(record)
-                self.loads_total += 1
-                if destructive_primary and self._on_primary_changed is not None:
-                    destructive_primary_publish_attempted = True
-                    self._on_primary_changed(entry)
-                await self._evict_for_locked(
-                    0,
-                    exclude={
-                        record.model_id,
-                        *(item.model_id for item in candidates),
-                    },
-                )
-                if destructive_handoff is not None:
-                    destructive_handoff.commit(entry)
-                    destructive_handoff = None
-                if group is not None and not destructive_replacement:
-                    await self._commit_group_replacement_locked(
-                        record, group, candidates
-                    )
-            except _CommittedReplacementCancelled:
-                # Routing already names the new target. Preserve that truth,
-                # reopen any sibling engines not yet retired, and propagate
-                # cancellation without treating the target as a failed load.
-                await self._resume_engines(paused_engines)
-                raise
-            except BaseException:
-                # Once the loader returns, this manager owns the engine.  A
-                # later admission/replacement failure must not leave a model
-                # resident even though the control-plane request was rejected.
-                try:
-                    if record is not None and record.model_id in self._records:
-                        await self._evict_locked(
-                            record, reason="load_rollback", count=False
-                        )
-                    elif record is not None:
-                        stop = getattr(record.entry.engine, "stop", None)
-                        if callable(stop):
-                            result = stop()
-                            if asyncio.iscoroutine(result):
-                                await result
-                        _release_allocator_cache()
-                finally:
-                    if (
-                        destructive_primary_publish_attempted
-                        and self._on_primary_changed is not None
-                    ):
-                        # Removing the rejected target may auto-promote an
-                        # unrelated secondary. A failed primary publication
-                        # has no valid default until a later load succeeds.
-                        self.registry.clear_default()
-                        try:
-                            self._on_primary_changed(None)
-                        except BaseException:
-                            logger.exception(
-                                "Failed to clear rejected replacement primary"
+                        else:
+                            candidates = self._replacement_candidates_locked(
+                                replace_group,
+                                replace_mode=replace_mode,
                             )
+                        projection = self._replacement_projection_locked(
+                            estimate,
+                            candidates,
+                            (
+                                memory_policy
+                                if resolved_group == replace_group
+                                else "keep_then_commit"
+                            ),
+                        )
+                        if (
+                            projection.reason
+                            == "role_capacity_insufficient_after_eviction"
+                        ):
+                            raise ResidentModelCapacityError(
+                                "resident model memory ceiling exceeded after projected "
+                                "assistant replacement",
+                                replacement_projection=projection,
+                            )
+                        evict_first = projection.strategy == "evict_first"
+                        if evict_first:
+                            if replace_mode != "reject":
+                                (
+                                    candidates,
+                                    paused_engines,
+                                ) = await self._quiesce_replacement_group_locked(
+                                    replace_group, replace_mode
+                                )
+                            (
+                                destructive_handoff,
+                                destructive_primary,
+                            ) = await self._evict_replacement_before_load_locked(
+                                candidates,
+                                replace_group,
+                            )
+                            destructive_replacement = True
+                            paused_engines = []
+                        elif paused_engines:
+                            await self._resume_engines(paused_engines)
+                            paused_engines = []
+                    await self._evict_for_locked(
+                        estimate,
+                        exclude={model_name, *(item.model_id for item in candidates)},
+                    )
+                    before = self._read_memory()
+                    if image_mode is None:
+                        entry = await self.loader(model_name, model_path, performance)
+                    else:
+                        entry = await self.loader(
+                            model_name, model_path, performance, image_mode
+                        )
+                    now = self._clock()
+                    after = self._read_memory()
+                    delta = max(0, after - before) if before and after else 0
+                    record = ResidencyRecord(
+                        entry=entry,
+                        estimated_bytes=estimate,
+                        measured_bytes=delta,
+                        loaded_at=now,
+                        last_used_at=now,
+                        pinned=pin,
+                        performance=performance,
+                        replacement_projection=projection,
+                    )
+                    group = _effective_replace_group(record.entry, replace_group)
+                    if destructive_replacement:
+                        record.primary = destructive_primary
+                        if destructive_primary:
+                            record.pinned = True
+                    elif replace_group is not None:
+                        if replace_mode != "reject":
+                            (
+                                candidates,
+                                paused_engines,
+                            ) = await self._quiesce_replacement_group_locked(
+                                replace_group,
+                                replace_mode,
+                            )
+                        else:
+                            paused_engines = await self._quiesce_records_locked(
+                                candidates,
+                                replace_mode,
+                            )
+                    elif group is not None and replace_group is None:
+                        candidates, paused_engines = await self._quiesce_group_locked(
+                            record, group, replace_mode
+                        )
+                    # Keep the replacement private until the old inference engines
+                    # have reached the policy boundary. Publication only makes the
+                    # already-quiesced replacement visible to residency readers.
+                    self.registry.add(entry, is_default=record.primary)
+                    self._index_record(record)
+                    self.loads_total += 1
+                    if destructive_primary and self._on_primary_changed is not None:
+                        destructive_primary_publish_attempted = True
+                        self._on_primary_changed(entry)
+                    await self._evict_for_locked(
+                        0,
+                        exclude={
+                            record.model_id,
+                            *(item.model_id for item in candidates),
+                        },
+                    )
                     if destructive_handoff is not None:
-                        destructive_handoff.commit(None)
-                    if not destructive_replacement:
-                        await self._resume_engines(paused_engines)
-                raise
-            return record
+                        destructive_handoff.commit(entry)
+                        destructive_handoff = None
+                    if group is not None and not destructive_replacement:
+                        retirement_plan.extend(
+                            await self._commit_group_replacement_locked(
+                                record, group, candidates
+                            )
+                        )
+                except BaseException:
+                    # Once the loader returns, this manager owns the engine.  A
+                    # later admission/replacement failure must not leave a model
+                    # resident even though the control-plane request was rejected.
+                    try:
+                        if record is not None and record.model_id in self._records:
+                            await self._evict_locked(
+                                record, reason="load_rollback", count=False
+                            )
+                        elif record is not None:
+                            stop = getattr(record.entry.engine, "stop", None)
+                            if callable(stop):
+                                result = stop()
+                                if asyncio.iscoroutine(result):
+                                    await result
+                            _release_allocator_cache()
+                    finally:
+                        if (
+                            destructive_primary_publish_attempted
+                            and self._on_primary_changed is not None
+                        ):
+                            # Removing the rejected target may auto-promote an
+                            # unrelated secondary. A failed primary publication
+                            # has no valid default until a later load succeeds.
+                            self.registry.clear_default()
+                            try:
+                                self._on_primary_changed(None)
+                            except BaseException:
+                                logger.exception(
+                                    "Failed to clear rejected replacement primary"
+                                )
+                        if destructive_handoff is not None:
+                            destructive_handoff.commit(None)
+                        if not destructive_replacement:
+                            await self._resume_engines(paused_engines)
+                    raise
+                result = record
+        # Lock released. Drive post-commit retirement OUTSIDE the lock: each
+        # retirement enqueues under a brief lock scope but awaits its cleanup
+        # outside it, so a suspended stop() cannot block snapshot/lease/other
+        # operations. Caller cancellation is the cancellation-after-commit case
+        # the issue pins down: preserve the committed route, reopen any siblings
+        # not yet retired, and surface _CommittedReplacementCancelled while the
+        # shielded cleanup continues in the background.
+        try:
+            await self._retire_sequentially(retirement_plan)
+        except asyncio.CancelledError as exc:
+            raise _CommittedReplacementCancelled from exc
+        return result
 
     def _replacement_projection_locked(
         self,
@@ -1149,7 +1892,7 @@ class ResidentModelManager:
         target: ResidencyRecord,
         group: str,
         replace_mode: str = "reject",
-    ) -> None:
+    ) -> list[tuple[ResidencyRecord, str]]:
         """Make ``target`` the sole unpinned model in a lifecycle group.
 
         The desktop uses the ``assistant`` group for its chat picker: changing
@@ -1157,13 +1900,18 @@ class ResidentModelManager:
         image engines remain resident. A protected startup assistant hands its
         primary role to the replacement before the old engine is stopped, so
         legacy health/cache routes never retain a reference to unloaded weights.
+
+        Returns the ordered replacement retirement plan (never executed under
+        the lock); the caller drives it outside ``self._lock``.
         """
 
         candidates, paused_engines = await self._quiesce_group_locked(
             target, group, replace_mode
         )
         try:
-            await self._commit_group_replacement_locked(target, group, candidates)
+            return await self._commit_group_replacement_locked(
+                target, group, candidates
+            )
         except BaseException:
             await self._resume_engines(paused_engines)
             raise
@@ -1278,13 +2026,33 @@ class ResidentModelManager:
                         "Failed to resume a model engine after replacement rollback"
                     )
 
+    async def _resume_engines_before_cancelling(self, engines: list[object]) -> None:
+        """Finish rollback recovery even if the caller is cancelled repeatedly."""
+        recovery = asyncio.create_task(self._resume_engines(engines))
+        while not recovery.done():
+            try:
+                await asyncio.shield(recovery)
+            except asyncio.CancelledError:
+                # Preserve cancellation at the outer call site, but do not let
+                # repeated cancellation strand an unretired sibling paused.
+                continue
+        recovery.result()
+
     async def _commit_group_replacement_locked(
         self,
         target: ResidencyRecord,
         group: str,
         candidates: list[ResidencyRecord],
-    ) -> None:
-        """Apply the existing primary/audio handoff to quiesced engines."""
+    ) -> list[tuple[ResidencyRecord, str]]:
+        """Apply the existing primary/audio handoff to quiesced engines.
+
+        Commits the new route and returns an ORDERED retirement plan (the
+        replaced engines to retire, primary first) WITHOUT enqueuing their
+        cleanup. The caller (`load`) drives :meth:`_retire_sequentially`
+        OUTSIDE ``self._lock`` so a suspended stop never holds the lock and a
+        caller cancellation before a later sibling is retired leaves that
+        sibling routable (it gets reopened rather than resigned to cleanup).
+        """
 
         old_primary = next((record for record in candidates if record.primary), None)
         handoff = None
@@ -1329,46 +2097,19 @@ class ResidentModelManager:
             # so no stop-attempted engine can truthfully be restored as primary.
             if handoff is not None:
                 handoff.commit(target.entry)
+            # Return the ordered retirement plan (primary first). Each is
+            # already quiesced before commit, so stopping one cannot resurrect a
+            # dead route or undo the committed primary handoff. Left unresigned
+            # (unretired) on caller cancellation, so later siblings stay
+            # routable and get reopened by the caller.
+            plan: list[tuple[ResidencyRecord, str]] = []
             if old_primary is not None:
-                try:
-                    await self._evict_locked(
-                        old_primary,
-                        reason=f"replace_{group}",
-                    )
-                except asyncio.CancelledError as exc:
-                    logger.warning(
-                        "Primary retirement cancelled after routing commit: %r",
-                        old_primary.model_id,
-                    )
-                    raise _CommittedReplacementCancelled from exc
-                except Exception:
-                    logger.exception(
-                        "Failed to stop replaced primary %r after routing commit",
-                        old_primary.model_id,
-                    )
-            # Finish retiring secondary candidates as non-failing cleanup: each
-            # is already quiesced and removed from routing before stop(), so a
-            # cleanup failure may leak resources but cannot resurrect a dead
-            # route or undo the committed primary handoff.
+                plan.append((old_primary, f"replace_{group}"))
             for record in candidates:
                 if record is old_primary:
                     continue
-                try:
-                    await self._evict_locked(
-                        record,
-                        reason=f"replace_{group}",
-                    )
-                except asyncio.CancelledError as exc:
-                    logger.warning(
-                        "Replacement cleanup cancelled after routing commit: %r",
-                        record.model_id,
-                    )
-                    raise _CommittedReplacementCancelled from exc
-                except Exception:
-                    logger.exception(
-                        "Failed to stop replaced model %r after routing retirement",
-                        record.model_id,
-                    )
+                plan.append((record, f"replace_{group}"))
+            return plan
 
     async def set_pinned(self, model_name: str, pinned: bool) -> ResidencyRecord:
         async with self._lock:
@@ -1392,7 +2133,69 @@ class ResidentModelManager:
                 raise ResidentModelError("pinned models cannot be unloaded")
             if record.active_requests or not _engine_is_idle(record.entry.engine):
                 raise ResidentModelBusyError("model is serving an active request")
-            await self._evict_locked(record, reason="explicit")
+            identity = id(record.entry.engine)
+            cleanup = self._begin_evict_locked(record, reason="explicit")
+        # Await cleanup OUTSIDE the lock: a suspended stop() must not hold the
+        # manager lock while unrelated residency operations run. The shield lets
+        # a caller cancellation propagate promptly while cleanup continues.
+        await self._await_cleanups([cleanup])
+        retirement = self._retiring.get(identity)
+        if retirement is not None and retirement.state == "failed":
+            if retirement.cleanup_error is not None:
+                raise retirement.cleanup_error
+            raise ResidentModelError(
+                retirement.cleanup_failed or "resident model cleanup failed"
+            )
+
+    def _begin_evict_locked(
+        self,
+        record: ResidencyRecord,
+        *,
+        reason: str,
+        count: bool = True,
+    ) -> asyncio.Future:
+        """Lock-held retirement phase: unroute + enqueue offline cleanup.
+
+        Returns a shield around the offline cleanup task. Callers MUST await
+        this OUTSIDE ``self._lock`` (see the retirement design contract) so a
+        suspended stop never blocks snapshot/leases/other operations. Repeated
+        retirement of the same engine identity joins the in-flight task instead
+        of calling ``stop()`` twice.
+        """
+        if record.active_requests:
+            raise ResidentModelBusyError("model is serving an active request")
+        identity = id(record.entry.engine)
+        existing = self._retiring.get(identity)
+        if existing is not None:
+            # Idempotent retirement: an overlapping caller wants the same
+            # engine gone. Unroute this (possibly sibling) record's alias, but
+            # join the existing cleanup -- never double-stop the engine.
+            self.registry.remove_if_entry(record.model_id, record.entry)
+            self._drop_record_if_same(record)
+            if (
+                existing.state == "failed"
+                and existing.task is not None
+                and existing.task.done()
+            ):
+                # A completed failed attempt owns no running cleanup. Explicit
+                # retry/shutdown may safely start one new attempt while keeping
+                # the same retirement record and byte charge authoritative.
+                existing.state = "retiring"
+                existing.cleanup_failed = None
+                existing.cleanup_error = None
+                existing.task = asyncio.create_task(
+                    self._cleanup_retired(identity, existing)
+                )
+            assert existing.task is not None
+            return asyncio.shield(existing.task)
+        record.state = "retiring"
+        self.registry.remove_if_entry(record.model_id, record.entry)
+        self._drop_record_if_same(record)
+        retirement = _Retirement(record=record, reason=reason, count=count)
+        task = asyncio.create_task(self._cleanup_retired(identity, retirement))
+        retirement.task = task
+        self._retiring[identity] = retirement
+        return asyncio.shield(task)
 
     async def _evict_locked(
         self,
@@ -1401,20 +2204,133 @@ class ResidentModelManager:
         reason: str,
         count: bool = True,
     ) -> None:
-        if record.active_requests:
-            raise ResidentModelBusyError("model is serving an active request")
-        record.state = "evicting"
-        self.registry.remove(record.model_id)
-        self._drop_record(record.model_id)
-        stop = getattr(record.entry.engine, "stop", None)
-        if callable(stop):
-            result = stop()
-            if asyncio.iscoroutine(result):
-                await result
-        _release_allocator_cache()
-        if count:
+        """Retire and await cleanup while the caller continues to hold the lock.
+
+        Used only by capacity-admission / rollback paths that need the freed
+        bytes back before they can proceed (evict-first, load rollback). The
+        replacement-commit, unload, shutdown and TTL paths use
+        :meth:`_begin_evict_locked` and await OUTSIDE the lock instead. Idle
+        engines used here stop immediately (never a suspended BlockingStop, so
+        holding the lock here does not stall unrelated residency work).
+
+        Unlike :meth:`_retire_sequentially` (which treats a cleanup failure as a
+        non-fatal recorded ``cleanup_failed``), an evict-first admission cannot
+        safely proceed when the old engine did not actually free its memory, so
+        a failed cleanup is re-raised here -- while the failed-retirement record
+        and its byte charge are retained (never claimed free).
+        """
+        shield = self._begin_evict_locked(record, reason=reason, count=count)
+        identity = id(record.entry.engine)
+        await shield
+        retirement = self._retiring.get(identity)
+        if retirement is not None and retirement.cleanup_error is not None:
+            raise retirement.cleanup_error
+
+    async def _cleanup_retired(self, identity: int, retirement: _Retirement) -> None:
+        """Offline (lock-free) cleanup owning stop() + allocator cache release.
+
+        Never runs under ``self._lock``: it owns the engine's stop() and cache
+        release, then removes the retirement record atomically on success, or
+        records a truthful ``cleanup_failed`` state (bytes stay charged).
+        """
+        engine = retirement.record.entry.engine
+        try:
+            stop = getattr(engine, "stop", None)
+            if callable(stop):
+                result = stop()
+                if asyncio.iscoroutine(result):
+                    await result
+            _release_allocator_cache()
+        except asyncio.CancelledError:
+            # The offline task itself was cancelled (extreme: someone awaited
+            # the raw task). Leave it tracked + charged so a later shutdown
+            # re-joins it rather than leaking the engine silently.
+            retirement.state = "failed"
+            retirement.cleanup_failed = "retirement cleanup cancelled before completion"
+            return
+        except Exception as exc:
+            retirement.state = "failed"
+            retirement.cleanup_failed = _sanitize_error(exc)
+            retirement.cleanup_error = exc
+            logger.warning(
+                "Failed to clean up resident model %r (%s): %s",
+                retirement.record.model_id,
+                retirement.reason,
+                retirement.cleanup_failed,
+            )
+            return
+        if retirement.count:
             self.evictions_total += 1
-        logger.info("Evicted resident model %r (%s)", record.model_id, reason)
+        self._finish_retirement(identity, retirement)
+
+    def _finish_retirement(self, identity: int, retirement: _Retirement) -> None:
+        """Atomically drop a completed retirement; no await so event-loop-safe."""
+        current = self._retiring.get(identity)
+        if current is retirement:
+            del self._retiring[identity]
+        logger.info(
+            "Evicted resident model %r (%s)",
+            retirement.record.model_id,
+            retirement.reason,
+        )
+
+    async def _await_cleanups(
+        self, cleanups: list[asyncio.Future | asyncio.Task]
+    ) -> None:
+        """Await retirement cleanup completions (call OUTSIDE self._lock)."""
+        if cleanups:
+            await asyncio.gather(*cleanups)
+
+    def _cleanup_failures(
+        self, identities: Iterable[int]
+    ) -> list[tuple[str, str, BaseException | None]]:
+        """Return truthful failures for attempted engine identities."""
+        failures = []
+        for identity in identities:
+            retirement = self._retiring.get(identity)
+            if retirement is None or retirement.state != "failed":
+                continue
+            failures.append(
+                (
+                    retirement.record.model_id,
+                    retirement.cleanup_failed or "retirement cleanup failed",
+                    retirement.cleanup_error,
+                )
+            )
+        return failures
+
+    async def _retire_sequentially(
+        self, plan: list[tuple[ResidencyRecord, str]]
+    ) -> None:
+        """Drive an ordered retirement plan outside ``self._lock``.
+
+        Each record is enqueued under a short lock scope (unrouted + moved to
+        the retirement ledger) and its cleanup is awaited OUTSIDE the lock, so a
+        suspended ``stop()`` never holds the lock. If the caller is cancelled
+        between records, the loop stops and any not-yet-retired record stays
+        routable (its caller reopens it), while the already-enqueued cleanup
+        continues shielded in the background.
+        """
+        for index, (record, reason) in enumerate(plan):
+            retirement_started = False
+            try:
+                async with self._lock:
+                    shield = self._begin_evict_locked(record, reason=reason)
+                    retirement_started = True
+                await shield
+            except asyncio.CancelledError:
+                # The current record belongs to the shielded cleanup once
+                # _begin_evict_locked succeeds; reopening it would race stop().
+                # Records not reached yet are still routable but remain paused
+                # from the group quiesce, so reopen exactly that suffix. Keeping
+                # this ownership here also covers existing-target and reload
+                # branches, which do not expose their local paused-engine list
+                # back to load().
+                first_unretired = index + 1 if retirement_started else index
+                await self._resume_engines_before_cancelling(
+                    [pending.entry.engine for pending, _ in plan[first_unretired:]]
+                )
+                raise
 
     @asynccontextmanager
     async def lease(self, model_name: str):
@@ -1444,8 +2360,11 @@ class ResidentModelManager:
 
     def snapshot(self) -> dict:
         now = self._clock()
-        models = []
-        for record in sorted(self._records.values(), key=lambda item: item.loaded_at):
+        models: list[_SnapshotModelDict] = []
+
+        def push_model(
+            record: ResidencyRecord, retirement: _Retirement | None = None
+        ) -> None:
             engine = record.entry.engine
             resident = not hasattr(engine, "is_resident") or bool(engine.is_resident)
             engine_active = _engine_active_requests(engine)
@@ -1463,36 +2382,78 @@ class ResidentModelManager:
                     int(lifecycle.get("running_requests", 0) or 0),
                     int(lifecycle.get("queued_requests", 0) or 0),
                 )
-            models.append(
-                {
-                    "id": record.model_id,
-                    "model_path": record.entry.model_path,
-                    "aliases": sorted(record.entry.aliases),
-                    "modality": (_modality(record.entry)),
-                    "serving_lane": getattr(engine, "serving_lane", None),
-                    "serving_lane_reason": getattr(engine, "serving_lane_reason", None),
-                    "state": record.state if resident else "registered",
-                    "pinned": record.pinned,
-                    "primary": record.primary,
-                    # A manager lease and a scheduler request describe
-                    # overlapping lifetimes for dynamic engines, so use the
-                    # larger count rather than double-counting. Primary traffic
-                    # has no manager lease and is supplied by the scheduler.
-                    "active_requests": active_requests,
-                    "lifecycle": lifecycle,
-                    "estimated_bytes": record.estimated_bytes,
-                    "measured_bytes": record.measured_bytes or None,
-                    "idle_seconds": max(0.0, now - record.last_used_at),
-                    "performance": (
-                        record.performance.payload() if record.performance else None
-                    ),
-                    "replacement_projection": (
-                        record.replacement_projection.payload()
-                        if record.replacement_projection
-                        else None
-                    ),
-                }
-            )
+            state = record.state if resident else "registered"
+            if retirement is not None:
+                # A retiring engine is no longer routable but its bytes are
+                # still held until cleanup finishes or fails truthfully. Surface
+                # the actual cleanup state so nobody mistakes it for resident.
+                state = retirement.state
+            row: _SnapshotModelDict = {
+                "id": record.model_id,
+                "model_path": record.entry.model_path,
+                "aliases": sorted(record.entry.aliases),
+                "modality": (_modality(record.entry)),
+                "role": _replacement_group(record.entry),
+                "serving_lane": getattr(engine, "serving_lane", None),
+                "serving_lane_reason": getattr(engine, "serving_lane_reason", None),
+                "state": state,
+                "pinned": record.pinned,
+                "primary": record.primary,
+                # A manager lease and a scheduler request describe
+                # overlapping lifetimes for dynamic engines, so use the
+                # larger count rather than double-counting. Primary traffic
+                # has no manager lease and is supplied by the scheduler.
+                "active_requests": active_requests,
+                "lifecycle": lifecycle,
+                "estimated_bytes": record.estimated_bytes,
+                "measured_bytes": record.measured_bytes or None,
+                "idle_seconds": max(0.0, now - record.last_used_at),
+                "performance": (
+                    record.performance.payload() if record.performance else None
+                ),
+                "replacement_projection": (
+                    record.replacement_projection.payload()
+                    if record.replacement_projection
+                    else None
+                ),
+                "cleanup_failed": (
+                    retirement.cleanup_failed if retirement is not None else None
+                ),
+            }
+            models.append(row)
+
+        for record in sorted(self._records.values(), key=lambda item: item.loaded_at):
+            push_model(record)
+        for retirement in sorted(
+            self._retiring.values(), key=lambda item: item.record.loaded_at
+        ):
+            push_model(retirement.record, retirement)
+        roles = [
+            {
+                "role": model["role"],
+                "model": model["id"],
+                "state": model["state"],
+                "pinned": model["pinned"],
+                "active_requests": model["active_requests"],
+                "reserved_bytes": max(
+                    model["estimated_bytes"], model["measured_bytes"] or 0
+                ),
+                "capacity_source": "model",
+            }
+            for model in models
+        ]
+        roles.extend(
+            {
+                "role": record.role,
+                "model": record.model_id,
+                "state": record.state,
+                "pinned": True,
+                "active_requests": 0,
+                "reserved_bytes": record.reserved_bytes,
+                "capacity_source": record.capacity_source,
+            }
+            for record in sorted(self._roles.values(), key=lambda item: item.role)
+        )
         usage = self._accounted_usage()
         return {
             "memory_limit_bytes": self.memory_limit_bytes,
@@ -1506,4 +2467,5 @@ class ResidentModelManager:
             "loads_total": self.loads_total,
             "evictions_total": self.evictions_total,
             "models": models,
+            "roles": roles,
         }

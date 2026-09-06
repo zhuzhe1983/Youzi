@@ -29,6 +29,7 @@ Deliberately out of scope (deferred to PR-B / PR-C):
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -292,13 +293,14 @@ def test_config_vetted_mtp_support_allowlist_is_qwen_only():
     assert _config_vetted_mtp_supports_spec_decode(None) is False
 
 
-def test_qwen4_native_mtp_depth_is_one_and_rejects_explicit_deeper_chain():
+def test_qwen4_native_mtp_defaults_to_one_and_bounds_explicit_chain():
     from vllm_mlx.cli import _resolve_mtp_depth_for_model
 
     assert _resolve_mtp_depth_for_model("qwen4_exp", 3, explicit=False) == 1
     assert _resolve_mtp_depth_for_model("qwen3_5", 3, explicit=True) == 3
-    with pytest.raises(ValueError, match="num_speculative_tokens=1 only"):
-        _resolve_mtp_depth_for_model("qwen4_exp", 2, explicit=True)
+    assert _resolve_mtp_depth_for_model("qwen4_exp", 2, explicit=True) == 2
+    with pytest.raises(ValueError, match=r"num_speculative_tokens in \[1, 2\]"):
+        _resolve_mtp_depth_for_model("qwen4_exp", 3, explicit=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1987,6 +1989,106 @@ def test_install_mtp_vendored_b_gt_1_soft_fallthrough_when_no_state():
     assert gb.orig_step_calls == 1
 
 
+def test_install_mtp_vendored_defers_new_admission_until_singleton_departs(
+    monkeypatch,
+):
+    """A live singleton verifier owns the generation batch exclusively.
+
+    mlx-lm generates first and admits queued prompts later in the same cycle.
+    The first speculative emission must therefore close that cycle's admission
+    boundary; otherwise a concurrently queued tool/plain request extends the
+    persistent batch and both requests fail closed on the following step.
+    """
+    from collections import deque
+    from types import SimpleNamespace
+
+    import mlx.core as mx
+
+    from vllm_mlx.scheduler import _install_mtp_vendored
+    from vllm_mlx.spec_decode.mtp import generator as _gen_mod
+
+    class _FakeGen:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return (1001, mx.array([0.0]), False)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(_gen_mod, "mtp_generate_step", lambda *a, **kw: _FakeGen())
+
+    gb = _StubBatchGen()
+    gb.uids = [7]
+    gb._next_tokens = mx.array([500], dtype=mx.uint32)
+    gb._next_logprobs = [mx.array([0.0])]
+    queued = deque([8])
+
+    class _BatchGenerator:
+        completion_batch_size = 4
+        _generation_batch = gb
+
+        def next(self):
+            # Mirrors mlx-lm's generate-first / admit-afterward boundary.
+            self._generation_batch._step()
+            if len(self._generation_batch.uids) >= self.completion_batch_size:
+                return [], []
+            if queued:
+                self._generation_batch.uids.append(queued.popleft())
+            return [], []
+
+        def _find_uids(self, uids):
+            return {
+                uid: (2, index)
+                for index, uid in enumerate(self._generation_batch.uids)
+                if uid in set(uids)
+            }
+
+        def remove(self, uids, return_prompt_caches=False):
+            removed = set(uids)
+            self._generation_batch.uids = [
+                uid for uid in self._generation_batch.uids if uid not in removed
+            ]
+            return {} if return_prompt_caches else None
+
+    batch_gen = _BatchGenerator()
+    requests = {
+        "req-7": SimpleNamespace(sampling_params=SimpleNamespace(temperature=0.0)),
+        # Request 8 represents a tool/custom-processor request which must stay
+        # queued while request 7 owns the vendored singleton transaction.
+        "req-8": SimpleNamespace(sampling_params=SimpleNamespace(temperature=0.0)),
+    }
+    assert _install_mtp_vendored(
+        batch_gen,
+        model=_StubModel(),
+        requests=requests,
+        uid_to_request_id={7: "req-7", 8: "req-8"},
+    )
+
+    batch_gen.next()
+
+    assert gb.uids == [7]
+    assert list(queued) == [8]
+    assert batch_gen.completion_batch_size == 1
+    assert batch_gen._mtp_vendored_admission_owner == 7
+
+    # An out-of-band row replacement cannot steal the active transaction.
+    gb.uids = [8]
+    with pytest.raises(RuntimeError, match="conflicting singleton admission owners"):
+        gb._step()
+    assert set(gb._mtp_vendored_state) == {7}
+    gb.uids = [7]
+
+    batch_gen.remove([7])
+    assert batch_gen.completion_batch_size == 4
+    assert batch_gen._mtp_vendored_admission_owner is None
+
+    batch_gen.next()
+    assert gb.uids == [8]
+    assert list(queued) == []
+
+
 @pytest.mark.parametrize("departure", ["finish", "remove"])
 def test_install_mtp_vendored_reaps_request_state_on_departure(
     monkeypatch,
@@ -2015,6 +2117,7 @@ def test_install_mtp_vendored_reaps_request_state_on_departure(
     monkeypatch.setattr(_gen_mod, "mtp_generate_step", lambda *a, **kw: _FakeGen())
 
     batch_gen, gb = _make_batch_gen_with_gb()
+    batch_gen.completion_batch_size = 4
     present = {7}
     batch_gen._find_uids = lambda uids: {
         uid: (2, index) for index, uid in enumerate(sorted(present)) if uid in set(uids)
@@ -2040,6 +2143,8 @@ def test_install_mtp_vendored_reaps_request_state_on_departure(
     gb._next_logprobs = [mx.array([0.0])]
     gb._step()
     assert set(gb._mtp_vendored_state) == {7}
+    assert batch_gen.completion_batch_size == 1
+    assert batch_gen._mtp_vendored_admission_owner == 7
 
     if departure == "finish":
         gb.next_responses = [SimpleNamespace(uid=7, finish_reason="stop")]
@@ -2050,6 +2155,8 @@ def test_install_mtp_vendored_reaps_request_state_on_departure(
     assert closed == [7]
     assert gb._mtp_vendored_state == {}
     assert gb._mtp_vendored_disabled_uids == {}
+    assert batch_gen.completion_batch_size == 4
+    assert batch_gen._mtp_vendored_admission_owner is None
 
 
 def test_install_mtp_vendored_reaps_plain_fallthrough_log_key_on_finish(
@@ -3994,7 +4101,51 @@ def test_apply_mtp_cli_reconciliation_caps_qwen4_default_depth():
     assert sc.mtp_max_k == 1
 
 
-def test_apply_mtp_cli_reconciliation_rejects_explicit_qwen4_depth(capsys):
+def test_apply_mtp_cli_reconciliation_accepts_explicit_qwen4_k2(monkeypatch):
+    from vllm_mlx.cli import _apply_mtp_cli_model_type_reconciliation
+    from vllm_mlx.scheduler import SchedulerConfig
+
+    monkeypatch.delenv("RAPID_MLX_QSA_INDEXED_SPLITK", raising=False)
+    sc = SchedulerConfig(spec_decode="mtp", mtp_max_k=2)
+    _apply_mtp_cli_model_type_reconciliation(
+        scheduler_config=sc,
+        hf_cfg_eligibility={
+            "model_type": "qwen4_exp",
+            "mtp_num_hidden_layers": 1,
+        },
+        logger=None,
+        requested_depth=2,
+        explicit_depth=True,
+    )
+
+    assert sc.mtp_max_k == 2
+    assert os.environ["RAPID_MLX_QSA_INDEXED_SPLITK"] == "1"
+
+
+def test_apply_mtp_cli_reconciliation_preserves_qwen4_k2_kernel_opt_out(
+    monkeypatch,
+):
+    from vllm_mlx.cli import _apply_mtp_cli_model_type_reconciliation
+    from vllm_mlx.scheduler import SchedulerConfig
+
+    monkeypatch.setenv("RAPID_MLX_QSA_INDEXED_SPLITK", "0")
+    sc = SchedulerConfig(spec_decode="mtp", mtp_max_k=2)
+    _apply_mtp_cli_model_type_reconciliation(
+        scheduler_config=sc,
+        hf_cfg_eligibility={
+            "model_type": "qwen4_exp",
+            "mtp_num_hidden_layers": 1,
+        },
+        logger=None,
+        requested_depth=2,
+        explicit_depth=True,
+    )
+
+    assert sc.mtp_max_k == 2
+    assert os.environ["RAPID_MLX_QSA_INDEXED_SPLITK"] == "0"
+
+
+def test_apply_mtp_cli_reconciliation_rejects_explicit_qwen4_k3(capsys):
     from vllm_mlx.cli import _apply_mtp_cli_model_type_reconciliation
     from vllm_mlx.scheduler import SchedulerConfig
 
@@ -4007,11 +4158,11 @@ def test_apply_mtp_cli_reconciliation_rejects_explicit_qwen4_depth(capsys):
                 "mtp_num_hidden_layers": 1,
             },
             logger=None,
-            requested_depth=2,
+            requested_depth=3,
             explicit_depth=True,
         )
 
-    assert "num_speculative_tokens=1 only" in capsys.readouterr().err
+    assert "num_speculative_tokens in [1, 2]" in capsys.readouterr().err
 
 
 def test_install_mtp_vendored_uid_reuse_clears_stale_state(monkeypatch):

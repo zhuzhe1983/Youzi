@@ -636,8 +636,11 @@ struct SettingsModelManagementPanel: View {
     /// plus an optional faster alternative (only the smallest tier carries
     /// one). One card per pick.
     private var recommendedPicks: [(pick: RAMBucketedDefault.Pick, isPrimary: Bool)] {
-        hardware.recommendedPicks.enumerated().map { index, pick in
-            (pick, index == 0)
+        RAMBucketedDefault.catalogPicks(
+            from: hardware.recommendedPicks,
+            catalog: catalog
+        ).map { resolved in
+            (resolved.pick, resolved.isPrimary)
         }
     }
 
@@ -646,8 +649,11 @@ struct SettingsModelManagementPanel: View {
     /// appears twice.
     private var recommendedBadgeByAlias: [String: String] {
         var map: [String: String] = [:]
-        for (index, pick) in hardware.recommendedPicks.enumerated() where map[pick.alias] == nil {
-            map[pick.alias] = index == 0 ? "RECOMMENDED" : "FASTER"
+        for resolved in RAMBucketedDefault.catalogPicks(
+            from: hardware.recommendedPicks,
+            catalog: catalog
+        ) where map[resolved.pick.alias] == nil {
+            map[resolved.pick.alias] = resolved.isPrimary ? "RECOMMENDED" : "FASTER"
         }
         return map
     }
@@ -811,7 +817,7 @@ struct SettingsModelManagementPanel: View {
         // the number in the heading and the rows under it can never
         // describe different sets.
         let entries = visibleEntries
-        let kindEntries = catalog.filter { $0.kind == capability }
+        let kindEntries = catalog.filter { $0.supports(capability) }
         let heading = ModelCacheActions.listHeading(
             filter: filterMode,
             query: query,
@@ -1149,7 +1155,7 @@ struct SettingsModelManagementPanel: View {
     // MARK: - List
 
     private var visibleEntries: [ModelEntry] {
-        let byCapability = catalog.filter { $0.kind == capability }
+        let byCapability = catalog.filter { $0.supports(capability) }
         let filtered = ModelCacheActions.filter(byCapability, by: filterMode, query: query)
         let sorted = ModelCacheActions.sorted(filtered, order: sortOrder)
         return ModelFavorites.favoritesFirst(sorted, favorites: favorites)
@@ -1178,7 +1184,7 @@ struct SettingsModelManagementPanel: View {
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(entries.enumerated()), id: \.element.alias) { idx, entry in
-                    if entry.kind == .chat {
+                    if capability == .chat {
                         row(for: entry)
                     } else {
                         capabilityRow(for: entry)
@@ -1273,12 +1279,12 @@ struct SettingsModelManagementPanel: View {
                     }.joined(separator: " · "))
                         .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
                 }
-                if entry.kind == .audio, let audioCapability = entry.audioCapability {
+                if capability == .audio, let audioCapability = entry.audioCapability {
                     Text(audioCapabilityLabel(audioCapability))
                         .font(RapidFont.caption)
                         .foregroundStyle(RapidTheme.textSecondary)
                 }
-                if entry.kind == .image, let imageCapability = entry.imageCapability {
+                if capability == .image, let imageCapability = entry.imageCapability {
                     Text(imageCapability.label)
                         .font(RapidFont.caption)
                         .foregroundStyle(RapidTheme.textSecondary)
@@ -1520,12 +1526,44 @@ struct SettingsModelManagementPanel: View {
 
     // MARK: - Actions
 
+    /// Load an atomic product snapshot only from a stable cache epoch.
+    /// Downloads can finish while the CLI probes are suspended; retrying here
+    /// prevents that older result from landing after the completion-triggered
+    /// refresh and turning an on-disk row back into Download.
+    @MainActor
+    static func stableAtomicCatalogSnapshot(
+        currentGeneration: @escaping @MainActor () -> UInt,
+        loader: @escaping @MainActor () async -> [ModelEntry]?
+    ) async -> [ModelEntry]? {
+        while !Task.isCancelled {
+            let generation = currentGeneration()
+            let entries = await loader()
+            guard !Task.isCancelled else { return nil }
+            if generation == currentGeneration() { return entries }
+        }
+        return nil
+    }
+
     private func refreshCatalog() async {
         guard let binary = server.binaryPath else {
             catalog = []
             loading = false
             return
         }
+        // One atomic snapshot drives every capability tab. This avoids four
+        // independent `models --json` calls and prevents tab-to-tab drift if a
+        // sidecar or catalog changes during refresh. Older sidecars fall
+        // through to the established per-surface compatibility loaders.
+        if let atomic = await Self.stableAtomicCatalogSnapshot(
+            currentGeneration: { downloads.cacheGeneration },
+            loader: { await ModelCatalog.productEntries(binary: binary) }
+        ) {
+            catalog = atomic
+            reconcileCapability()
+            loading = false
+            return
+        }
+        guard !Task.isCancelled else { return }
         let generation = downloads.cacheGeneration
         // Show a cached snapshot straight away and skip the spinner entirely —
         // flashing "loading" over data we already have makes every visit to

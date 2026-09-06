@@ -72,13 +72,14 @@ struct ModelServiceAuthTests {
         AuthWireProtocol.reset()
         let (server, defaults, name, client) = try fixture()
         defer { defaults.removePersistentDomain(forName: name) }
+        let originalPort = server.activePort
         for enabled in [true, false, true] {
             defaults.set(enabled, forKey: ModelServicePreference.anonymousInferenceKey)
             try await server.applySavedAuthentication(client: client)
             #expect(server.activeAnonymousInferenceAllowed == enabled)
             #expect(server.state == .ready(alias: "test"))
             #expect(server.activeBearer == "test-only-key")
-            #expect(server.activePort == 8000)
+            #expect(server.activePort == originalPort)
         }
         let requests = AuthWireProtocol.captured()
         #expect(requests.count == 3)

@@ -645,7 +645,9 @@ def _snapshot_is_complete(snap_dir: str) -> bool:
     Strategy:
       1. ``model.safetensors.index.json`` present → parse ``weight_map``
          and require every referenced shard to exist with non-zero
-         size. Codex round-4 BLOCKING #1.
+         size. Primary ``model*.safetensors`` shards must stay at the root
+         consumed by mlx-lm; safe nested paths are accepted for declared
+         auxiliary weights.
       2. Without an index, numbered ``model-N-of-M`` files must form the
          complete 1...M set. This covers an interrupted pull where one shard
          lands before the index file.
@@ -676,35 +678,32 @@ def _snapshot_is_complete(snap_dir: str) -> bool:
             # know SOMETHING expects shards here; refuse to fall
             # through to the lax single-file probe.
             return False
-        shard_names = set(weight_map.values())
-        # Codex round-6 BLOCKING #2: validate the shard filenames
-        # themselves match the loader glob, not just that they exist.
-        # Codex round-7 BLOCKING #1: AND make sure the shard names
-        # don't escape ``snap_dir`` via ``..`` or an absolute path —
-        # ``mlx_lm`` only loads ``snap_dir/model*.safetensors``, so a
-        # validated basename pointing at ``../somewhere-else`` would
-        # otherwise pass while the loader sees nothing.
+        shard_values = weight_map.values()
+        if not all(isinstance(shard, str) for shard in shard_values):
+            return False
+        shard_names = set(shard_values)
+        has_root_model_shard = False
         for shard in shard_names:
-            if not isinstance(shard, str):
+            parts = _safe_safetensors_manifest_parts(shard)
+            if parts is None:
                 return False
-            # No directory traversal, no absolute paths, no nested
-            # subdirectories — the loader's glob is non-recursive on
-            # the snapshot root.
-            if (
-                os.path.isabs(shard)
-                or os.sep in shard
-                or "/" in shard
-                or ".." in shard.split("/")
-            ):
+
+            is_root_entry = len(parts) == 1
+            is_model_shard = _is_model_weight_filename(parts[-1])
+            # mlx-lm loads primary model weights only from the snapshot root.
+            # A manifest may also declare nested auxiliary safetensors (for
+            # example a quantizer-owned vision sidecar), but a nested
+            # ``model*.safetensors`` must not make an unloaded primary shard
+            # look usable.
+            if is_root_entry != is_model_shard:
                 return False
-            if not _is_model_weight_filename(shard):
+            has_root_model_shard = has_root_model_shard or is_root_entry
+
+            target = os.path.join(snap_dir, *parts)
+            if not _is_nonempty_snapshot_manifest_file(target, snap_dir):
                 return False
-            target = os.path.join(snap_dir, shard)
-            try:
-                if os.path.getsize(target) <= 0:
-                    return False
-            except OSError:
-                return False
+        if not has_root_model_shard:
+            return False
         # Codex round-7 BLOCKING #3: the loader globs every
         # ``model*.safetensors`` at the snapshot root — a stray
         # zero-byte ``model-extra.safetensors`` next to a valid
@@ -742,6 +741,70 @@ def _snapshot_is_complete(snap_dir: str) -> bool:
     except OSError:
         pass
     return False
+
+
+def _safe_safetensors_manifest_parts(value: object) -> tuple[str, ...] | None:
+    """Return safe POSIX-relative components for an indexed weight file.
+
+    Hub manifests use ``/`` regardless of the host platform.  Reject rather
+    than normalize ambiguous paths: an index is metadata, not authority to
+    escape its snapshot or reinterpret ``.``/empty components.
+    """
+    if not isinstance(value, str) or not value.endswith(".safetensors"):
+        return None
+    if not value or value.startswith("/") or "\\" in value:
+        return None
+    parts = tuple(value.split("/"))
+    if any(part in ("", ".", "..") for part in parts):
+        return None
+    return parts
+
+
+def _snapshot_repo_root(snap_dir: str) -> str:
+    """Return the owning Hub repo root, or ``snap_dir`` for local fixtures.
+
+    A normal Hub leaf is ``<repo>/snapshots/<revision>[/checkpoint]`` and its
+    files are symlinks into ``<repo>/blobs``.  Walking ancestors instead of
+    assuming a fixed depth also covers aliases that select a checkpoint
+    subdirectory.
+    """
+    current = os.path.abspath(snap_dir)
+    while True:
+        parent = os.path.dirname(current)
+        if os.path.basename(parent) == "snapshots":
+            return os.path.dirname(parent)
+        if parent == current:
+            return os.path.abspath(snap_dir)
+        current = parent
+
+
+def _is_nonempty_snapshot_manifest_file(path: str, snap_dir: str) -> bool:
+    """Accept a real snapshot file or its normal symlink into repo blobs."""
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) <= 0:
+            return False
+        snapshot_real = os.path.realpath(snap_dir)
+        repo_root = _snapshot_repo_root(snap_dir)
+        repo_root_real = os.path.realpath(repo_root)
+        if os.path.abspath(repo_root) != os.path.abspath(snap_dir):
+            relative_snapshot = os.path.relpath(
+                os.path.abspath(snap_dir), os.path.abspath(repo_root)
+            )
+            expected_snapshot = os.path.join(repo_root_real, relative_snapshot)
+            if snapshot_real != expected_snapshot:
+                return False
+        expected_blobs = os.path.join(repo_root_real, "blobs")
+        blobs_real = os.path.realpath(expected_blobs)
+        # The leaf may be a normal Hub symlink into ``blobs``; the blob-store
+        # anchor itself may not be rebound to another repository.
+        if blobs_real != expected_blobs:
+            return False
+        target_real = os.path.realpath(path)
+        return target_real.startswith(snapshot_real + os.sep) or target_real.startswith(
+            blobs_real + os.sep
+        )
+    except OSError:
+        return False
 
 
 def _root_model_files_all_non_empty(snap_dir: str) -> bool:
@@ -1145,12 +1208,43 @@ def _snapshot_is_complete_wan_model(repo_id: str) -> bool:
             # Not a registered pinned Wan checkpoint — not our lane.
             return False
 
+        # The official 1.3B Desktop checkpoint uses a sharded Diffusers layout.
+        # Its exact runtime closure is distinct from the preconverted 2.2
+        # checkpoints below and must be checked directory-by-directory.
+        required_names: tuple[str, ...]
+        if repo_id == "Wan-AI/Wan2.1-T2V-1.3B-Diffusers":
+            required_names = (
+                "model_index.json",
+                "transformer/config.json",
+                "transformer/diffusion_pytorch_model.safetensors.index.json",
+                "transformer/diffusion_pytorch_model-00001-of-00002.safetensors",
+                "transformer/diffusion_pytorch_model-00002-of-00002.safetensors",
+                "text_encoder/config.json",
+                "text_encoder/model.safetensors.index.json",
+                "text_encoder/model-00001-of-00005.safetensors",
+                "text_encoder/model-00002-of-00005.safetensors",
+                "text_encoder/model-00003-of-00005.safetensors",
+                "text_encoder/model-00004-of-00005.safetensors",
+                "text_encoder/model-00005-of-00005.safetensors",
+                "vae/config.json",
+                "vae/diffusion_pytorch_model.safetensors",
+                "tokenizer/special_tokens_map.json",
+                "tokenizer/spiece.model",
+                "tokenizer/tokenizer.json",
+                "tokenizer/tokenizer_config.json",
+            )
+        else:
+            required_names = ()
+
         # Family-exact transformer layout, keyed off the repo id (matches the
         # four pinned checkpoints: 5B -> single, A14B -> dual). Fail closed on
         # an unclassifiable repo rather than inferring from file presence.
         repo_lower = repo_id.casefold()
-        if "a14b" in repo_lower:
-            transformer_names: tuple[str, ...] = (
+        transformer_names: tuple[str, ...]
+        if required_names:
+            transformer_names = ()
+        elif "a14b" in repo_lower:
+            transformer_names = (
                 "high_noise_model.safetensors",
                 "low_noise_model.safetensors",
             )
@@ -1186,6 +1280,33 @@ def _snapshot_is_complete_wan_model(repo_id: str) -> bool:
             # the same repo root but not under ``blobs``.
             return real.startswith(blobs_prefix)
 
+        if required_names:
+            if not all(_on_repo(name) for name in required_names):
+                return False
+            # Presence + blob containment alone is not loadability. Runtime
+            # routing (``video/wan_diffusers.py``) additionally validates the
+            # exact component manifests, index cardinality/schema/safe shard
+            # references and tokenizer artifacts — enforce the same contract
+            # here so a corrupt-but-fully-present cache goes back through
+            # repair/download instead of passing the gate and failing forever
+            # at runtime. The layout probe alone still accepts arbitrary
+            # source keys and raw non-safetensors shard bytes, so the
+            # metadata-only artifact validator additionally proves every
+            # index key maps through the production tensor mappers and every
+            # shard is a safetensors container holding its indexed tensors,
+            # without reading tensor payloads. This supplements the stricter
+            # blob-containment checks above; it does not replace them.
+            from pathlib import Path
+
+            from vllm_mlx.video.wan_diffusers import (
+                is_diffusers_wan21_layout,
+                validate_wan21_checkpoint_artifacts,
+            )
+
+            snap_root = Path(snap_dir)
+            if not is_diffusers_wan21_layout(snap_root):
+                return False
+            return validate_wan21_checkpoint_artifacts(snap_root)
         transformer_ok = all(_on_repo(n) for n in transformer_names)
         return (
             transformer_ok
@@ -1206,9 +1327,193 @@ def _snapshot_is_complete_wan_model(repo_id: str) -> bool:
 #: A repo absent from this map is unpinned and falls through to today's
 #: behavior; one present here is refused unless the resolved snapshot
 #: matches exactly (see the check in ``_mflux_snapshot_dir``).
+HIDREAM_O1_REPO = "mlx-community/HiDream-O1-Image-Dev-mlx-bf16"
+HIDREAM_O1_REVISION = "33c7a00bce8e3410304f83ec408a15a1eb6782df"
+HIDREAM_O1_DATA_FILES = (
+    "model.safetensors",
+    "extras/custom_heads.safetensors",
+    "config.json",
+    "generation_config.json",
+    "chat_template.json",
+    "preprocessor_config.json",
+    "video_preprocessor_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "merges.txt",
+    "vocab.json",
+)
+SDXL_REPO = "stabilityai/stable-diffusion-xl-base-1.0"
+SDXL_REVISION = "462165984030d82259a11f4367a4eed129e94a7b"
+SDXL_DATA_FILES = (
+    "LICENSE.md",
+    "model_index.json",
+    "scheduler/scheduler_config.json",
+    "tokenizer/merges.txt",
+    "tokenizer/special_tokens_map.json",
+    "tokenizer/tokenizer_config.json",
+    "tokenizer/vocab.json",
+    "tokenizer_2/merges.txt",
+    "tokenizer_2/special_tokens_map.json",
+    "tokenizer_2/tokenizer_config.json",
+    "tokenizer_2/vocab.json",
+    "text_encoder/config.json",
+    "text_encoder/model.fp16.safetensors",
+    "text_encoder_2/config.json",
+    "text_encoder_2/model.fp16.safetensors",
+    "unet/config.json",
+    "unet/diffusion_pytorch_model.fp16.safetensors",
+    "vae/config.json",
+    "vae/diffusion_pytorch_model.fp16.safetensors",
+)
+SD35_REPO = "argmaxinc/mlx-stable-diffusion-3.5-large-4bit-quantized"
+SD35_REVISION = "0f92f6c2a9f9e1abc6738209e87ac22b049a7d26"
+SD35_DATA_FILES = (
+    "config.json",
+    "sd3.5_large_4bit_quantized.safetensors",
+)
+SD35_SHARED_REPO = "argmaxinc/stable-diffusion"
+SD35_SHARED_REVISION = "7b7a9946015fe6ae602464dfc026c19f6b6306f9"
+SD35_SHARED_DATA_FILES = (
+    "clip_l/config.json",
+    "clip_l/model.fp16.safetensors",
+    "clip_g/config.json",
+    "clip_g/model.fp16.safetensors",
+    "tokenizer_l/vocab.json",
+    "tokenizer_l/merges.txt",
+    "tokenizer_g/vocab.json",
+    "tokenizer_g/merges.txt",
+    "t5/t5xxl.safetensors",
+)
+SD35_T5_TOKENIZER_REPO = "google/t5-v1_1-xxl"
+SD35_T5_TOKENIZER_REVISION = "3db67ab1af984cf10548a73467f0e5bca2aaaeb2"
+SD35_T5_TOKENIZER_DATA_FILES = (
+    "config.json",
+    "special_tokens_map.json",
+    "spiece.model",
+    "tokenizer_config.json",
+)
+
+BONSAI_IMAGE_REPO = "prism-ml/bonsai-image-ternary-4B-mlx-2bit"
+BONSAI_IMAGE_REVISION = "2c24c81b934a658ba5590cf39088ba929985b4a8"
+BONSAI_IMAGE_DATA_FILES = (
+    "LICENSE",
+    "NOTICE.md",
+    "model_index.json",
+    "scheduler/scheduler_config.json",
+    "text_encoder-mlx-4bit/added_tokens.json",
+    "text_encoder-mlx-4bit/config.json",
+    "text_encoder-mlx-4bit/merges.txt",
+    "text_encoder-mlx-4bit/model.safetensors",
+    "text_encoder-mlx-4bit/model.safetensors.index.json",
+    "text_encoder-mlx-4bit/special_tokens_map.json",
+    "text_encoder-mlx-4bit/tokenizer.json",
+    "text_encoder-mlx-4bit/tokenizer_config.json",
+    "text_encoder-mlx-4bit/vocab.json",
+    "tokenizer/added_tokens.json",
+    "tokenizer/chat_template.jinja",
+    "tokenizer/merges.txt",
+    "tokenizer/special_tokens_map.json",
+    "tokenizer/tokenizer.json",
+    "tokenizer/tokenizer_config.json",
+    "tokenizer/vocab.json",
+    "transformer-packed-mflux/config.json",
+    "transformer-packed-mflux/diffusion_pytorch_model.safetensors",
+    "transformer-packed-mflux/quantization_config.json",
+    "vae/config.json",
+    "vae/diffusion_pytorch_model.safetensors",
+)
+
+IMAGE_MODEL_DATA_FILES: dict[str, tuple[str, ...]] = {
+    HIDREAM_O1_REPO: HIDREAM_O1_DATA_FILES,
+    SDXL_REPO: SDXL_DATA_FILES,
+    BONSAI_IMAGE_REPO: BONSAI_IMAGE_DATA_FILES,
+    SD35_REPO: SD35_DATA_FILES,
+}
+
 IMAGE_MODEL_REVISIONS: dict[str, str] = {
     "Runpod/FLUX.2-klein-4B-mflux-4bit": "7ee1b3aa8178a1240050490072196a57da2bf2a9",
+    "mflux-community/flux-1-schnell-mflux-q4": "bcdbe817ad51175959b2e691e64eca626db30558",
+    "mflux-community/flux2-klein-4b-mflux-bf16": "4d8e1bae8eb47c7766705de2cda7dabd6cc4ba67",
     "mflux-community/qwen-image-mflux-q6": "c628fe4392d963557c3013c2709e6d3b67bca79d",
+    HIDREAM_O1_REPO: HIDREAM_O1_REVISION,
+    SDXL_REPO: SDXL_REVISION,
+    BONSAI_IMAGE_REPO: BONSAI_IMAGE_REVISION,
+    SD35_REPO: SD35_REVISION,
+}
+
+# Some native image checkpoints intentionally reuse separately published text
+# assets. Each dependency is pinned and allowlisted exactly like the primary;
+# runtime code receives only verified local snapshot directories.
+IMAGE_MODEL_RUNTIME_ASSETS: dict[str, tuple[tuple[str, str, tuple[str, ...]], ...]] = {
+    SD35_REPO: (
+        (SD35_SHARED_REPO, SD35_SHARED_REVISION, SD35_SHARED_DATA_FILES),
+        (
+            SD35_T5_TOKENIZER_REPO,
+            SD35_T5_TOKENIZER_REVISION,
+            SD35_T5_TOKENIZER_DATA_FILES,
+        ),
+    )
+}
+
+
+def image_runtime_assets_for(
+    repo_id: str,
+) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    """Pinned auxiliary data repositories required by an image checkpoint."""
+
+    return IMAGE_MODEL_RUNTIME_ASSETS.get(repo_id, ())
+
+
+def pinned_image_snapshot(repo_id: str) -> str | None:
+    """Return a complete exact-revision image-data snapshot, else ``None``."""
+
+    revision = IMAGE_MODEL_REVISIONS.get(repo_id)
+    files = IMAGE_MODEL_DATA_FILES.get(repo_id)
+    if revision is None or files is None:
+        # Auxiliary repos intentionally stay OUT of IMAGE_MODEL_DATA_FILES:
+        # registering them as primary models would make a direct
+        # ``rapid-mlx pull <aux-repo>`` silently fetch only this backend's
+        # subset instead of preserving the generic whole-repository behavior.
+        for assets in IMAGE_MODEL_RUNTIME_ASSETS.values():
+            for asset_repo, asset_revision, asset_files in assets:
+                if asset_repo == repo_id:
+                    revision, files = asset_revision, asset_files
+                    break
+            if revision is not None and files is not None:
+                break
+    if revision is None or files is None:
+        return None
+    try:
+        from huggingface_hub.constants import HF_HUB_CACHE
+    except ImportError:
+        return None
+    repo_root = os.path.realpath(
+        os.path.join(HF_HUB_CACHE, f"models--{repo_id.replace('/', '--')}")
+    )
+    snapshot = os.path.join(repo_root, "snapshots", revision)
+    if not os.path.isdir(snapshot):
+        return None
+    for relative in files:
+        candidate = os.path.join(snapshot, *relative.split("/"))
+        real = os.path.realpath(candidate)
+        if real != repo_root and not real.startswith(repo_root + os.sep):
+            return None
+        try:
+            if not os.path.isfile(candidate) or os.path.getsize(candidate) <= 0:
+                return None
+        except OSError:
+            return None
+    return snapshot
+
+
+# Most mflux checkpoints have one tokenizer and one text encoder. FLUX.1
+# schnell carries a second of each; validating only the common subset would
+# let an interrupted first download reach the runtime and fail much later.
+_MFLUX_EXTRA_TOKENIZERS: dict[str, tuple[str, ...]] = {
+    "mflux-community/flux-1-schnell-mflux-q4": ("tokenizer_2",),
+}
+_MFLUX_EXTRA_COMPONENTS: dict[str, tuple[str, ...]] = {
+    "mflux-community/flux-1-schnell-mflux-q4": ("text_encoder_2",),
 }
 
 
@@ -1365,15 +1670,34 @@ def mflux_missing_weights(repo_id: str) -> list[str] | None:
 
     missing: list[str] = []
 
-    # All currently supported mflux families use these three components and a
-    # local tokenizer. Requiring the full set prevents an interrupted pull with
-    # only one component index from looking runnable.
-    if not _is_nonempty_repo_file(
-        os.path.join(snap_dir, "tokenizer", "tokenizer.json")
-    ):
-        missing.append("tokenizer/tokenizer.json")
+    runtime_data_files = IMAGE_MODEL_DATA_FILES.get(repo_id)
+    if runtime_data_files is not None:
+        # Vendored backends have an explicit, revision-pinned data contract
+        # rather than an mflux component index. Validate every consumed file;
+        # repository scripts and samples are deliberately never downloaded.
+        missing = [
+            relative
+            for relative in runtime_data_files
+            if not _is_nonempty_repo_file(os.path.join(snap_dir, *relative.split("/")))
+        ]
+        for asset_repo, revision, _files in image_runtime_assets_for(repo_id):
+            if pinned_image_snapshot(asset_repo) is None:
+                missing.append(f"{asset_repo}@{revision}")
+        return missing
 
-    for component in ("transformer", "text_encoder", "vae"):
+    # All supported mflux families use these common components. Some
+    # checkpoints add family-specific encoders/tokenizers, which are part of
+    # the same completeness contract.
+    tokenizers = ("tokenizer",) + _MFLUX_EXTRA_TOKENIZERS.get(repo_id, ())
+    for tokenizer in tokenizers:
+        tokenizer_rel = f"{tokenizer}/tokenizer.json"
+        if not _is_nonempty_repo_file(os.path.join(snap_dir, tokenizer_rel)):
+            missing.append(tokenizer_rel)
+
+    components = ("transformer", "text_encoder", "vae") + _MFLUX_EXTRA_COMPONENTS.get(
+        repo_id, ()
+    )
+    for component in components:
         component_dir = os.path.join(snap_dir, component)
         index_rel = f"{component}/model.safetensors.index.json"
         index_path = os.path.join(component_dir, "model.safetensors.index.json")

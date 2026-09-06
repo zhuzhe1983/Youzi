@@ -20,10 +20,11 @@ import threading
 import time
 import uuid
 import weakref
-from collections.abc import AsyncIterator
-from dataclasses import replace
+from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass, replace
 from typing import Any
 
+from ..api.errors import GuidedGenerationCancelledError
 from ..api.tool_calling import convert_tools_for_template
 from ..api.utils import (
     clean_output_text,
@@ -38,6 +39,15 @@ from .base import BaseEngine, GenerationOutput
 ADMISSION_ORPHAN_GRACE_SECONDS = 2.0
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _GuidedHandoffOutcome:
+    """Cancellation state retained while guided work transfers ownership."""
+
+    cancelled: bool
+    lifecycle_task: asyncio.Task | None
+
 
 # Tokenization can change across a message boundary once the following turn is
 # appended. Replay a negligible suffix so non-trimmable caches never snapshot
@@ -647,6 +657,36 @@ def _probe_mllm_cache_type(language_model: Any) -> str | None:
     return first_incompatible_mllm_cache_type(test_cache)
 
 
+def _check_mllm_kv_quantization(scheduler_config: Any, model_name: str) -> None:
+    """MLLM-lane capability gate for quantized KV caches (#78).
+
+    The MLLM continuous-batching lane has no quantized-KV wiring
+    (``MLLMSchedulerConfig`` carries no quantization knobs). An
+    operator-explicit request therefore fails before weights load and
+    before the port reports ready; auto/profile-selected quantization
+    (e.g. the ``--reasoning`` int8 pin) serves bf16 with a warning
+    instead of staying silent.
+    """
+    if not getattr(scheduler_config, "kv_cache_quantization", False):
+        return
+    if getattr(scheduler_config, "kv_cache_dtype_explicit", False):
+        from ..kv_cache_dtype import KVCacheQuantizationUnsupportedError
+
+        raise KVCacheQuantizationUnsupportedError(
+            requested=getattr(scheduler_config, "kv_cache_dtype", "int8"),
+            model_name=model_name,
+            family_reason=(
+                "the multimodal (MLLM) serving lane has no quantized "
+                "KV-cache path, so the request would be silently ignored"
+            ),
+        )
+    logger.warning(
+        "[kv-cache] quantized KV cache (auto-selected) is not available on "
+        "the MLLM serving lane for '%s'; serving a bf16 KV cache.",
+        model_name,
+    )
+
+
 def _resolve_mllm_cache_policy(
     cache_type: str | None,
     max_num_seqs: int,
@@ -958,6 +998,14 @@ class BatchedEngine(BaseEngine):
         self._lifecycle_aborted_tasks: weakref.WeakSet[asyncio.Task] = weakref.WeakSet()
         self._generation_paused = False
         self._generation_pause_mode: str | None = None
+        # Guided decoding runs outside the continuous scheduler on the
+        # model-owning executor. Keep the same request-owned lifecycle shape:
+        # a public id maps to a thread-safe stop token, and the worker observes
+        # that token only at safe prefill/decode boundaries.
+        self._guided_requests_lock = threading.Lock()
+        self._guided_abort_events: dict[str, threading.Event] = {}
+        self._guided_owner_tasks: dict[str, asyncio.Task] = {}
+        self._guided_stopping = False
 
     @property
     def model_name(self) -> str:
@@ -1406,14 +1454,46 @@ class BatchedEngine(BaseEngine):
         if self._loaded:
             return
 
+        # Lane-capability admission at the text/MLLM split — BEFORE any
+        # weights are loaded or a scheduler is constructed, so an
+        # unsupported explicit configuration can never come up "Ready"
+        # while silently inactive (#2955).
+        self._validate_lane_capabilities()
+
         if self._is_mllm:
             await self._start_mllm()
         else:
             await self._start_llm()
 
+        with self._guided_requests_lock:
+            self._guided_stopping = False
         self._loaded = True
         self._start_time = time.monotonic()
         logger.info(f"BatchedEngine loaded: {self._model_name} (mllm={self._is_mllm})")
+
+    def _validate_lane_capabilities(self) -> None:
+        """Fail closed on capabilities the selected serving lane cannot honor.
+
+        The paged prefix cache is a text-Scheduler capability: the MLLM
+        lane runs ``MLLMScheduler``, which never constructs it, so an
+        explicit ``use_paged_cache`` there would previously load weights,
+        print Ready, and serve with the flag silently ineffective — the
+        exact #2955 failure mode, one lane over. The text lane's own
+        structural layout gate still runs later, at Scheduler construction
+        inside ``_start_llm``.
+        """
+        from ..errors import PagedCacheUnsupportedLayoutError
+
+        if self._is_mllm and getattr(self._scheduler_config, "use_paged_cache", False):
+            raise PagedCacheUnsupportedLayoutError(
+                "--use-paged-cache is not supported on the multimodal "
+                "serving lane: the paged prefix cache is a text-lane "
+                "capability and would be silently inactive here. Remove "
+                "--use-paged-cache to use the multimodal lane's default "
+                "prefix cache, or force the text-only lane (--no-mllm) if "
+                "this model should be served as text and its cache layout "
+                "passes the text lane's structural check."
+            )
 
     async def _start_mllm(self) -> None:
         """Start the MLLM engine with MLLMScheduler (continuous batching)."""
@@ -1423,6 +1503,9 @@ class BatchedEngine(BaseEngine):
         from ..mllm_scheduler import MLLMScheduler, MLLMSchedulerConfig
         from ..models.mllm import MLXMultimodalLM, TextOnlyCheckpointError
         from ..scheduler import SchedulerConfig
+
+        # Capability gate BEFORE loading weights (#78).
+        _check_mllm_kv_quantization(self._scheduler_config, self._model_name)
 
         # MLLM-tuned default for ``prefill_step_size``. Vision tokens balloon
         # the prompt size on VLMs (~2200 tokens for a 1920×1080 Qwen3-VL
@@ -1639,6 +1722,7 @@ class BatchedEngine(BaseEngine):
             processor=self._processor,
             config=mllm_config,
             step_executor=self._model_load_executor,
+            model_name=self._model_name,
         )
         await self._mllm_scheduler.start()
 
@@ -2019,6 +2103,10 @@ class BatchedEngine(BaseEngine):
 
     async def stop(self) -> None:
         """Stop the engine and cleanup resources."""
+        # Scheduler shutdown queues work on the same single model executor
+        # used by guided decoding. Signal guided jobs first so a long schema
+        # request cannot hold model unload behind it.
+        self._abort_all_guided_requests()
         if self._mllm_scheduler:
             await self._mllm_scheduler.stop()
             self._mllm_scheduler = None
@@ -3815,6 +3903,7 @@ class BatchedEngine(BaseEngine):
                 "vision_embedding_cache",
                 "vision_cache",
                 "prefix_cache",
+                "model_performance",
             ):
                 if key in mllm_stats:
                     stats[key] = mllm_stats[key]
@@ -3860,6 +3949,8 @@ class BatchedEngine(BaseEngine):
         """
         import inspect
 
+        if self.abort_guided_request(request_id):
+            return True
         if self._mllm_scheduler is not None:
             if error_kind is None:
                 return self._mllm_scheduler.abort_request(request_id)
@@ -3955,6 +4046,120 @@ class BatchedEngine(BaseEngine):
         """Check if guided generation is available."""
         return HAS_GUIDED and not self._is_mllm
 
+    def _register_guided_request(
+        self,
+        request_id: str,
+        abort_event: threading.Event,
+        owner_task: asyncio.Task | None = None,
+    ) -> None:
+        # A few lightweight embedding/tests construct the engine through
+        # ``__new__`` to avoid loading MLX. Production always initializes
+        # these in ``__init__``; keep that legacy construction shape usable.
+        if not hasattr(self, "_guided_requests_lock"):
+            self._guided_requests_lock = threading.Lock()
+            self._guided_abort_events = {}
+            self._guided_owner_tasks = {}
+            self._guided_stopping = False
+        elif not hasattr(self, "_guided_owner_tasks"):
+            self._guided_owner_tasks = {}
+        with self._guided_requests_lock:
+            if getattr(self, "_guided_stopping", False):
+                abort_event.set()
+                stopped = True
+            else:
+                stopped = False
+            if not stopped and request_id in self._guided_abort_events:
+                raise RuntimeError("guided request identity is already active")
+            if not stopped:
+                self._guided_abort_events[request_id] = abort_event
+                if owner_task is not None:
+                    self._guided_owner_tasks[request_id] = owner_task
+        if stopped:
+            self._mark_lifecycle_aborted_tasks((owner_task,))
+            raise GuidedGenerationCancelledError(lifecycle_task=owner_task)
+
+    def _mark_lifecycle_aborted_tasks(
+        self, tasks: tuple[asyncio.Task | None, ...]
+    ) -> None:
+        """Publish engine-owned cancellation through the route lifecycle ledger."""
+
+        owners = tuple(task for task in tasks if task is not None)
+        if not owners:
+            return
+        lock = getattr(self, "_admission_lock", None)
+        if lock is None:
+            return
+        with lock:
+            aborted_tasks = getattr(self, "_lifecycle_aborted_tasks", None)
+            if aborted_tasks is None:
+                aborted_tasks = weakref.WeakSet()
+                self._lifecycle_aborted_tasks = aborted_tasks
+            aborted_tasks.update(owners)
+
+    def _finish_guided_request(
+        self, request_id: str, abort_event: threading.Event
+    ) -> bool:
+        """Atomically commit completion and return whether cancellation won.
+
+        Removal is identity-checked so a late worker callback cannot remove a
+        newer request that reused the same public id.
+        """
+
+        with self._guided_requests_lock:
+            if self._guided_abort_events.get(request_id) is abort_event:
+                was_aborted = abort_event.is_set()
+                self._guided_abort_events.pop(request_id, None)
+                getattr(self, "_guided_owner_tasks", {}).pop(request_id, None)
+                return was_aborted
+        return abort_event.is_set()
+
+    def abort_guided_request(self, request_id: str) -> bool:
+        """Synchronously publish cancellation to a live guided worker."""
+
+        lock = getattr(self, "_guided_requests_lock", None)
+        abort_events = getattr(self, "_guided_abort_events", None)
+        if lock is None or abort_events is None:
+            return False
+        with lock:
+            abort_event = abort_events.get(request_id)
+            if abort_event is None:
+                return False
+            abort_event.set()
+            return True
+
+    def _abort_all_guided_requests(self) -> None:
+        """Close guided admission and unblock workers before shutdown."""
+
+        lock = getattr(self, "_guided_requests_lock", None)
+        registry = getattr(self, "_guided_abort_events", None)
+        if lock is None or registry is None:
+            return
+        with lock:
+            self._guided_stopping = True
+            for abort_event in registry.values():
+                abort_event.set()
+            owner_tasks = tuple(getattr(self, "_guided_owner_tasks", {}).values())
+        self._mark_lifecycle_aborted_tasks(owner_tasks)
+
+    def finish_guided_handoff(self, request_id: str) -> _GuidedHandoffOutcome:
+        """Transfer a retained guided identity to an admitted fallback.
+
+        Returns cancellation plus the exact lifecycle owner so shutdown cannot
+        be misreported as an explicit client cancel during the transfer.
+        """
+
+        lock = getattr(self, "_guided_requests_lock", None)
+        registry = getattr(self, "_guided_abort_events", None)
+        if lock is None or registry is None:
+            return _GuidedHandoffOutcome(cancelled=False, lifecycle_task=None)
+        with lock:
+            abort_event = registry.pop(request_id, None)
+            owner_task = getattr(self, "_guided_owner_tasks", {}).pop(request_id, None)
+            return _GuidedHandoffOutcome(
+                cancelled=bool(abort_event is not None and abort_event.is_set()),
+                lifecycle_task=owner_task,
+            )
+
     async def generate_with_schema(
         self,
         messages: list[dict[str, Any]],
@@ -4027,6 +4232,26 @@ class BatchedEngine(BaseEngine):
             chat_template_kwargs=chat_template_kwargs,
         )
 
+        request_id = kwargs.pop("request_id", None) or f"guided-{uuid.uuid4().hex}"
+        request_id_holder = kwargs.pop("request_id_holder", None)
+        request_admitted_event = kwargs.pop("request_admitted_event", None)
+        retain_request_on_failure = bool(
+            kwargs.pop("retain_guided_request_on_failure", False)
+        )
+        abort_event = threading.Event()
+        self._register_guided_request(
+            request_id,
+            abort_event,
+            owner_task=asyncio.current_task(),
+        )
+        if request_id_holder is not None:
+            try:
+                request_id_holder[0] = request_id
+            except Exception:
+                logger.debug("[guided] request_id_holder publish failed", exc_info=True)
+        if request_admitted_event is not None:
+            request_admitted_event.set()
+
         # Run guided generation on the mlx-step worker. The model was
         # loaded on _model_load_executor (#170 fix) and every later mx.eval
         # on its weights must come from that same thread — see the third-leg
@@ -4043,27 +4268,70 @@ class BatchedEngine(BaseEngine):
         # _inject_shared_model path), and its worker thread did NOT load the
         # model — using it would just trade one Stream(gpu, N) crash for another.
         loop = asyncio.get_running_loop()
-        if self._model_load_executor is not None:
-            result = await loop.run_in_executor(
-                self._model_load_executor,
-                functools.partial(
-                    self._run_guided_generation,
-                    prompt=prompt,
-                    json_schema=json_schema,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                ),
+        work = functools.partial(
+            self._run_guided_generation,
+            prompt=prompt,
+            json_schema=json_schema,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            should_abort=abort_event.is_set,
+        )
+        try:
+            if self._model_load_executor is not None:
+                future = loop.run_in_executor(self._model_load_executor, work)
+            else:
+                # Best-effort fallback for sync/test paths. Will hit Stream(gpu, N)
+                # if the model lives on a real worker thread.
+                future = asyncio.create_task(asyncio.to_thread(work))
+        except BaseException:
+            self._finish_guided_request(request_id, abort_event)
+            raise
+
+        # ``shield`` prevents an HTTP task cancellation from marking the
+        # executor future complete while its thread still owns MLX state.
+        try:
+            result = await asyncio.shield(future)
+        except GuidedGenerationCancelledError as exc:
+            self._finish_guided_request(request_id, abort_event)
+            raise GuidedGenerationCancelledError(
+                lifecycle_task=asyncio.current_task()
+            ) from exc
+        except asyncio.CancelledError:
+            abort_event.set()
+            if future.done():
+                self._finish_guided_request(request_id, abort_event)
+            else:
+                future.add_done_callback(
+                    lambda _future: self._finish_guided_request(request_id, abort_event)
+                )
+            raise
+        except BaseException:
+            self._finish_guided_request(request_id, abort_event)
+            raise
+
+        # Best-effort streaming may transfer this identity to the ordinary
+        # scheduler when guided decoding is operationally unavailable. Retain
+        # ownership until that scheduler confirms admission, eliminating an
+        # unowned cancel/404 interval.
+        if result is None and raise_on_failure and retain_request_on_failure:
+            if abort_event.is_set():
+                self._finish_guided_request(request_id, abort_event)
+                raise GuidedGenerationCancelledError(
+                    lifecycle_task=asyncio.current_task()
+                )
+            raise RuntimeError(
+                "Guided generation produced no result "
+                "(llguidance import/grammar failure — see prior log)"
             )
-        else:
-            # Best-effort fallback for sync/test paths. Will hit Stream(gpu, N)
-            # if the model lives on a real worker thread.
-            result = await asyncio.to_thread(
-                self._run_guided_generation,
-                prompt=prompt,
-                json_schema=json_schema,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
+
+        # Normal completion/failure atomically observes cancellation and
+        # releases the id before the result or fallback can commit.
+        was_aborted = self._finish_guided_request(request_id, abort_event)
+        # Close the worker-complete / result-commit race: unregistering and
+        # checking the stop token happened under one lock, so an abort either
+        # wins before commit or receives ``False`` after completion committed.
+        if was_aborted:
+            raise GuidedGenerationCancelledError(lifecycle_task=asyncio.current_task())
 
         if result is None:
             # Fallback to standard generation. The streaming caller passes
@@ -4111,6 +4379,7 @@ class BatchedEngine(BaseEngine):
         json_schema: dict[str, Any],
         max_tokens: int,
         temperature: float,
+        should_abort: Callable[[], bool] | None = None,
     ) -> str | None:
         """Run guided generation synchronously (called from thread pool)."""
         try:
@@ -4124,7 +4393,10 @@ class BatchedEngine(BaseEngine):
                 json_schema=json_schema,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                should_abort=should_abort,
             )
+        except GuidedGenerationCancelledError:
+            raise
         except Exception as e:
             # ``generate_json`` already degrades every failure — compile-reject
             # (structural validity is settled at the route boundary) and
