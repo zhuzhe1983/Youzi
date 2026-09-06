@@ -55,6 +55,7 @@ struct SettingsSecurityPanel: View {
                                      description: t("本地 MCP 程序以当前用户权限运行。工具审批不等于进程隔离；只运行可信的连接器。", "Local MCP programs run with your user permissions. Tool approval is not process isolation; only run trusted connectors."))
                     Button(t("管理", "Manage")) { router.requestedCategory = .connectors }
                         .buttonStyle(.rapidSecondaryCompact)
+                        .accessibilityIdentifier("SettingsSecurityPanel.Button.3953e09426")
                 }
             }
             SettingsSection(t("已记住的授权 · \(mcp.grantedTools.count)", "Remembered Grants · \(mcp.grantedTools.count)")) {
@@ -74,10 +75,12 @@ struct SettingsSecurityPanel: View {
                             Spacer(minLength: 0)
                             Button(t("撤销", "Revoke")) { mcp.revokeGrant(forTool: tool) }
                                 .buttonStyle(.rapidSecondaryCompact)
+                                .accessibilityIdentifier("SettingsSecurityPanel.Button.a757c3ef39")
                         }.padding(.vertical, RapidTheme.Space.sm)
                     }
                     Button(t("撤销全部并恢复逐次审批", "Revoke All and Require Approval")) { resettingGrants = true }
                         .buttonStyle(.rapidSecondaryCompact).padding(.vertical, RapidTheme.Space.sm)
+                        .accessibilityIdentifier("SettingsSecurityPanel.Button.018b4f13e6")
                 }
             }
             SettingsSection(t("文件安全", "File Safety")) {
@@ -89,6 +92,7 @@ struct SettingsSecurityPanel: View {
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, RapidTheme.Space.xs)
                     }
                 }.font(RapidFont.body).padding(.top, RapidTheme.Space.sm)
+                    .accessibilityIdentifier("SettingsSecurityPanel.DisclosureGroup.2be1b5be49")
             }
             SettingsSection(t("数据安全", "Data Safety")) {
                 SettingsRowLabel(title: t("分享与数据流转", "Sharing & Data Transfers"),
@@ -101,6 +105,7 @@ struct SettingsSecurityPanel: View {
         .alert(t("允许自动批准？", "Allow Automatic Approval?"),
                isPresented: Binding(get: { relaxing != nil }, set: { if !$0 { relaxing = nil } })) {
             Button(t("保持询问", "Keep Asking"), role: .cancel) { relaxing = nil }
+                .accessibilityIdentifier("SettingsSecurityPanel.Button.16cbfc4c55")
             Button(t("允许自动批准", "Allow Automatic Approval"), role: .destructive) {
                 switch relaxing {
                 case .browsing: browse.mode = .autoApproveAll
@@ -109,16 +114,19 @@ struct SettingsSecurityPanel: View {
                 }
                 relaxing = nil
             }
+                .accessibilityIdentifier("SettingsSecurityPanel.Button.a3d941c8e1")
         } message: {
             Text(t("模型后续操作将不再逐次请求你的确认，可能向外部发送数据或通过连接器读写文件。", "Future operations may send data externally or read/write files through connectors without individual confirmation."))
         }
         .alert(t("撤销全部授权？", "Revoke All Grants?"), isPresented: $resettingGrants) {
             Button(t("取消", "Cancel"), role: .cancel) {}
+                .accessibilityIdentifier("SettingsSecurityPanel.Button.3fbd0a8e92")
             Button(t("撤销并恢复审批", "Revoke and Require Approval"), role: .destructive) {
                 mcp.mode = .ask
                 mcp.resetGrants()
                 browse.mode = .ask
             }
+                .accessibilityIdentifier("SettingsSecurityPanel.Button.3ef2d6b7d9")
         } message: {
             Text(t("后续浏览与 MCP 工具调用会重新询问。不会终止已经开始的操作。", "Future browse and MCP calls will ask again. Already running operations are not terminated."))
         }

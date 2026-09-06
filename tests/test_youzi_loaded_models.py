@@ -15,6 +15,9 @@ from vllm_mlx.runtime.model_registry import ModelEntry, ModelRegistry
 
 @pytest.fixture
 def discovery(monkeypatch):
+    from vllm_mlx.runtime.audio_worker import audio_worker
+
+    monkeypatch.setattr(audio_worker, "snapshot", lambda: [])
     cfg = get_config()
     for name, value in dict(
         api_key=None,

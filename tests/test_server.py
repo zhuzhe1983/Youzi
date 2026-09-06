@@ -676,7 +676,7 @@ class TestAPIKeyVerification:
         """Test that invalid API key is rejected with 401."""
         import asyncio
 
-        from fastapi import HTTPException
+        from fastapi import HTTPException, Request
         from fastapi.security import HTTPAuthorizationCredentials
 
         import vllm_mlx.server as server
@@ -698,7 +698,19 @@ class TestAPIKeyVerification:
             # loop per call — get_event_loop() is deprecated in Py 3.10+ and
             # raises RuntimeError when a prior test has closed the global loop.
             with pytest.raises(HTTPException) as exc_info:
-                asyncio.run(server.verify_api_key(credentials))
+                asyncio.run(
+                    server.verify_api_key(
+                        Request(
+                            {
+                                "type": "http",
+                                "headers": [],
+                                "method": "GET",
+                                "path": "/v1/models",
+                            }
+                        ),
+                        credentials=credentials,
+                    )
+                )
 
             assert exc_info.value.status_code == 401
             assert "Invalid API key" in str(exc_info.value.detail)
@@ -709,6 +721,7 @@ class TestAPIKeyVerification:
         """Test that valid API key is accepted."""
         import asyncio
 
+        from fastapi import Request
         from fastapi.security import HTTPAuthorizationCredentials
 
         import vllm_mlx.server as server
@@ -728,7 +741,19 @@ class TestAPIKeyVerification:
 
             # Should not raise any exception. asyncio.run() over the deprecated
             # get_event_loop() — see test_verify_api_key_rejects_invalid.
-            result = asyncio.run(server.verify_api_key(credentials))
+            result = asyncio.run(
+                server.verify_api_key(
+                    Request(
+                        {
+                            "type": "http",
+                            "headers": [],
+                            "method": "GET",
+                            "path": "/v1/models",
+                        }
+                    ),
+                    credentials=credentials,
+                )
+            )
             # verify_api_key returns True on success (no exception raised)
             assert result is True or result is None
         finally:

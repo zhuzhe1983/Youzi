@@ -22,7 +22,16 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..middleware.auth import _verify_api_key_values, verify_api_key
@@ -689,7 +698,10 @@ def _video_engine(model_name: str = ""):
         except KeyError:
             pass
     elif model_name:
-        accepted = {getattr(cfg, key, None) for key in ("model_name", "model_alias", "model_path")}
+        accepted = {
+            getattr(cfg, key, None)
+            for key in ("model_name", "model_alias", "model_path")
+        }
         # Test/legacy single-engine hosts can expose only the engine identity.
         primary = getattr(cfg, "engine", None)
         accepted.add(getattr(primary, "model_name", None))
@@ -697,17 +709,27 @@ def _video_engine(model_name: str = ""):
         if model_name in accepted or (profile and profile.hf_path in accepted):
             engine = primary
     elif registry:
-        videos = [entry.engine for entry in registry.list_entries()
-                  if getattr(entry.engine, "is_video_gen", False)]
+        videos = [
+            entry.engine
+            for entry in registry.list_entries()
+            if getattr(entry.engine, "is_video_gen", False)
+        ]
         if len(videos) == 1:
             engine = videos[0]
     else:
         engine = getattr(cfg, "engine", None)
     if engine is None or not getattr(engine, "is_video_gen", False):
-        raise HTTPException(status_code=409, detail={"error": {
-            "message": "The requested video model is not ready. Load a downloaded video model in Youzi Model Settings or POST /v1/models/load.",
-            "type": "invalid_request_error", "code": "video_model_not_loaded", "param": "model",
-        }})
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": {
+                    "message": "The requested video model is not ready. Load a downloaded video model in Youzi Model Settings or POST /v1/models/load.",
+                    "type": "invalid_request_error",
+                    "code": "video_model_not_loaded",
+                    "param": "model",
+                }
+            },
+        )
     return engine
 
 
@@ -715,13 +737,16 @@ def _video_engine(model_name: str = ""):
 async def _video_engine_lease(engine):
     """Keep the exact engine alive through queued and uncancellable GPU work."""
     from ..config import get_config
+
     manager = getattr(get_config(), "residency_manager", None)
     if manager is None:
         yield engine
         return
     async with manager.lease(engine.model_name) as resident:
         if resident is not engine:
-            raise RuntimeError("Video model changed before job admission; retry the job.")
+            raise RuntimeError(
+                "Video model changed before job admission; retry the job."
+            )
         yield resident
 
 

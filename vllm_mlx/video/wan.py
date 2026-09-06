@@ -119,7 +119,9 @@ def _resolve_model_path(model_name: str) -> Path:
     try:
         # A complete local snapshot must not depend on DNS/proxy/Hub health.
         try:
-            return Path(snapshot_download(repository, revision=revision, local_files_only=True))
+            return Path(
+                snapshot_download(repository, revision=revision, local_files_only=True)
+            )
         except Exception:
             return Path(snapshot_download(repository, revision=revision))
     except Exception as exc:

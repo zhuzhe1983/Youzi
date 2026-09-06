@@ -301,10 +301,18 @@ def _verify_api_key_values(*api_keys: str | None) -> bool:
 _ANONYMOUS_ENDPOINTS = {
     "GET": {"/v1/models", "/v1/audio/voices", "/v1/videos", "/v1/videos/capabilities"},
     "POST": {
-        "/v1/chat/completions", "/v1/completions", "/v1/responses", "/v1/messages",
-        "/v1/embeddings", "/v1/audio/speech", "/v1/audio/transcriptions",
-        "/v1/audio/translations", "/v1/audio/music",
-        "/v1/images/generations", "/v1/images/edits", "/v1/videos",
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/messages",
+        "/v1/embeddings",
+        "/v1/audio/speech",
+        "/v1/audio/transcriptions",
+        "/v1/audio/translations",
+        "/v1/audio/music",
+        "/v1/images/generations",
+        "/v1/images/edits",
+        "/v1/videos",
     },
 }
 
@@ -318,8 +326,10 @@ def anonymous_inference_enabled(request: Request) -> bool:
     app = request.scope.get("app")
     state = getattr(app, "state", None)
     value = getattr(state, "youzi_anonymous_inference", None)
-    return value if isinstance(value, bool) else (
-        os.environ.get("YOUZI_ALLOW_ANONYMOUS_INFERENCE") == "1"
+    return (
+        value
+        if isinstance(value, bool)
+        else (os.environ.get("YOUZI_ALLOW_ANONYMOUS_INFERENCE") == "1")
     )
 
 
@@ -331,12 +341,17 @@ def allows_anonymous_inference(request: Request) -> bool:
     """
     if not anonymous_inference_enabled(request):
         return False
-    if any(name in request.headers for name in ("origin", "authorization", "x-api-key")):
+    if any(
+        name in request.headers for name in ("origin", "authorization", "x-api-key")
+    ):
         return False
     if request.headers.get("sec-fetch-site") == "cross-site":
         return False
     try:
-        if request.client is None or not ipaddress.ip_address(request.client.host).is_loopback:
+        if (
+            request.client is None
+            or not ipaddress.ip_address(request.client.host).is_loopback
+        ):
             return False
         host = request.url.hostname
         if host != "localhost" and not ipaddress.ip_address(host or "").is_loopback:

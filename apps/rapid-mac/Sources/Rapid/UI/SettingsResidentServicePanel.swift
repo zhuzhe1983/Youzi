@@ -27,6 +27,7 @@ struct SettingsResidentServicePanel: View {
                     Spacer()
                     Button(i18n.text(zh: "刷新列表", en: "Refresh")) { Task { await refreshCatalog() } }
                         .disabled(loadingCatalog)
+                        .accessibilityIdentifier("SettingsResidentServicePanel.Button.c2d0626f72")
                 }
                 Text(i18n.text(
                     zh: "仅选择已下载的模型，共用服务地址和鉴权。聊天模型沿用当前选择；配合下方自动启动，可在打开应用后恢复整组服务。关闭此开关或取消选择不会卸载已运行的模型。内存不足会提示，不会退出聊天；视频暂不支持常驻。",

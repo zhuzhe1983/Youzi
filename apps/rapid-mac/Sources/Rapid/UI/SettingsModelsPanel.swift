@@ -161,9 +161,11 @@ private struct SettingsChatModelPanel: View {
                                    value: sampling.activeContextWindow.map { "\($0) tokens" } ?? i18n.text(zh: "等待模型报告", en: "Awaiting model profile"))
                     Stepper(i18n.text(zh: "最大输出：\(sampling.maxTokens) tokens", en: "Maximum output: \(sampling.maxTokens) tokens"),
                             value: $sampling.maxTokens, in: SamplingConfig.maxTokensRange, step: 256)
+                        .accessibilityIdentifier("SettingsModelsPanel.Stepper.d17058cbb5")
                     HStack {
                         Text(i18n.text(zh: "温度", en: "Temperature"))
                         Slider(value: $sampling.temperature, in: SamplingConfig.temperatureRange, step: 0.05)
+                            .accessibilityIdentifier("SettingsModelsPanel.Slider.94586906fb")
                         Text(sampling.temperature.formatted(.number.precision(.fractionLength(2))))
                     }
                     Toggle(i18n.text(zh: "模型选择器显示小于 1B 的模型", en: "Show sub-1B models in the picker"), isOn: $showAll)
@@ -227,6 +229,7 @@ private struct SettingsAudioDefaultsPanel: View {
                         } else { confirmLoad = true }
                     }
                     .disabled(audio.isBusy || audio.selectedSpeechAlias.isEmpty)
+                        .accessibilityIdentifier("SettingsModelsPanel.Button.0aacaccdab")
                     if audio.isLoadingVoices { ProgressView().controlSize(.small) }
                     if let error = audio.errorMessage { Text(error).foregroundStyle(.red).font(RapidFont.caption) }
                     Text(i18n.text(zh: "打开此页不会自动加载模型。不支持的已保存音色会回退到当前模型的可用音色。", en: "Opening this page never loads a model. Unavailable saved voices fall back to an actual voice of the current model."))
@@ -297,7 +300,9 @@ private struct SettingsAudioDefaultsPanel: View {
                 if previewAfterLoad { startPreview() }
                 else { Task { if let audio { _ = await audio.loadVoices() } } }
             }
+                .accessibilityIdentifier("SettingsModelsPanel.Button.0e23dcbd3a")
             Button(i18n.text(zh: "取消", en: "Cancel"), role: .cancel) { previewAfterLoad = false }
+                .accessibilityIdentifier("SettingsModelsPanel.Button.33ae4967af")
         }
     }
 
@@ -375,6 +380,7 @@ private struct SettingsVideoDefaultsPanel: View {
                 Button(i18n.text(zh: "读取运行中模型的参数", en: "Read running model capabilities")) {
                     Task { await loadCapabilities() }
                 }.disabled(loading)
+                    .accessibilityIdentifier("SettingsModelsPanel.Button.a734d4fc97")
                 if loading { ProgressView().controlSize(.small) }
                 if let error { Text(error).font(RapidFont.caption).foregroundStyle(.red) }
                 Text(i18n.text(zh: "未启动视频模型时保留已保存值，不会为了读取参数自动加载或下载模型。", en: "Stored values are kept while the video model is stopped. Reading capabilities never starts or downloads a model."))

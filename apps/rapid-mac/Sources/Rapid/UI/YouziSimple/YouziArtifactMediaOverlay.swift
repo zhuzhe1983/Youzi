@@ -19,6 +19,7 @@ struct YouziArtifactMediaOverlay: View {
                     Color.black.opacity(0.86).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).accessibilityHidden(true)
+                    .accessibilityIdentifier("YouziArtifactMediaOverlay.Button.9849166eb8")
                 VStack(spacing: 12) {
                     HStack(spacing: 14) {
                         Text(preview.title).font(RapidFont.bodyEmphasis).lineLimit(1)
@@ -27,14 +28,18 @@ struct YouziArtifactMediaOverlay: View {
                             Button { command = .init(action: .fit) } label: {
                                 Text(i18n.text(zh: "适应窗口", en: "Fit"))
                             }
+                                .accessibilityIdentifier("YouziArtifactMediaOverlay.Button.fc14c0e6d5")
                             Button("1:1") { command = .init(action: .actual) }
                                 .help(i18n.text(zh: "一个图片像素对应一个屏幕像素", en: "One image pixel per display pixel"))
+                                .accessibilityIdentifier("YouziArtifactMediaOverlay.Button.a94f9e82bb")
                             Button { command = .init(action: .out) } label: { Image(systemName: "minus.magnifyingglass") }
                                 .help(i18n.text(zh: "缩小", en: "Zoom out"))
+                                .accessibilityIdentifier("YouziArtifactMediaOverlay.Button.9168911898")
                             Text("\(Int(zoom * 100))%")
                                 .monospacedDigit().font(RapidFont.caption).frame(minWidth: 42)
                             Button { command = .init(action: .in) } label: { Image(systemName: "plus.magnifyingglass") }
                                 .help(i18n.text(zh: "放大", en: "Zoom in"))
+                                .accessibilityIdentifier("YouziArtifactMediaOverlay.Button.e0fd2cb53f")
                         }
                         Button(action: onClose) { Image(systemName: "xmark").frame(width: 28, height: 28) }
                             .keyboardShortcut(.escape, modifiers: [])

@@ -88,6 +88,10 @@ struct YouziMultimodalLiveTests {
             read: { id, owner in
                 try #require(owner == context)
                 return try #require(assets[id])
+            },
+            voices: { entry in
+                try await AudioClient().voices(model: YouziLocalModelTools.speechModelID(entry),
+                    port: port, bearer: key)
             }
         ))
         let registry = BuiltinToolRegistry(); registry.localModels = tools
@@ -136,7 +140,11 @@ struct YouziMultimodalLiveTests {
             }
         }
         #expect(finished)
-        #expect(Set(callsSeen).isSuperset(of: YouziLocalModelTools.definitions.map { $0.function.name }))
+        // Voice discovery is optional when using the configured default;
+        // require the deliverable pipeline, not every future optional tool.
+        let requiredPipeline = ["youzi_models", "youzi_load_model", "youzi_generate_image",
+                                "youzi_synthesize_speech", "youzi_create_storybook"]
+        #expect(Set(callsSeen).isSuperset(of: requiredPipeline))
         #expect(Set(approvals) == [image.alias, speech.alias])
         let html = try #require(assets.values.first { $0.name.hasSuffix(".html") })
         let text = String(decoding: html.data, as: UTF8.self)

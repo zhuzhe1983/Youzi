@@ -42,6 +42,11 @@ jobs:
           if [[ "$CREATE_DRAFT" == true ]]; then
             test "$RELEASE_TAG" = "youzi-v$VERSION"
           fi
+      - name: Verify release manifest contract
+        run: |
+          python3 -m venv "$RUNNER_TEMP/manifest-tests"
+          "$RUNNER_TEMP/manifest-tests/bin/pip" install pytest
+          "$RUNNER_TEMP/manifest-tests/bin/python" -m pytest --noconftest -c /dev/null tests/test_youzi_release_manifest.py -q
       - name: Verify desktop regressions
         run: swift test --package-path apps/rapid-mac --filter 'Youzi|AudioClientTests|ModelServiceAuthTests|ModelAPIAccessTests|ModelGenerationDefaultsTests|SettingsVoicePreviewTests|SidecarBuildScriptTests|ServerLocatorTests'
       - name: Build complete app including inference runtime
@@ -58,7 +63,8 @@ jobs:
           ditto "$APP" "$RUNNER_TEMP/youzi-dmg/Rapid-MLX Desktop.app"
           ln -s /Applications "$RUNNER_TEMP/youzi-dmg/Applications"
           hdiutil create -volname Youzi -srcfolder "$RUNNER_TEMP/youzi-dmg" -ov -format UDZO dist-youzi/Youzi-macos-arm64.dmg
-          cp apps/rapid-mac/build/sidecar-stage/rapid-mlx-sidecar.tar.gz dist-youzi/
+          # Archive the final app runtime: the intermediate stage has no VERSION.
+          COPYFILE_DISABLE=1 tar -czf dist-youzi/rapid-mlx-sidecar.tar.gz -C "$APP/Contents/Resources" rapid-mlx
           python3 scripts/youzi-release-manifest.py dist-youzi
           (cd dist-youzi && shasum -a 256 *.zip *.dmg *.tar.gz latest.json > SHA256SUMS)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

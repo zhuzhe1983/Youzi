@@ -59,10 +59,12 @@ struct SettingsDataManagementPanel: View {
         .alert(t("移除本机分享记录？", "Remove local sharing record?"),
                isPresented: Binding(get: { removingShare != nil }, set: { if !$0 { removingShare = nil } })) {
             Button(t("取消", "Cancel"), role: .cancel) { removingShare = nil }
+                .accessibilityIdentifier("SettingsDataManagementPanel.Button.ef38ad6e19")
             Button(t("移除记录", "Remove Record"), role: .destructive) {
                 if let removingShare { sharing.history.removeRecord(removingShare.id) }
                 removingShare = nil
             }
+                .accessibilityIdentifier("SettingsDataManagementPanel.Button.fd2db89b1d")
         } message: {
             Text(t("仅删除这条记录，不会删除原文件或任务，也无法撤回接收方已获得的副本。", "Only this history entry is removed. Original files and tasks remain, and delivered copies cannot be recalled."))
         }
@@ -84,11 +86,14 @@ struct SettingsDataManagementPanel: View {
                         Spacer(minLength: 0)
                         Menu {
                             Button(t("查看内容", "View Contents")) { inspectedTask = task }
+                                .accessibilityIdentifier("SettingsDataManagementPanel.Button.4d184356b2")
                             Button(t("分享对话文本…", "Share Conversation Text…")) { sharing.shareTask(task, chat: chat) }
                                 .disabled(sharing.isSharing)
+                                .accessibilityIdentifier("SettingsDataManagementPanel.Button.ed96737893")
                         } label: { Image(systemName: "ellipsis") }
                         .menuStyle(.borderlessButton)
                         .fixedSize()
+                            .accessibilityIdentifier("SettingsDataManagementPanel.Menu.e9e8ead95c")
                         Button(t("恢复", "Restore")) { product.setTaskArchived(task.id, false, chat: chat) }
                             .buttonStyle(.rapidSecondaryCompact)
                             .accessibilityIdentifier("Settings.Data.Restore.\(task.id.uuidString)")
@@ -118,8 +123,10 @@ struct SettingsDataManagementPanel: View {
                             Spacer(minLength: 0)
                             Button(t("详情", "Details")) { inspectedShare = record }
                                 .buttonStyle(.rapidSecondaryCompact)
+                                .accessibilityIdentifier("SettingsDataManagementPanel.Button.9942966171")
                             Button(t("移除记录", "Remove Record")) { removingShare = record }
                                 .buttonStyle(.rapidSecondaryCompact)
+                                .accessibilityIdentifier("SettingsDataManagementPanel.Button.b0b6f47bbc")
                         }.padding(.vertical, RapidTheme.Space.sm)
                     }
                 }
@@ -147,6 +154,7 @@ struct SettingsDataManagementPanel: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             Button(t("关闭", "Close")) { inspectedTask = nil }.buttonStyle(.rapidSecondaryCompact)
+                .accessibilityIdentifier("SettingsDataManagementPanel.Button.3ca98d4b59")
         }.padding(RapidTheme.Space.xl).frame(minWidth: 460, idealWidth: 640, minHeight: 360, idealHeight: 560)
     }
 
@@ -161,16 +169,19 @@ struct SettingsDataManagementPanel: View {
                 Text(task.request).font(RapidFont.body).lineLimit(6).textSelection(.enabled)
                 Button(t("再次分享当前文本…", "Share Current Text Again…")) { sharing.shareTask(task, chat: chat) }
                     .buttonStyle(.rapidSecondaryCompact).disabled(sharing.isSharing)
+                    .accessibilityIdentifier("SettingsDataManagementPanel.Button.4a66a2022a")
             } else if record.kind == .file, let file = product.file(id: record.sourceID) {
                 Text(file.displayName).font(RapidFont.body)
                 Button(t("再次分享当前文件…", "Share Current File Again…")) { sharing.shareFile(file, product: product) }
                     .buttonStyle(.rapidSecondaryCompact).disabled(sharing.isSharing)
+                    .accessibilityIdentifier("SettingsDataManagementPanel.Button.2a075cf70a")
             } else {
                 Text(t("原始内容已不存在，保留历史记录。", "The source no longer exists. This history entry is retained."))
                     .font(RapidFont.secondary)
             }
             if let error = sharing.errorMessage { Text(error).font(RapidFont.caption).foregroundStyle(RapidTheme.statusError) }
             Button(t("关闭", "Close")) { inspectedShare = nil }.buttonStyle(.rapidSecondaryCompact)
+                .accessibilityIdentifier("SettingsDataManagementPanel.Button.f445cf4c63")
         }.padding(RapidTheme.Space.xl).frame(minWidth: 420, idealWidth: 560)
     }
 

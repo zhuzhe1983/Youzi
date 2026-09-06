@@ -2920,8 +2920,11 @@ def _preload_stt_blocking(model_name: str) -> None:
         # mlx-audio can load Whisper weights but tolerate a missing processor.
         # An explicit service preload must reject that state now, not report
         # ready and fail the user's first transcription later.
-        if (candidate._is_whisper and hasattr(candidate.model, "_processor")
-                and candidate.model._processor is None):
+        if (
+            candidate._is_whisper
+            and hasattr(candidate.model, "_processor")
+            and candidate.model._processor is None
+        ):
             candidate.unload()
             raise HTTPException(
                 status_code=409,
@@ -2952,14 +2955,19 @@ def _check_audio_preload_capacity(model_name: str) -> None:
         snapshot = Path(snapshot_download(model_name, local_files_only=True))
     except Exception as exc:
         raise HTTPException(
-            status_code=409, detail="Audio model is not downloaded. Open Model Files to install it."
+            status_code=409,
+            detail="Audio model is not downloaded. Open Model Files to install it.",
         ) from exc
     weights = sum(
-        p.stat().st_size for p in snapshot.rglob("*")
+        p.stat().st_size
+        for p in snapshot.rglob("*")
         if p.suffix in {".safetensors", ".npz"} and p.is_file()
     )
     if not weights:
-        raise HTTPException(status_code=409, detail="Audio model weights are incomplete. Repair the download in Model Files.")
+        raise HTTPException(
+            status_code=409,
+            detail="Audio model weights are incomplete. Repair the download in Model Files.",
+        )
     estimate = int(weights * 1.25) + 512 * 1024**2
     available = psutil.virtual_memory().available
     manager = get_config().residency_manager
@@ -3017,6 +3025,9 @@ def _generate_speech_blocking(
     from ..runtime.audio_worker import run_audio_mlx_sync
 
     _ensure_tts_loaded_blocking(model_name)
+    engine = _tts_engine
+    if engine is None:
+        raise RuntimeError("TTS model did not finish loading")
 
     kwargs = dict(gen_kwargs)
     if ref_bytes is not None:
@@ -3029,11 +3040,11 @@ def _generate_speech_blocking(
             if ref_text is not None:
                 kwargs["ref_text"] = ref_text
             audio = run_audio_mlx_sync(
-                "tts", model_name, "infer", _tts_engine.generate, input_text, **kwargs
+                "tts", model_name, "infer", engine.generate, input_text, **kwargs
             )
     else:
         audio = run_audio_mlx_sync(
-            "tts", model_name, "infer", _tts_engine.generate, input_text, **kwargs
+            "tts", model_name, "infer", engine.generate, input_text, **kwargs
         )
     from ..audio.output_format import convert_audio_output
 
@@ -3050,7 +3061,7 @@ def _generate_speech_blocking(
         audio.sample_rate = output_rate
         audio.duration = len(converted) / output_rate
     return (
-        _tts_engine.to_bytes(audio, format=response_format),
+        engine.to_bytes(audio, format=response_format),
         output_rate,
         output_channels,
     )

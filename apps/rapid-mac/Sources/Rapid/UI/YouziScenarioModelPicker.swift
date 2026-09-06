@@ -48,12 +48,14 @@ struct YouziScenarioModelPicker: View {
                 Button { Task { await refresh() } } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.plain).disabled(loading)
                     .accessibilityLabel(i18n.text(zh: "刷新模型", en: "Refresh models"))
+                    .accessibilityIdentifier("YouziScenarioModelPicker.Button.389a1e56c3")
             }
             YouziModelOccupancyBar(occupancy: occupancy)
                 .accessibilityIdentifier("Youzi.ScenarioModels.Memory")
             Picker(i18n.text(zh: "场景", en: "Scenario"), selection: $selectedKind) {
                 ForEach(ModelKind.allCases) { kind in Text(title(kind)).tag(kind) }
             }.pickerStyle(.segmented).labelsHidden()
+                .accessibilityIdentifier("YouziScenarioModelPicker.Picker.fa4bba6e5b")
             if loading {
                 HStack { ProgressView().controlSize(.small); Text(i18n.text(zh: "正在读取已下载模型…", en: "Reading downloaded models…")) }
                     .font(RapidFont.caption)
@@ -80,6 +82,7 @@ struct YouziScenarioModelPicker: View {
                 if let router { router.route(toModelTab: tab) { openWindow(id: "settings") } }
                 else { openWindow(id: "settings") }
             }.buttonStyle(.plain).font(RapidFont.secondary).foregroundStyle(RapidTheme.brand)
+                .accessibilityIdentifier("YouziScenarioModelPicker.Button.d87486a311")
         }
         .padding(16).frame(width: 440)
         .task(id: ModelPickerBar.PickerCatalogKey(binaryPath: server.binaryPath, cacheGeneration: downloads.cacheGeneration, refreshEnabled: true)) { await refresh() }

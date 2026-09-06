@@ -46,8 +46,10 @@ struct YouziSimpleResultsPage: View {
                             Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
                         }
                         .help(i18n.text(zh: "播放 / 暂停", en: "Play / Pause"))
+                            .accessibilityIdentifier("YouziSimpleResultsPage.Button.8fc150735a")
                         Button { playback.stop() } label: { Image(systemName: "xmark") }
                             .help(i18n.text(zh: "停止播放", en: "Stop playback"))
+                            .accessibilityIdentifier("YouziSimpleResultsPage.Button.8abc841163")
                     }
                     .buttonStyle(.plain).padding(14)
                     .background(RapidTheme.surfaceSidebar)
@@ -65,6 +67,7 @@ struct YouziSimpleResultsPage: View {
             get: { playback.failed }, set: { playback.failed = $0 }
         )) {
             Button(i18n.text(zh: "好", en: "OK"), role: .cancel) {}
+                .accessibilityIdentifier("YouziSimpleResultsPage.Button.2a749ebe68")
         } message: {
             Text(i18n.text(zh: "文件可能已移动、无访问权限或格式不受支持。可以通过卡片菜单在 Finder 中查看。",
                            en: "The file may have moved, require access, or use an unsupported format. Use the card menu to reveal it in Finder."))
@@ -117,6 +120,7 @@ struct YouziSimpleResultsPage: View {
             .accessibilityLabel(artifact.title)
             .accessibilityHint(i18n.text(zh: artifact.kind == .audio ? "播放或暂停音频" : "打开预览",
                                          en: artifact.kind == .audio ? "Play or pause audio" : "Open preview"))
+                .accessibilityIdentifier("YouziSimpleResultsPage.Button.f3caba8ecf")
             HStack(alignment: .top, spacing: 6) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(artifact.title).font(RapidFont.bodyEmphasis).lineLimit(2)
@@ -136,14 +140,19 @@ struct YouziSimpleResultsPage: View {
                             Task { await playback.open(artifact, lease: { try await mediaLease(artifact) }) }
                         } else { onPreview(artifact) }
                     }.disabled(!canPreview)
+                        .accessibilityIdentifier("YouziSimpleResultsPage.Button.c7db977d18")
                     Button(i18n.text(zh: "在 Finder 中显示", en: "Show in Finder")) { onRevealInFinder(artifact) }.disabled(!canResolveFile)
+                        .accessibilityIdentifier("YouziSimpleResultsPage.Button.983747be89")
                     Button(i18n.text(zh: "导出…", en: "Export…")) { onExport(artifact) }.disabled(!canResolveFile)
+                        .accessibilityIdentifier("YouziSimpleResultsPage.Button.e392e4adb6")
                     if let onShare {
                         Button(i18n.text(zh: "分享…", en: "Share…")) { onShare(artifact) }.disabled(!canResolveFile)
+                            .accessibilityIdentifier("YouziSimpleResultsPage.Button.1662d00fd4")
                     }
                 } label: { Image(systemName: "ellipsis") }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 .accessibilityLabel(i18n.text(zh: "文件操作", en: "File actions") + " " + artifact.title)
+                    .accessibilityIdentifier("YouziSimpleResultsPage.Menu.283e51db34")
             }
         }
         .accessibilityIdentifier("YouziSimple.Result.Grid.\(artifact.id.uuidString)")
@@ -178,6 +187,7 @@ struct YouziSimpleResultsPage: View {
                 TextField(i18n.text(zh: "搜索成果名称或内容…", en: "Search deliverables…"), text: $searchText)
                     .textFieldStyle(.plain)
                     .font(RapidFont.secondary)
+                    .accessibilityIdentifier("YouziSimpleResultsPage.TextField.ed33470309")
                 if !searchText.isEmpty {
                     Button {
                         searchText = ""
@@ -187,6 +197,7 @@ struct YouziSimpleResultsPage: View {
                             .foregroundStyle(RapidTheme.textSecondary)
                     }
                     .buttonStyle(.plain)
+                        .accessibilityIdentifier("YouziSimpleResultsPage.Button.9258733616")
                 }
             }
             .padding(.horizontal, RapidTheme.Space.sm)
@@ -226,6 +237,7 @@ struct YouziSimpleResultsPage: View {
             .foregroundStyle(isSelected ? RapidTheme.brandPrimary : RapidTheme.textPrimary)
         }
         .buttonStyle(.plain)
+            .accessibilityIdentifier("YouziSimpleResultsPage.Button.95cc41dabb")
     }
 
     private var sortedArtifacts: [YouziArtifact] {

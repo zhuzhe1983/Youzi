@@ -10,7 +10,16 @@ import secrets
 import tempfile
 import time
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from starlette.responses import JSONResponse
 
 from ..api.models import ImageGenerationRequest, parse_image_size
@@ -18,7 +27,11 @@ from ._async_utils import run_to_completion
 
 logger = logging.getLogger(__name__)
 
-from ..middleware.auth import _verify_api_key_values, allows_anonymous_inference, verify_api_key
+from ..middleware.auth import (
+    _verify_api_key_values,
+    allows_anonymous_inference,
+    verify_api_key,
+)
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
@@ -68,7 +81,9 @@ class ImageBodyLimitMiddleware:
             if not allows_anonymous_inference(Request(scope)):
                 _verify_api_key_values(bearer)
         except HTTPException as exc:
-            return await JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})(scope, receive, send)
+            return await JSONResponse(
+                status_code=exc.status_code, content={"detail": exc.detail}
+            )(scope, receive, send)
 
         advertised = headers.get(b"content-length")
         if advertised is not None:

@@ -41,16 +41,20 @@ struct SettingsEmbeddedAPISecurityPanel: View {
         }
         .alert(i18n.text(zh: "允许本机免密调用？", en: "Allow local requests without a key?"), isPresented: $confirmAnonymous) {
             Button(i18n.text(zh: "取消", en: "Cancel"), role: .cancel) {}
+                .accessibilityIdentifier("SettingsEmbeddedAPISecurityPanel.Button.c05ad308bf")
             Button(i18n.text(zh: "允许", en: "Allow")) { anonymousInference = true }
+                .accessibilityIdentifier("SettingsEmbeddedAPISecurityPanel.Button.0526b9cf0e")
         } message: {
             Text(i18n.text(zh: "本机其他程序将能够调用推理接口。模型管理仍需 Key，跨站网页和非本机访问不会放开。保存后立即生效。", en: "Other local programs can call inference endpoints. Model management still requires a key; cross-origin and remote requests remain protected. Applies on next service start."))
         }
         .alert(i18n.text(zh: "随机生成新的 API Key？", en: "Generate a new API Key?"), isPresented: $confirmRotation) {
             Button(i18n.text(zh: "取消", en: "Cancel"), role: .cancel) {}
+                .accessibilityIdentifier("SettingsEmbeddedAPISecurityPanel.Button.c05ad308bf.2")
             Button(i18n.text(zh: "生成", en: "Generate")) {
                 server.setEmbeddedBearerLifetime(.explicit)
                 _ = server.rotateEmbeddedBearerNow()
             }
+                .accessibilityIdentifier("SettingsEmbeddedAPISecurityPanel.Button.dd3599e98c")
         } message: {
             Text(i18n.text(zh: "当前服务不受影响。下次启动服务后，外部客户端需换用新的 Key。", en: "The running service is unaffected. External clients need the new key after the next service start."))
         }

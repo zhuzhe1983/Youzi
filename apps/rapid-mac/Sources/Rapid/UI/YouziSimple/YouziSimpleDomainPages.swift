@@ -336,6 +336,7 @@ struct YouziSimpleHelpersPage: View {
                     .foregroundStyle(isSelected ? RapidTheme.brandPrimary : RapidTheme.textPrimary)
                 }
                 .buttonStyle(.plain)
+                    .accessibilityIdentifier("YouziSimpleDomainPages.Button.3bd0888abc")
             }
         }
         .padding(4)
@@ -382,6 +383,7 @@ struct YouziSimpleHelpersPage: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(RapidTheme.brandPrimary)
+                .accessibilityIdentifier("YouziSimpleDomainPages.Button.2aa6e92175")
         }
         .padding(RapidTheme.Space.md)
         .background(
@@ -421,6 +423,7 @@ struct YouziSimpleHelpersPage: View {
                         Text(i18n.text(zh: "用这个专家新建任务", en: "Start Task with Expert"))
                     }
                     .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("YouziSimpleDomainPages.Button.284b220a72")
                 }
                 .padding(RapidTheme.Space.lg)
                 .youziSimpleCard()
@@ -537,6 +540,7 @@ struct YouziSimpleHelpersPage: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(RapidTheme.brandPrimary)
+                .accessibilityIdentifier("YouziSimpleDomainPages.Button.3d24689c87")
         }
         .padding(RapidTheme.Space.md)
         .background(
@@ -608,6 +612,7 @@ struct YouziSimpleHelpersPage: View {
                     Label(i18n.text(zh: "查看", en: "View"), systemImage: "arrow.up.right")
                 }
                 .buttonStyle(.bordered)
+                    .accessibilityIdentifier("YouziSimpleDomainPages.Button.486f6e38ba")
             }
         }
         .padding(RapidTheme.Space.lg)
@@ -624,6 +629,7 @@ struct YouziSimpleHelpersPage: View {
                     showingAddExpertSheet = false
                 }
                 .buttonStyle(.plain)
+                    .accessibilityIdentifier("YouziSimpleDomainPages.Button.802077a684")
             }
 
             Divider()
@@ -633,11 +639,13 @@ struct YouziSimpleHelpersPage: View {
                     .font(RapidFont.bodyEmphasis)
                 TextField(i18n.text(zh: "例如：全栈工程师", en: "e.g., Full Stack Engineer"), text: $newExpertName)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("YouziSimpleDomainPages.TextField.b542b1c5d5")
 
                 Text(i18n.text(zh: "角色简述", en: "Role Summary"))
                     .font(RapidFont.bodyEmphasis)
                 TextField(i18n.text(zh: "一句话描述该专家的主要特长", en: "Brief summary of strengths"), text: $newExpertSummary)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("YouziSimpleDomainPages.TextField.20a3b1314e")
 
                 Text(i18n.text(zh: "系统指令与角色设定", en: "System Instructions"))
                     .font(RapidFont.bodyEmphasis)
@@ -648,6 +656,7 @@ struct YouziSimpleHelpersPage: View {
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(RapidTheme.hairline, lineWidth: 1)
                     )
+                    .accessibilityIdentifier("YouziSimpleDomainPages.TextEditor.0ca68f6e49")
             }
 
             Spacer()
@@ -672,6 +681,7 @@ struct YouziSimpleHelpersPage: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(newExpertName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .accessibilityIdentifier("YouziSimpleDomainPages.Button.6d77e63939")
             }
         }
         .padding(RapidTheme.Space.xl)
@@ -687,6 +697,7 @@ struct YouziSimpleHelpersPage: View {
                     showingAddConnectorSheet = false
                 }
                 .buttonStyle(.plain)
+                    .accessibilityIdentifier("YouziSimpleDomainPages.Button.ea51619739")
             }
 
             Divider()
@@ -696,16 +707,19 @@ struct YouziSimpleHelpersPage: View {
                     .font(RapidFont.bodyEmphasis)
                 TextField(i18n.text(zh: "例如：SQLite 本地数据库", en: "e.g., SQLite Database"), text: $newConnectorName)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("YouziSimpleDomainPages.TextField.f8529e28e6")
 
                 Text(i18n.text(zh: "MCP 服务标识", en: "MCP Server Name"))
                     .font(RapidFont.bodyEmphasis)
                 TextField(i18n.text(zh: "例如：sqlite-local", en: "e.g., sqlite-local"), text: $newConnectorServerName)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("YouziSimpleDomainPages.TextField.6223390edc")
 
                 Text(i18n.text(zh: "连接器描述", en: "Description"))
                     .font(RapidFont.bodyEmphasis)
                 TextField(i18n.text(zh: "简要说明该连接器提供的工具与数据能力", en: "Brief summary of tools"), text: $newConnectorSummary)
                     .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("YouziSimpleDomainPages.TextField.eb716c30ee")
             }
 
             Spacer()
@@ -733,6 +747,7 @@ struct YouziSimpleHelpersPage: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(newConnectorName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .accessibilityIdentifier("YouziSimpleDomainPages.Button.134e0f6169")
             }
         }
         .padding(RapidTheme.Space.xl)

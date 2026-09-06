@@ -25,8 +25,10 @@ struct YouziModelApprovalDialog: ViewModifier {
                     Spacer()
                     Button(i18n.text(zh: "不允许", en: "Don't allow")) { store?.resolve(id: request.id, allow: false) }
                         .keyboardShortcut(.cancelAction)
+                        .accessibilityIdentifier("YouziModelApprovalDialog.Button.484d198fd0")
                     Button(i18n.text(zh: "允许此次启动", en: "Allow this start")) { store?.resolve(id: request.id, allow: true) }
                         .keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("YouziModelApprovalDialog.Button.45e21313b6")
                 }
             }.padding(24).frame(width: 440)
         }

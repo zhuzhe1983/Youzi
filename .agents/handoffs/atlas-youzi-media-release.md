@@ -13,3 +13,13 @@ installed and relaunched from /Applications; bundled runtime now healthy on
 8000. 204 Swift / 269 Python checks pass. Desktop session is locked: native
 interaction is pending unlock, not a claimed pass. Integration API checks and
 hosted draft packaging are next; formal publication remains gated on acceptance.
+
+
+Follow-up: real OpenAI Responses + video-job API and the complete live
+LLM/image/TTS/HTML toolchain passed. Actual installed app stays healthy; desktop
+still locked. Hosted package run 34050472203 failed only at stage VERSION lookup;
+final-app manifest/archive fix and three regressions are ready for a new run.
+Merge CI fixtures/types/accessibility and upstream provenance are reconciled;
+151 Swift/272 Python scoped tests, Ruff and pinned mypy budget pass.
+Next: dispatch updated main, inspect hosted assets, then native acceptance and
+formal promotion. No release exists at this point; do not promise GUI acceptance.

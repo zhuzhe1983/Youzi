@@ -225,7 +225,7 @@ async def test_cogvideox_job_maps_validated_mvp_shape(monkeypatch, tmp_path) -> 
             captured.update(kwargs)
             output_path.write_bytes(b"mp4")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": FakeEngine())
     created = await video.create_video(
         prompt="sunset",
         model="cogvideox-fun-5b-q4",
@@ -261,7 +261,7 @@ async def test_cogvideox_frame_budget_uses_actual_generation_size(
             captured.update(kwargs)
             output_path.write_bytes(b"mp4")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": FakeEngine())
     created = await video.create_video(
         prompt="long camera move",
         model="cogvideox-fun-5b-q4",
@@ -302,7 +302,7 @@ async def test_cogvideox_mvp_rejects_unsupported_shape(monkeypatch) -> None:
         model_name="dgrauet/CogVideoX-Fun-V1.5-5b-InP-mlx-q4",
         video_family="cogvideox-fun",
     )
-    monkeypatch.setattr(video, "_video_engine", lambda: engine)
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": engine)
     with pytest.raises(HTTPException, match="size=672x384"):
         await video.create_video(
             prompt="test",
@@ -322,7 +322,7 @@ async def test_cogvideox_rejects_alias_for_different_served_checkpoint(
         model_name="dgrauet/CogVideoX-Fun-V1.5-5b-InP-mlx-q4",
         video_family="cogvideox-fun",
     )
-    monkeypatch.setattr(video, "_video_engine", lambda: engine)
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": engine)
     with pytest.raises(HTTPException, match="must match"):
         await video.create_video(
             prompt="test",

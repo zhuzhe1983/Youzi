@@ -468,8 +468,8 @@ def test_version_pill_collapses_every_update_verdict(
 
     assert ax_baseline.render_node(pill, ()) == (
         'AXButton id="Footer.DesktopVersionPill" '
-        'desc="Rapid-MLX <version> <update-state>" '
-        'help="Rapid-MLX <version> <update-state>" enabled=true'
+        'desc="Youzi <version> <update-state>" '
+        'help="Youzi <version> <update-state>" enabled=true'
     )
 
 

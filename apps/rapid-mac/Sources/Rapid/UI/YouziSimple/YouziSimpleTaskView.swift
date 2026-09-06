@@ -76,6 +76,7 @@ struct YouziSimpleTaskView: View {
         }
         .alert(i18n.text(zh: "没有添加文件", en: "No files added"), isPresented: fileImportAlertBinding) {
             Button(i18n.text(zh: "好", en: "OK"), role: .cancel) {}
+                .accessibilityIdentifier("YouziSimpleTaskView.Button.2a749ebe68")
         } message: {
             Text(fileImportError ?? i18n.text(zh: "请重试。", en: "Please try again."))
         }
@@ -110,6 +111,7 @@ struct YouziSimpleTaskView: View {
                 Menu(i18n.text(zh: "项目资料", en: "Project Files")) {
                     ForEach(projectFiles) { file in
                         Button(file.displayName) { openProjectFile(file) }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Button.69751f794d")
                     }
                 }
                 .menuStyle(.borderlessButton)
@@ -119,6 +121,7 @@ struct YouziSimpleTaskView: View {
                 Menu(i18n.text(zh: "项目成果", en: "Project Deliverables")) {
                     ForEach(projectArtifacts) { artifact in
                         Button(artifact.title) { selectedArtifactID = artifact.id }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Button.78cb8a6c0e")
                     }
                 }
                 .menuStyle(.borderlessButton)
@@ -144,6 +147,7 @@ struct YouziSimpleTaskView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(i18n.text(zh: "关闭成果预览", en: "Close preview"))
+                    .accessibilityIdentifier("YouziSimpleTaskView.Button.0fdd22935e")
             }
             Text(artifact.title)
                 .font(RapidFont.bodyEmphasis)
@@ -295,6 +299,7 @@ struct YouziSimpleTaskView: View {
                             Text(message.reasoning).font(RapidFont.secondary).textSelection(.enabled)
                         }
                         .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
+                            .accessibilityIdentifier("YouziSimpleTaskView.DisclosureGroup.cfe669a0b5")
                     }
                     if let error = message.errorMessage, !error.isEmpty, message.status != .failed {
                         Text(error).font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
@@ -366,8 +371,10 @@ struct YouziSimpleTaskView: View {
                                 Button(helper.name) {
                                     insertReference("@\(helper.name) ")
                                 }
+                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.9e348b9044")
                             }
                         }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.f25632e2ea")
 
                         Menu(i18n.text(zh: "引用技能", en: "Reference Skill")) {
                             ForEach(productModel.document.skills) { skill in
@@ -375,16 +382,20 @@ struct YouziSimpleTaskView: View {
                                     insertReference("/\(skill.name) ")
                                     productModel.markSkillUsed(skill.id)
                                 }
+                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.e7fd73f4b6")
                             }
                         }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.458e538ec0")
 
                         Menu(i18n.text(zh: "引用连接器", en: "Reference Connector")) {
                             ForEach(productModel.document.connectors) { connector in
                                 Button(connector.name) {
                                     insertReference("#\(connector.name) ")
                                 }
+                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.0c91261a94")
                             }
                         }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.f0e167a6b7")
 
                         Divider()
 
@@ -392,50 +403,66 @@ struct YouziSimpleTaskView: View {
                             Button(i18n.text(zh: "由柚子在开始时管理", en: "Managed by Youzi at start")) {
                                 selectWorkspace(nil)
                             }
+                                .accessibilityIdentifier("YouziSimpleTaskView.Button.f0e6e6b312")
                             ForEach(activeWorkspaces) { workspace in
                                 Button(workspace.name) { selectWorkspace(workspace.id) }
+                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.3f2cdaaa0c")
                             }
                             Divider()
                             Button(i18n.text(zh: "管理工作空间…", en: "Manage Workspaces…")) { onNavigate(.workspaces) }
+                                .accessibilityIdentifier("YouziSimpleTaskView.Button.f8d3623359")
                         }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.073cb55317")
 
                         Menu(i18n.text(zh: "项目", en: "Projects")) {
                             Button(i18n.text(zh: "不放入项目", en: "No Project")) { selectProject(nil) }
+                                .accessibilityIdentifier("YouziSimpleTaskView.Button.03c3cf3e2c")
                             ForEach(activeProjects) { project in
                                 Button(project.name) { selectProject(project.id) }
+                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.a293291eae")
                             }
                             Divider()
                             Button(i18n.text(zh: "管理项目…", en: "Manage Projects…")) { onNavigate(.workspaces) }
+                                .accessibilityIdentifier("YouziSimpleTaskView.Button.56aa8c1007")
                         }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.3df50ff4d9")
 
                         Divider()
                         Button(i18n.text(zh: "导入文件副本…", en: "Import File Copy…")) {
                             importFile(mode: .copy, target: .task)
                         }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Button.fad9a4d805")
                         Button(i18n.text(zh: "引用本地文件…", en: "Reference Local File…")) {
                             importFile(mode: .reference, target: .task)
                         }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Button.150e3b5583")
 
                         if currentProject != nil {
                             Divider()
                             Button(i18n.text(zh: "向项目添加资料副本…", en: "Add File Copy to Project…")) {
                                 importFile(mode: .copy, target: .project)
                             }
+                                .accessibilityIdentifier("YouziSimpleTaskView.Button.ec74df28b1")
                             Button(i18n.text(zh: "向项目引用本地资料…", en: "Reference Local File in Project…")) {
                                 importFile(mode: .reference, target: .project)
                             }
+                                .accessibilityIdentifier("YouziSimpleTaskView.Button.199a32a255")
                             if !readableProjectFiles.isEmpty {
                                 Menu(i18n.text(zh: "使用已有项目资料", en: "Use Existing Project Files")) {
                                     ForEach(readableProjectFiles) { file in
                                         Button(file.displayName) { attachProjectFileToTask(file) }
+                                            .accessibilityIdentifier("YouziSimpleTaskView.Button.7c265db1ee")
                                     }
                                 }
+                                    .accessibilityIdentifier("YouziSimpleTaskView.Menu.4d61b7411e")
                             }
                         }
 
                         Divider()
                         Button(i18n.text(zh: "从模板开始…", en: "Start from Template…"), action: onShowTemplates)
+                            .accessibilityIdentifier("YouziSimpleTaskView.Button.dc919abd3c")
                         Button(i18n.text(zh: "选择帮手…", en: "Choose Helper…")) { onNavigate(.helpers) }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Button.1f017082b2")
                     } label: {
                         Label(i18n.text(zh: "添加", en: "Add"), systemImage: "plus")
                     }

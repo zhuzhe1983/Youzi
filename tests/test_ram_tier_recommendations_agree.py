@@ -23,7 +23,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO / "install.sh"
 RECOMMENDATIONS = REPO / "vllm_mlx/model_recommendations.json"
-README = REPO / "README.md"
+# Upstream benchmark table is preserved separately from the Youzi introduction.
+README = REPO / "rapid-mlx-readme.md"
 
 
 def _select_installer_starter(ram_gb: int, cached: tuple[str, ...] = ()) -> str:

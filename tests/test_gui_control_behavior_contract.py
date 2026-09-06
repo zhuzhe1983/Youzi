@@ -526,8 +526,11 @@ def test_image_generation_shell_request_matches_the_swift_default():
     view_model = IMAGE_VIEW_MODEL.read_text()
     flow = _harness_flow_body("flow_image_generation")
 
-    assert "var resolution: Resolution = .compact" in view_model, (
-        "ImageGenViewModel default drift: expected the compact (square) resolution every new canvas starts on"
+    assert (
+        "resolutionOverride ?? Resolution(rawValue: generationSettings.imageResolution) ?? .compact"
+        in view_model
+    ), (
+        "ImageGenViewModel default drift: expected saved resolution with compact fallback"
     )
     assert '.size == "512x512"' in flow, (
         "image-generation journey no longer requests the 512x512 default — it must match ImageGenViewModel's .compact default (see var resolution: Resolution = .compact)"

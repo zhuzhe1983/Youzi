@@ -285,6 +285,10 @@ def test_cached_payload_reconciles_root_duplicates_external_and_unknown(
 
 
 def test_cached_payload_reports_exact_link_as_external(monkeypatch) -> None:
+    # Completion-import tests replace sys.modules["vllm_mlx.cli"].
+    # Do not call a module-level function captured before that replacement.
+    from vllm_mlx.cli import _cached_models_json_payload
+
     monkeypatch.setattr("vllm_mlx.cli._scan_hf_cache_models", lambda: [])
     monkeypatch.setattr("vllm_mlx.cli._scan_external_model_dirs", lambda: [])
     monkeypatch.setattr(

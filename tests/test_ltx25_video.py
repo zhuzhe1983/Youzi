@@ -186,6 +186,8 @@ def test_ltx25_direct_engine_rejects_conditioning_without_image() -> None:
 def test_ltx25_runtime_preflight_fails_before_download(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # Exercise external checkout handling even when the host has bundled LTX.
+    monkeypatch.setattr(ltx25, "embedded_ltx25_interpreter", lambda: None)
     monkeypatch.setattr(video_lane.sys, "version_info", (3, 11))
     monkeypatch.setattr(ltx25, "resolve_ltx25_runtime", lambda: None)
     monkeypatch.setattr(
@@ -204,6 +206,8 @@ def test_ltx25_runtime_preflight_fails_before_download(
 def test_ltx25_runtime_preflight_requires_uv(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # Exercise external checkout handling even when the host has bundled LTX.
+    monkeypatch.setattr(ltx25, "embedded_ltx25_interpreter", lambda: None)
     monkeypatch.setattr(video_lane.sys, "version_info", (3, 11))
     monkeypatch.setattr(ltx25, "resolve_ltx25_runtime", lambda: "/runtime/ltx-2-mlx")
     monkeypatch.setattr(video_lane, "_resolve_ffmpeg", lambda: "/usr/bin/ffmpeg")
@@ -221,6 +225,8 @@ def test_ltx25_runtime_preflight_requires_uv(
 def test_ltx25_missing_runtime_prints_setup_walkthrough(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # Exercise external checkout handling even when the host has bundled LTX.
+    monkeypatch.setattr(ltx25, "embedded_ltx25_interpreter", lambda: None)
     monkeypatch.setattr(video_lane.sys, "version_info", (3, 11))
     monkeypatch.setattr(ltx25, "resolve_ltx25_runtime", lambda: None)
     monkeypatch.setattr(
@@ -257,6 +263,8 @@ def test_ltx25_missing_runtime_prints_setup_walkthrough(
 def test_ltx25_provisioning_failure_surfaces_cause_not_clone_steps(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # Exercise external checkout handling even when the host has bundled LTX.
+    monkeypatch.setattr(ltx25, "embedded_ltx25_interpreter", lambda: None)
     monkeypatch.setattr(video_lane.sys, "version_info", (3, 11))
     monkeypatch.setattr(ltx25, "resolve_ltx25_runtime", lambda: "/runtime/ltx-2-mlx")
 
@@ -694,6 +702,8 @@ def test_serve_routes_ltx25_model_to_specific_preflight(
 def test_ltx25_engine_invokes_pinned_runtime_contract(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Exercise external checkout handling even when the host has bundled LTX.
+    monkeypatch.setattr(ltx25, "embedded_ltx25_interpreter", lambda: None)
     monkeypatch.setenv("PYTHONHOME", "/signed-sidecar/python")
     monkeypatch.setenv("PYTHONPATH", "/signed-sidecar/site-packages")
     output = tmp_path / "result.mp4"
@@ -1160,7 +1170,7 @@ async def test_ltx25_route_rejects_unsupported_cfg_before_queueing(
     engine = SimpleNamespace(
         model_name="MrMofer/ltx-2.5-mlx-q8", video_family="ltx-2.5"
     )
-    monkeypatch.setattr(video, "_video_engine", lambda: engine)
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": engine)
     monkeypatch.setattr(video, "_accepting_jobs", True)
     before = set(video._jobs)
 

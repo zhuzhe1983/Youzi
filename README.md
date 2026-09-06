@@ -111,11 +111,14 @@ GitHub 编译检查、手动打包／草稿 Release、本地服务验证与回�
 [交付说明](docs/engineering/operations/youzi-delivery.md)。
 自动化不会直接发布正式版本；本地测试包使用临时签名，尚未做 Apple 公证。
 
-## 致谢与项目关系
+## Acknowledgements
+
+### 致谢与项目关系
 
 - **WorkBuddy**：为工作台布局、任务组织、个性化和交互体验提供灵感。
 - **[Rapid-MLX](https://github.com/raullenchai/Rapid-MLX)**：提供底层推理引擎、模型管理和
   API 服务的技术基础。感谢原作者与所有贡献者。
+- 底层引擎的上游还包括 [vLLM-MLX](https://github.com/waybarrios/vllm-mlx)，感谢其开源贡献；归属信息保留于 NOTICE。
 - 同时感谢 MLX 生态、模型作者，以及项目依赖的其他开源组件与贡献者。
 
 柚子是独立的个人衍生项目，**不是 WorkBuddy 或 Rapid-MLX 的官方客户端，

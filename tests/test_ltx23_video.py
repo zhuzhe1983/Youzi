@@ -589,7 +589,7 @@ async def test_video_rejects_unsafe_pixel_time_workload(
     class FakeEngine:
         model_name = "notapalindrome/ltx23-mlx-av-q4"
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": FakeEngine())
     with pytest.raises(HTTPException, match="safe LTX-2.3 Q4 workload") as exc:
         await video.create_video(
             prompt="too large",
@@ -615,7 +615,7 @@ async def test_openai_720p_size_is_aligned_then_cropped(
             captured.update(kwargs)
             output_path.write_bytes(b"mp4")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": FakeEngine())
     created = await video.create_video(
         prompt="landscape",
         model="ltx-2.3-mlx-q4",
@@ -659,7 +659,7 @@ async def test_video_route_threads_motion_controls(
             captured.update(kwargs)
             output_path.write_bytes(b"mp4")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": FakeEngine())
     created = await video.create_video(
         prompt="a fast camera move",
         model="ltx-2.3-mlx-q4",
@@ -697,7 +697,7 @@ async def test_video_route_validates_motion_controls(
     class FakeEngine:
         model_name = "notapalindrome/ltx23-mlx-av-q4"
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": FakeEngine())
     base = {
         "prompt": "test",
         "model": "ltx-2.3-mlx-q4",
@@ -729,7 +729,7 @@ async def test_failed_reference_upload_is_cleaned(
         async def read(self, size: int) -> bytes:
             raise OSError("upload interrupted")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": FakeEngine())
     before = set(video._jobs_root.iterdir())
     with pytest.raises(OSError, match="upload interrupted"):
         await video.create_video(
@@ -751,7 +751,7 @@ async def test_video_job_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
         def generate(self, *, output_path: Path, **kwargs) -> None:
             output_path.write_bytes(b"generated-mp4")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FakeEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": FakeEngine())
     created = await video.create_video(
         prompt="Ocean waves at sunset",
         model="ltx-2.3-mlx-q4",
@@ -796,7 +796,7 @@ async def test_video_jobs_stay_queued_until_worker_is_free(
                 assert release.wait(timeout=5)
             output_path.write_bytes(b"mp4")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: BlockingEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": BlockingEngine())
     first = await video.create_video(
         prompt="first",
         model="ltx-2.3-mlx-q4",
@@ -849,7 +849,7 @@ async def test_delete_cancels_a_queued_job(monkeypatch: pytest.MonkeyPatch) -> N
             assert release.wait(timeout=5)
             output_path.write_bytes(b"mp4")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: BlockingEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": BlockingEngine())
     first = await video.create_video(
         prompt="first",
         model="ltx-2.3-mlx-q4",
@@ -894,7 +894,7 @@ async def test_cancelled_job_reaches_terminal_state_and_cleans_files(
             assert release.wait(timeout=5)
             output_path.write_bytes(b"late-output")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: BlockingEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": BlockingEngine())
     created = await video.create_video(
         prompt="cancel me",
         model="ltx-2.3-mlx-q4",
@@ -937,7 +937,7 @@ async def test_failed_generation_removes_partial_artifacts(
             output_path.write_bytes(b"partial")
             raise RuntimeError("private /tmp/detail")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: FailingEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": FailingEngine())
     created = await video.create_video(
         prompt="fail",
         model="ltx-2.3-mlx-q4",
@@ -975,7 +975,7 @@ async def test_shutdown_is_bounded_and_stops_video_admission(
             assert release.wait(timeout=5)
             output_path.write_bytes(b"late-output")
 
-    monkeypatch.setattr(video, "_video_engine", lambda: BlockingEngine())
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": BlockingEngine())
     video.start_video_jobs()
     created = await video.create_video(
         prompt="shutdown",

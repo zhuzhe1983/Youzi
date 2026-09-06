@@ -73,3 +73,33 @@ status must be recorded after execution, not inferred from these checks.
 - Fresh scoped verification: 204 Swift tests / 35 suites and 269 Python tests
   passed. The optional native visual suite is skipped unless explicitly enabled;
   it is not counted as an interactive GUI acceptance.
+
+
+### Integration and packaging follow-up
+
+- The packaged runtime passed an isolated three-model API check: chat + TTS +
+  Wan I2V, actual WAV and asynchronous MP4 output, and chat still responding
+  afterwards. The official OpenAI SDK decoded `models.list()` and completed
+  `responses.create()` against that service.
+- The real live Swift toolchain produced an offline illustrated/narrated HTML
+  (1,155,766 bytes): model discovery, approved image/TTS loads, voice discovery,
+  image generation, speech synthesis and storybook assembly. Approvals were
+  simulated explicitly by this test; no user conversation/history was changed.
+  This is not native GUI acceptance or a new GUI-visible task.
+- Actions run 34050472203 compiled/tested the app and built the complete runtime,
+  but packaging failed because it read VERSION from intermediate staging.
+  The manifest now reads the final app; the updater archive is also created
+  from that versioned final runtime. Three hermetic regressions reject missing
+  or stale archived versions and verify manifests without a staging directory.
+- Merge-CI reconciliation preserves Youzi branding, configurable image defaults,
+  and the concise README; upstream benchmark checks use rapid-mlx-readme.md.
+  Added accessibility identifiers without changing layout/actions, isolated
+  loaded-audio discovery fixtures and external-LTX fixtures, and adapted private
+  video/auth mocks to their actual call signatures. The exact-link cache test
+  resolves the current CLI module after completion tests reload it.
+- Verification after reconciliation: 151 scoped Swift tests / 28 suites pass;
+  272 scoped Python tests pass. Ruff lint/format pass; the pinned Python 3.11
+  mypy gate passes with its unchanged 701-error legacy baseline (no new debt).
+  A real archive from the final app contains the matching 0.14.3 VERSION.
+- Formal promotion remains gated on native-client acceptance after user unlock;
+  do not call the failed hosted run a published release.

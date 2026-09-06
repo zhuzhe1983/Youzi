@@ -2647,7 +2647,11 @@ async def _load_dynamic_resident_model(
             await engine.start()
         engine.generate_warmup()
     elif modality == "video-gen":
-        from .runtime.video_lane import VideoEngine, VideoRuntimeError, require_video_runtime_or_exit
+        from .runtime.video_lane import (
+            VideoEngine,
+            VideoRuntimeError,
+            require_video_runtime_or_exit,
+        )
 
         def prepare_video():
             # CLI startup used this probe, but the Desktop residency endpoint

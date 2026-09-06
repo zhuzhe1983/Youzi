@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from ..config import get_config
-from ..middleware.auth import anonymous_inference_enabled, verify_api_key
 from ..kv_cache_dtype import KVCacheQuantizationUnsupportedError
+from ..middleware.auth import anonymous_inference_enabled, verify_api_key
 from ..middleware.exception_handlers import (
     register_request_model,
     register_request_path,
@@ -260,6 +260,7 @@ async def load_resident_model(request: ModelLoadRequest):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:
         from ..runtime.video_lane import VideoRuntimeError
+
         if isinstance(exc, VideoRuntimeError):
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         raise HTTPException(

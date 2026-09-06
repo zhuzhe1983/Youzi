@@ -53,11 +53,13 @@ struct YouziSimpleShell: View {
         }
         .alert(i18n.text(zh: "文件操作没有完成", en: "File operation could not be completed"), isPresented: fileActionAlertBinding) {
             Button(i18n.text(zh: "好", en: "OK"), role: .cancel) {}
+                .accessibilityIdentifier("YouziSimpleShell.Button.2a749ebe68")
         } message: {
             Text(fileActionError ?? i18n.text(zh: "请重试。", en: "Please try again."))
         }
         .alert(i18n.text(zh: "重命名任务", en: "Rename Task"), isPresented: renameAlertBinding) {
             TextField(i18n.text(zh: "任务名称", en: "Task Name"), text: $renameText)
+                .accessibilityIdentifier("YouziSimpleShell.TextField.146c48c044")
             Button(i18n.text(zh: "确定", en: "OK")) {
                 if let task = renamingTask {
                     let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -67,9 +69,11 @@ struct YouziSimpleShell: View {
                 }
                 renamingTask = nil
             }
+                .accessibilityIdentifier("YouziSimpleShell.Button.e09dccc228")
             Button(i18n.text(zh: "取消", en: "Cancel"), role: .cancel) {
                 renamingTask = nil
             }
+                .accessibilityIdentifier("YouziSimpleShell.Button.200f5ef060")
         }
         .onAppear(perform: seedBundledTemplates)
     }
@@ -316,6 +320,7 @@ struct YouziSimpleShell: View {
                     }
                     .buttonStyle(.plain)
                     .help(task.isPinned ? i18n.text(zh: "取消置顶", en: "Unpin") : i18n.text(zh: "置顶任务", en: "Pin"))
+                        .accessibilityIdentifier("YouziSimpleShell.Button.a2ff8057a7")
 
                     Menu {
                         Button {
@@ -324,6 +329,7 @@ struct YouziSimpleShell: View {
                         } label: {
                             Label(i18n.text(zh: "重命名", en: "Rename"), systemImage: "pencil")
                         }
+                            .accessibilityIdentifier("YouziSimpleShell.Button.9ef58b37b1")
 
                         Button {
                             productModel.setTaskPinned(task.id, !task.isPinned, chat: chat)
@@ -333,11 +339,13 @@ struct YouziSimpleShell: View {
                                 systemImage: task.isPinned ? "pin.slash" : "pin"
                             )
                         }
+                            .accessibilityIdentifier("YouziSimpleShell.Button.a247ab2248")
 
                         Button(i18n.text(zh: "分享对话文本…", en: "Share Conversation Text…")) {
                             sharing.shareTask(task, chat: chat)
                         }
                         .disabled(sharing.isSharing)
+                            .accessibilityIdentifier("YouziSimpleShell.Button.f1d4bc6806")
 
                         if !activeWorkspaces.isEmpty {
                             Menu(i18n.text(zh: "移动到工作空间", en: "Move to Workspace")) {
@@ -345,8 +353,10 @@ struct YouziSimpleShell: View {
                                     Button(ws.name) {
                                         productModel.assignWorkspace(ws.id, toTask: task.id)
                                     }
+                                        .accessibilityIdentifier("YouziSimpleShell.Button.d2d19bbac0")
                                 }
                             }
+                                .accessibilityIdentifier("YouziSimpleShell.Menu.4f05d49d22")
                         }
 
                         Divider()
@@ -356,6 +366,7 @@ struct YouziSimpleShell: View {
                         } label: {
                             Label(i18n.text(zh: "归档任务", en: "Archive Task"), systemImage: "archivebox")
                         }
+                            .accessibilityIdentifier("YouziSimpleShell.Button.65caf11761")
                     } label: {
                         Image(systemName: "ellipsis")
                             .font(.system(size: 11))
@@ -365,6 +376,7 @@ struct YouziSimpleShell: View {
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .frame(width: 18, height: 18)
+                        .accessibilityIdentifier("YouziSimpleShell.Menu.23058abaf0")
                 }
             } else {
                 Text(relativeTimeString(from: task.updatedAt))
@@ -392,6 +404,7 @@ struct YouziSimpleShell: View {
             } label: {
                 Label(i18n.text(zh: "重命名", en: "Rename"), systemImage: "pencil")
             }
+                .accessibilityIdentifier("YouziSimpleShell.Button.b1cb9478e6")
 
             Button {
                 productModel.setTaskPinned(task.id, !task.isPinned, chat: chat)
@@ -401,11 +414,13 @@ struct YouziSimpleShell: View {
                     systemImage: task.isPinned ? "pin.slash" : "pin"
                 )
             }
+                .accessibilityIdentifier("YouziSimpleShell.Button.22c0410e5e")
 
             Button(i18n.text(zh: "分享对话文本…", en: "Share Conversation Text…")) {
                 sharing.shareTask(task, chat: chat)
             }
             .disabled(sharing.isSharing)
+                .accessibilityIdentifier("YouziSimpleShell.Button.e948610e38")
 
             if !activeWorkspaces.isEmpty {
                 Menu(i18n.text(zh: "移动到工作空间", en: "Move to Workspace")) {
@@ -413,8 +428,10 @@ struct YouziSimpleShell: View {
                         Button(ws.name) {
                             productModel.assignWorkspace(ws.id, toTask: task.id)
                         }
+                            .accessibilityIdentifier("YouziSimpleShell.Button.c09d348d35")
                     }
                 }
+                    .accessibilityIdentifier("YouziSimpleShell.Menu.e5540d042f")
             }
 
             Divider()
@@ -424,6 +441,7 @@ struct YouziSimpleShell: View {
             } label: {
                 Label(i18n.text(zh: "归档任务", en: "Archive Task"), systemImage: "archivebox")
             }
+                .accessibilityIdentifier("YouziSimpleShell.Button.0aea6aa83a")
         }
     }
 
@@ -438,6 +456,7 @@ struct YouziSimpleShell: View {
                 .font(RapidFont.caption)
                 .foregroundStyle(RapidTheme.brandPrimary)
                 .padding(.leading, RapidTheme.Space.lg)
+                .accessibilityIdentifier("YouziSimpleShell.Button.37eda9ef05")
         } label: {
             Label(project.name, systemImage: "square.stack.3d.up")
                 .font(RapidFont.body)
@@ -587,6 +606,7 @@ struct YouziSimpleShell: View {
                 Spacer(minLength: 0)
                 Button(i18n.text(zh: "关闭", en: "Close")) { selectedArtifactID = nil }
                     .buttonStyle(.bordered)
+                    .accessibilityIdentifier("YouziSimpleShell.Button.85f0f314f8")
             }
             Divider()
             if let preview = artifact.previewText, !preview.isEmpty {

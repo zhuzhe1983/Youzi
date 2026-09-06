@@ -1254,9 +1254,12 @@ def _loaded_model_ids() -> list[str]:
 
     for lane in audio_worker.snapshot():
         name = lane.get("model")
-        if name and lane.get("loaded_at") is not None and lane.get("state") in {
-            "resident", "busy"
-        }:
+        if (
+            isinstance(name, str)
+            and name
+            and lane.get("loaded_at") is not None
+            and lane.get("state") in {"resident", "busy"}
+        ):
             if name not in ids:
                 ids.append(name)
             entry = _resolve_audio_entry(name)
