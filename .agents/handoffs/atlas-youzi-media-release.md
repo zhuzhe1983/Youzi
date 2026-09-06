@@ -41,3 +41,29 @@ resource lookup/staging, adds a poisoned-fallback relocation regression and
 all-JSON packaging gate, and bumps the replacement candidate to0.14.4(174).
 Next: hosted build, installed-artifact startup/TTS/video/API verification, then
 publish only an accepted candidate. Desktop is still locked (GUI not claimed).
+
+
+## Current handoff: 0.14.4 formally delivered
+
+Atlas → Pixel / Harbor / Vector. Branch `atlas/youzi-media-release`; source
+35e987b4 is on main and tagged youzi-v0.14.4. Actions 34054716370 succeeded;
+Engine CI and Youzi desktop CI also passed. Downloaded hosted artifact now
+installed, normally restarted and healthy on8000. Actual SDK Responses, TTS,
+Z-Image and both Wan I2V/T2V generations passed. Chat/image/speech/Wan T2V service
+IDs are available together after the final restart. See operations doc for
+exact outputs, accepted scope, rollback and known limitations.
+
+0.14.4 was promoted to formal Latest under user authorization; NOT a blanket GUI
+sign-off. Old0.14.3 remains a rejected draft. No source/UI rollback was used.
+
+Remaining concrete work:
+- Pixel: after user unlock, click through the real GUI conversation, narration,
+  video startup and media preview flows. Screen was locked throughout this run;
+  interactive GUI checks are not claimed, and legacy GUI CI jobs remain queued.
+- Vector/Atlas: investigate Wan temporal output length. 5-frame requests generated
+  decodable8-frame clips at256x256 with default denoising steps. Exact-frame tests
+  failed; this is disclosed, not hidden by the generation-smoke pass. Preserve
+  model fidelity and add frame-count regression before changing runtime output.
+- Harbor: monitor the formal release/updater and retain the rejected draft for
+  diagnosis. Package is ad-hoc signed, not notarized. Do not claim permanent GPU
+  residency merely because a video adapter is registered.

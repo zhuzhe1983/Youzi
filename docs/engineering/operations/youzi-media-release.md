@@ -1,4 +1,4 @@
-# Youzi media repair / 0.14.3 delivery
+# Youzi media repair / 0.14.4 delivery
 
 Atlas owns integration/release; Harbor owns hosted packaging. Local Mac validation.
 Task branch: `atlas/youzi-media-release`; base: gallery `3f24eff1`, merged upstream
@@ -145,3 +145,53 @@ Both checks run against the final app before Actions archives it. The rejected
 hosted artifact fails the new gate, as expected. Native screen interaction is
 still unverified while the user's desktop is locked; do not equate API smoke
 results with GUI conversation acceptance.
+
+
+## Final 0.14.4 delivery status
+
+Actions run **34054716370** built source **35e987b4**, passed its 151 Swift
+regressions plus archive/resource/relocation gates, and produced 0.14.4 (174).
+Engine CI 34054716099 and Youzi desktop CI 34054715888 succeeded. Legacy
+rapid-mac CI 34054715933 has passing compilation/accessibility/harness checks,
+but its native GUI jobs remain queued; do not call that entire workflow green.
+
+Downloaded all hosted assets, checked every SHA256SUMS entry, strict/deep code
+signatures, DMG integrity, and matching app/runtime/archive versions. The actual
+hosted app was installed as a complete bundle, launched successfully, normally
+quit and launched again. The original app and user data remain in pre-install
+backups; user data was not rolled back. The new runtime stays healthy on 8000.
+
+Actual installed-runtime checks:
+- Official OpenAI SDK model discovery, completed Responses, and Qwen3-TTS WAV
+  synthesis passed. The final restart also passed speech and Responses again.
+- Explicit Chinese speaker returned 400; case-insensitive Vivian synthesis
+  returned valid 24 kHz WAV (226,604 bytes in the final generation-smoke run).
+- Wan I2V produced a 9,529-byte MP4 in 102.5 s; Wan T2V produced a 24,361-byte MP4
+  in 98.4 s. These were **256x256, a 5-frame request, default checkpoint steps**,
+  not the earlier isolated one-step probes. Both files decode with ffmpeg.
+- Exact-frame validation did **not** pass: both outputs contain 8 frames at
+  native fps, although 5 were requested. The bundled upstream generator exports
+  its decoded frame array without enforcing the requested length. Keep this as
+  an explicit known limitation; investigate temporal padding/cropping separately.
+- After the final normal restart, Z-Image Turbo generated a valid 512x512 PNG
+  (371,665 bytes). Final /v1/models lists chat, image, speech and Wan T2V service
+  identities together, and chat still responds. Video adapters are service-ready,
+  not permanent GPU-weight residency. Loading a large second Wan can evict the
+  first according to the existing memory budget; no unlimited-residency claim.
+- The attempted WAN_STEPS environment override was correctly filtered by the
+  desktop's secret-minimizing child environment allowlist. Tests therefore used
+  real default denoising steps. The final app was relaunched without that unused
+  override; no allowlist weakening or persistent test settings were introduced.
+
+Under the user's explicit formal-release authorization, Atlas promoted the
+installed/startup-and-generation-accepted Actions artifact as **youzi-v0.14.4**
+(non-draft, non-prerelease, Latest). The earlier full-GUI gate could not be
+completed while screen-locked: this release is explicitly **not** a full GUI
+acceptance sign-off. Native chat/click/visual acceptance and precise Wan frame
+counts remain disclosed in the release notes and handed off below. Ad-hoc signed,
+not Apple-notarized. The rejected 0.14.3 draft remains unpublished.
+
+Local acceptance evidence lives under the private QA directory in
+`hosted-0144-acceptance.log`, `final-client-0144.log`, `actions-0144.log`, and
+`hosted-0144-acceptance/`. Generated media are test artifacts, not a claimed
+GUI-visible conversation. No API keys were logged or published.
