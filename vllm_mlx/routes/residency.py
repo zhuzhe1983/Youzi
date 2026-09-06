@@ -89,6 +89,30 @@ class ModelLoadRequest(BaseModel):
     )
 
 
+class AudioModelLoadRequest(BaseModel):
+    model: str = Field(..., min_length=1)
+
+
+@router.post("/v1/audio/models/load")
+async def load_audio_model(request: AudioModelLoadRequest):
+    """Authenticated, explicit preload of the shared STT/TTS lane."""
+    from .audio import preload_audio_model
+
+    try:
+        return await preload_audio_model(request.model)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Audio model load failed: {type(exc).__name__}",
+        ) from exc
+
+
+register_request_model(AudioModelLoadRequest)
+register_request_path("/v1/audio/models/load", AudioModelLoadRequest)
+
+
 class ModelPinRequest(BaseModel):
     pinned: StrictBool = True
 

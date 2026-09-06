@@ -2598,6 +2598,132 @@ def _is_clone_capable_model(model_name: str) -> bool:
     return is_qwen3 and "base" in tokens and "customvoice" not in tokens
 
 
+def _ensure_tts_loaded_blocking(model_name: str):
+    """Share the exact cache and Metal worker with speech inference."""
+    global _tts_engine
+    from ..audio.tts import TTSEngine
+    from ..runtime.audio_worker import run_audio_mlx_sync
+
+    if _tts_engine is None or _tts_engine.model_name != model_name:
+        if _tts_engine is not None:
+            old_model = getattr(_tts_engine, "model_name", "unknown")
+            unload = getattr(_tts_engine, "unload", None)
+            if callable(unload):
+                run_audio_mlx_sync("tts", old_model, "unload", unload)
+            _tts_engine = None
+        candidate = TTSEngine(model_name)
+        run_audio_mlx_sync("tts", model_name, "load", candidate.load)
+        _tts_engine = candidate
+    return _tts_engine
+
+
+def _preload_stt_blocking(model_name: str) -> None:
+    global _stt_engine, _aligner_engine
+    from ..audio.stt import STTEngine
+    from ..runtime.audio_worker import run_audio_mlx_sync
+
+    aligner = _is_aligner_model(model_name)
+    lane = "alignment" if aligner else "stt"
+    cached = _aligner_engine if aligner else _stt_engine
+    if cached is not None and cached.model_name == model_name:
+        return
+    _evict_other_lane_sync("aligner" if aligner else "asr")
+    if cached is not None:
+        run_audio_mlx_sync(lane, cached.model_name, "unload", cached.unload)
+    if aligner:
+        _aligner_engine = None
+    else:
+        _stt_engine = None
+    candidate = STTEngine(model_name)
+
+    def load_ready():
+        candidate.load()
+        # mlx-audio can load Whisper weights but tolerate a missing processor.
+        # An explicit service preload must reject that state now, not report
+        # ready and fail the user's first transcription later.
+        if (candidate._is_whisper and hasattr(candidate.model, "_processor")
+                and candidate.model._processor is None):
+            candidate.unload()
+            raise HTTPException(
+                status_code=409,
+                detail="Whisper processor files are missing. Repair this model's runtime assets in Model Files before preloading.",
+            )
+
+    run_audio_mlx_sync(lane, model_name, "load", load_ready)
+    if aligner:
+        _aligner_engine = candidate
+    else:
+        _stt_engine = candidate
+
+
+def _check_audio_preload_capacity(model_name: str) -> None:
+    """Preflight cached weights, preserving all other lanes on refusal.
+
+    This is a conservative admission estimate, not an allocator reservation.
+    Never download a multi-GB checkpoint from a quick-selection action.
+    """
+    from pathlib import Path
+
+    import psutil
+    from huggingface_hub import snapshot_download
+
+    from ..config import get_config
+
+    try:
+        snapshot = Path(snapshot_download(model_name, local_files_only=True))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409, detail="Audio model is not downloaded. Open Model Files to install it."
+        ) from exc
+    weights = sum(
+        p.stat().st_size for p in snapshot.rglob("*")
+        if p.suffix in {".safetensors", ".npz"} and p.is_file()
+    )
+    if not weights:
+        raise HTTPException(status_code=409, detail="Audio model weights are incomplete. Repair the download in Model Files.")
+    estimate = int(weights * 1.25) + 512 * 1024**2
+    available = psutil.virtual_memory().available
+    manager = get_config().residency_manager
+    if manager is not None:
+        ceiling = manager.snapshot().get("memory_available_bytes")
+        if ceiling is not None:
+            available = min(available, ceiling)
+    if estimate > available:
+        raise HTTPException(
+            status_code=507,
+            detail="Insufficient memory to co-load this audio model. Running models were preserved; choose a smaller model or explicitly stop one.",
+        )
+
+
+async def preload_audio_model(model: str) -> dict:
+    """Explicit picker load, without synthesis or replacing the chat process.
+
+    Locks and cancellation draining are shared with inference. This is not a
+    second cache: the next speech/transcription request reuses these weights.
+    Only a model in the same audio lane may be replaced.
+    """
+    from ..audio.registry import resolve_audio_alias
+    from ..runtime.audio_worker import audio_worker
+
+    entry = resolve_audio_alias(model)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Unknown audio model")
+    if entry.type == "tts":
+        async with _get_tts_lane_lock():
+            if _tts_engine is None or _tts_engine.model_name != entry.hf_id:
+                await run_to_completion(_check_audio_preload_capacity, entry.hf_id)
+            await run_to_completion(_ensure_tts_loaded_blocking, entry.hf_id)
+        lane = "tts"
+    else:
+        async with _get_stt_lane_lock():
+            cached = _aligner_engine if _is_aligner_model(entry.hf_id) else _stt_engine
+            if cached is None or cached.model_name != entry.hf_id:
+                await run_to_completion(_check_audio_preload_capacity, entry.hf_id)
+            await run_to_completion(_preload_stt_blocking, entry.hf_id)
+        lane = "alignment" if _is_aligner_model(entry.hf_id) else "stt"
+    return next(item for item in audio_worker.snapshot() if item["lane"] == lane)
+
+
 def _generate_speech_blocking(
     model_name: str,
     input_text: str,
@@ -2609,21 +2735,9 @@ def _generate_speech_blocking(
     channels: int | None,
 ) -> tuple[bytes, int, int]:
     """Load, synthesize, and encode speech without blocking the event loop."""
-    global _tts_engine
-
-    from ..audio.tts import TTSEngine
     from ..runtime.audio_worker import run_audio_mlx_sync
 
-    if _tts_engine is None or _tts_engine.model_name != model_name:
-        if _tts_engine is not None:
-            old_model = getattr(_tts_engine, "model_name", "unknown")
-            unload = getattr(_tts_engine, "unload", None)
-            if callable(unload):
-                run_audio_mlx_sync("tts", old_model, "unload", unload)
-            _tts_engine = None
-        tts_candidate = TTSEngine(model_name)
-        run_audio_mlx_sync("tts", model_name, "load", tts_candidate.load)
-        _tts_engine = tts_candidate
+    _ensure_tts_loaded_blocking(model_name)
 
     kwargs = dict(gen_kwargs)
     if ref_bytes is not None:

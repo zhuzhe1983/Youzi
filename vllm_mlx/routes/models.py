@@ -1217,6 +1217,20 @@ def _loaded_model_ids() -> list[str]:
             append(entry.model_name, entry.engine, entry.aliases)
     else:
         append(cfg.model_name, cfg.engine, [cfg.model_alias] if cfg.model_alias else [])
+    # Audio uses shared lane caches, not ModelRegistry. Route availability or
+    # a catalog entry is not residency; only materialized worker weights count.
+    from ..runtime.audio_worker import audio_worker
+
+    for lane in audio_worker.snapshot():
+        name = lane.get("model")
+        if name and lane.get("loaded_at") is not None and lane.get("state") in {
+            "resident", "busy"
+        }:
+            if name not in ids:
+                ids.append(name)
+            entry = _resolve_audio_entry(name)
+            if entry is not None and entry.alias not in ids:
+                ids.append(entry.alias)
     # Dedicated embedding engines are outside the resident registry. A locked
     # config name alone is NOT evidence that its weights are loaded.
     embedding = cfg.embedding_engine

@@ -150,7 +150,7 @@ struct ResidentAudioLaneStatus: Codable, Sendable, Equatable {
     let state: String
 
     func matches(modelPath: String) -> Bool {
-        model == modelPath && state == "resident"
+        model == modelPath && (state == "resident" || state == "busy")
     }
 }
 
@@ -444,6 +444,36 @@ struct ServerResidencyClient {
         return try? JSONDecoder().decode(ModelResidencySnapshot.self, from: data)
     }
 
+    /// A voice selection must materialize weights, not use the text/image loader.
+    /// Returns an actionable error; nil means the server confirmed residency.
+    func preloadAudio(alias: String, port: Int, bearer: String?) async -> String? {
+        var request = request(path: "/v1/audio/models/load", port: port, bearer: bearer)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONEncoder().encode(["model": alias])
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return "The audio server returned an invalid response."
+            }
+            if (200...299).contains(http.statusCode),
+               let lane = try? JSONDecoder().decode(ResidentAudioLaneStatus.self, from: data),
+               (lane.state == "resident" || lane.state == "busy"), lane.model != nil {
+                return nil
+            }
+            if http.statusCode == 404 || http.statusCode == 405 {
+                return "Audio preloading is unavailable. Update the model runtime; the chat model was not stopped."
+            }
+            let envelope = try? JSONDecoder().decode(ErrorEnvelope.self, from: data)
+            if case .message(let message) = envelope?.detail { return message }
+            if case .structured(let detail) = envelope?.detail, let message = detail.error?.message { return message }
+            if let message = envelope?.error?.message { return message }
+            return "The audio model could not be loaded (HTTP \(http.statusCode))."
+        } catch {
+            return "The model server could not load the audio model."
+        }
+    }
+
     func load(
         alias: String,
         hfPath: String?,
@@ -452,6 +482,7 @@ struct ServerResidencyClient {
         memoryPolicy: ResidentMemoryPolicy? = nil,
         imageMode: ResidentImageMode? = nil,
         performance: ModelPerfConfig? = nil,
+        pin: Bool = false,
         reloadIfChanged: Bool = false,
         port: Int,
         bearer: String?
@@ -464,7 +495,7 @@ struct ServerResidencyClient {
                 model: alias,
                 model_path: hfPath,
                 estimated_size_gb: estimatedSizeGB,
-                pin: false,
+                pin: pin,
                 replace_group: replaceGroup?.rawValue,
                 memory_policy: memoryPolicy,
                 image_mode: imageMode,

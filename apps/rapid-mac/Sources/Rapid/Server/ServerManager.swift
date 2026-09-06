@@ -478,6 +478,49 @@ final class ServerManager {
         )
     }
 
+    /// Restore the explicitly selected media set after the primary is healthy.
+    /// Sequential loading bounds allocation spikes; errors never stop siblings.
+    /// A user stop/restart supersedes this restore at the next await boundary.
+    func restoreResidentServices() async {
+        let defaults = sessionDefaults ?? .standard
+        guard YouziResidentServicePreference.enabled(in: defaults),
+              !isRestoringResidentServices, let process = child,
+              case .ready = state, let binary = binaryPath else { return }
+        let token = UUID()
+        residentRestoreToken = token
+        isRestoringResidentServices = true
+        defer {
+            if residentRestoreToken == token {
+                isRestoringResidentServices = false
+                residentRestoreToken = nil
+            }
+        }
+        let selections = YouziResidentServicePreference.selected(in: defaults)
+        guard !selections.isEmpty else { return }
+        let catalog = await residentServiceCatalogProvider(binary)
+        for (slot, alias) in selections {
+            guard !Task.isCancelled, residentRestoreToken == token, child === process,
+                  YouziResidentServicePreference.enabled(in: defaults),
+                  defaults.string(forKey: slot.key) == alias else { return }
+            guard let entry = catalog.first(where: { $0.alias == alias && slot.accepts($0) }) else {
+                residentLoadFailures[alias] = ResidentLoadFailure(
+                    alias: alias,
+                    message: "The selected resident model is missing or incompatible. Manage its download in Model Files."
+                )
+                continue
+            }
+            _ = await ensureServing(
+                alias: entry.alias,
+                hfPath: entry.hfRepo,
+                estimatedMemoryGB: ModelSizing.residentEstimateGB(alias: entry.alias, sizeText: entry.sizeOnDisk),
+                imageMode: slot == .image ? .generation : nil,
+                residencyEligible: true,
+                requestIsMedia: true,
+                mediaKind: slot.kind
+            )
+        }
+    }
+
     /// Video catalog metadata describes a whole-machine capacity floor, not
     /// the model's incremental footprint. Compare it with physical memory in
     /// isolation so normal app/OS use cannot be charged against the floor;
@@ -525,10 +568,12 @@ final class ServerManager {
             residency = .empty
             return false
         }
+        let fetchingProcess = child
         guard let snapshot = await residencyClient.fetch(
             port: activePort,
             bearer: activeBearer
         ) else { return false }
+        guard child === fetchingProcess, case .ready = state else { return false }
         residency = snapshot
         return true
     }
@@ -656,6 +701,14 @@ final class ServerManager {
     /// global ``state`` to `.starting`, so surfaces need this alias-scoped
     /// signal to acknowledge a Download & start tap immediately.
     private(set) var residentLoadsInFlight: [String: Int] = [:]
+    private(set) var isRestoringResidentServices = false
+    private var residentRestoreToken: UUID?
+    internal var residentServiceCatalogProvider: @MainActor @Sendable (URL) async -> [ModelEntry] = { binary in
+        async let audio = ModelCatalog.audioEntries(binary: binary)
+        async let images = ModelCatalog.imageEntries(binary: binary)
+        return (await audio) + (await images)
+    }
+
 
     func isResidentLoadInFlight(_ alias: String) -> Bool {
         residentLoadsInFlight[
@@ -1668,7 +1721,8 @@ final class ServerManager {
         alias: String,
         hfPath: String?,
         residencyEligible: Bool,
-        requestIsMedia: Bool = false
+        requestIsMedia: Bool = false,
+        mediaKind: ModelKind? = nil
     ) async -> Bool {
         await ensureServing(
             alias: alias,
@@ -1676,7 +1730,8 @@ final class ServerManager {
             estimatedMemoryGB: nil,
             replacementGroup: nil,
             residencyEligible: residencyEligible,
-            requestIsMedia: requestIsMedia
+            requestIsMedia: requestIsMedia,
+            mediaKind: mediaKind
         )
     }
 
@@ -1689,7 +1744,8 @@ final class ServerManager {
         residencyEligible: Bool = true,
         catalogEntryHint: CatalogEntryHint? = nil,
         videoOutputDirectory: String? = nil,
-        requestIsMedia: Bool = false
+        requestIsMedia: Bool = false,
+        mediaKind: ModelKind? = nil
     ) async -> Bool {
         let trimmed = alias.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
@@ -1707,7 +1763,7 @@ final class ServerManager {
         // Cold start delegates to `start`, which resolves the same metadata
         // authoritatively. This probe is needed only to decide whether an
         // already-running text-lane sidecar can accept a resident load.
-        if child != nil, let binary = binaryPath {
+        if !requestIsMedia, child != nil, let binary = binaryPath {
             guard let observation = await stableFreshCatalogSnapshot(binary: binary) else {
                 return false
             }
@@ -1737,18 +1793,18 @@ final class ServerManager {
         let provenCatalogHint = provenCatalogEntry.map {
             CatalogEntryHint(entry: $0, generation: catalogGeneration)
         }
-        let requiresImageLaneRestart = Self.requiresProcessRestartForImageCapability(
+        let requiresImageLaneRestart = !requestIsMedia && Self.requiresProcessRestartForImageCapability(
             catalogSupportsImageInput: requestedCatalogSupportsImageInput,
             userOverrides: requestedPerformanceFlags,
             processLaunchFlags: launchedPerformanceFlags,
             hasChild: child != nil
         )
-        let speculativeRequested = Self.speculativeDecodingRequested(
+        let speculativeRequested = !requestIsMedia && Self.speculativeDecodingRequested(
             defaultPreset: provenCatalogEntry?.speculativeDecodingPreset,
             userOverrides: requestedPerformanceFlags
         )
         let speculativeApplied = hasAppliedSpeculativeDecoding(forAlias: trimmed)
-        let speculativeSettingChanged = speculativeRequested != speculativeApplied
+        let speculativeSettingChanged = !requestIsMedia && speculativeRequested != speculativeApplied
         // Replacement policy matters only when loading a different model.
         // The requested alias is already the active assistant, so asking the
         // residency endpoint to replace it is redundant and breaks legacy
@@ -1760,6 +1816,7 @@ final class ServerManager {
             return true
         }
         if replacementGroup == nil, isModelResident(trimmed),
+           !(requestIsMedia && YouziResidentServicePreference.enabled(in: sessionDefaults ?? .standard)),
            !speculativeSettingChanged, !requiresImageLaneRestart,
            launchedVideoOutputDirectory == videoOutputDirectory {
             return true
@@ -1799,16 +1856,46 @@ final class ServerManager {
         let attemptToken = UUID()
         residentLoadAttemptTokens[trimmed] = attemptToken
 
+        // Audio owns a shared STT/TTS cache, not a text/image registry entry.
+        // Explicit selection preloads that cache rather than returning "ready"
+        // for a merely mounted route or asking the generic loader (which
+        // rejects audio). It must never restart the primary process.
+        if (mediaKind ?? provenCatalogEntry?.kind) == .audio,
+           case .ready = state, let loadingProcess = child {
+            residentLoadsInFlight[trimmed, default: 0] += 1
+            defer {
+                let remaining = (residentLoadsInFlight[trimmed] ?? 1) - 1
+                residentLoadsInFlight[trimmed] = remaining > 0 ? remaining : nil
+            }
+            let message = await residencyClient.preloadAudio(
+                alias: hfPath ?? trimmed, port: activePort, bearer: activeBearer
+            )
+            guard child === loadingProcess, !Task.isCancelled else { return false }
+            if let message {
+                if residentLoadAttemptTokens[trimmed] == attemptToken {
+                    residentLoadFailures[trimmed] = ResidentLoadFailure(
+                        alias: trimmed, message: LogScrubber.scrub(message)
+                    )
+                }
+                appendLogLines([message])
+                return false
+            }
+            await refreshResidency()
+            guard child === loadingProcess, !Task.isCancelled else { return false }
+            if residentLoadAttemptTokens[trimmed] == attemptToken {
+                residentLoadFailures[trimmed] = nil
+            }
+            return true
+        }
+
         // A healthy sidecar can admit another engine without replacing the
         // process. Only a 404/405 from an older bundled server falls back to
         // the legacy stop/start path; capacity and load failures stay failures
         // so we never hide a rejected ceiling by unloading the primary model.
         //
-        // Audio (and video-gen) aliases opt out via ``residencyEligible: false``:
-        // the engine's residency loader rejects those modalities with a 500,
-        // not a 404/405, so an in-process ``/v1/models/load`` attempt would
-        // surface as a hard failure instead of the process swap they actually
-        // need — audio runs as its own ``serve <alias>`` (audio-mode) process.
+        // Audio uses the shared-cache preload route above. Video does not
+        // support dynamic residency yet. Unsupported media must not fall back
+        // to stopping the primary chat process.
         let readyWithChild: Bool = { if case .ready = state, child != nil { return true }; return false }()
         // The engine owns keep-vs-evict admission inside its real memory
         // ceiling, but Desktop can intentionally evaluate a smaller hardware
@@ -1889,6 +1976,7 @@ final class ServerManager {
                     residentLoadsInFlight[trimmed] = remaining
                 }
             }
+            let loadingProcess = child
             let estimate = estimatedMemoryGB ?? ModelSizing.estimate(alias: trimmed).totalGB
             let result = await residencyClient.load(
                 alias: trimmed,
@@ -1897,10 +1985,12 @@ final class ServerManager {
                 replaceGroup: replacementGroup,
                 memoryPolicy: replacementGroup == .assistant ? .evictFirstIfNeeded : nil,
                 imageMode: imageMode,
-                performance: perfConfigProvider?(trimmed),
+                performance: requestIsMedia ? nil : perfConfigProvider?(trimmed),
+                pin: requestIsMedia && YouziResidentServicePreference.enabled(in: sessionDefaults ?? .standard),
                 port: activePort,
                 bearer: activeBearer
             )
+            guard child === loadingProcess, !Task.isCancelled else { return false }
             switch result {
             case .loaded(let status):
                 if !residency.contains(status.id) {
@@ -1911,10 +2001,12 @@ final class ServerManager {
                         idleTTLSeconds: residency.idleTTLSeconds,
                         loadsTotal: residency.loadsTotal + 1,
                         evictionsTotal: residency.evictionsTotal,
-                        models: residency.models + [status]
+                        models: residency.models + [status],
+                        audioLanes: residency.audioLanes
                     )
                 }
                 await refreshResidency()
+                guard child === loadingProcess, !Task.isCancelled else { return false }
                 if replacementGroup != nil {
                     state = .ready(alias: trimmed)
                 }
@@ -1970,6 +2062,11 @@ final class ServerManager {
         var replacementMemoryAdmission: MemoryAdmissionContext?
         if child != nil {
             if requestIsMedia {
+                let message = "This runtime cannot co-load the selected media model. Update the runtime or wait for startup; the running models were preserved."
+                if residentLoadAttemptTokens[trimmed] == attemptToken {
+                    residentLoadFailures[trimmed] = ResidentLoadFailure(alias: trimmed, message: message)
+                }
+                appendLogLines([message])
                 return false
             }
             // `ensureServing` can re-enter while a dialog or residency refresh
@@ -3171,6 +3268,7 @@ final class ServerManager {
                 // within ~90 s instead of "the next time the user
                 // tries to send a chat".
                 startRuntimeHealthMonitor(process: process, alias: trimmedAlias)
+                Task { [weak self] in await self?.restoreResidentServices() }
                 return
             }
             // `try?` here would swallow CancellationError and leave
@@ -3384,6 +3482,8 @@ final class ServerManager {
     /// ``runtimeHealthTask`` handle via ``handleChildExit``'s
     /// cancel-on-exit branch.
     private func terminateChild(reason: String?, cancelMonitor: Bool = true) async {
+        residentRestoreToken = nil
+        isRestoringResidentServices = false
         guard let process = child else { return }
         let alias: String
         switch state {
@@ -3468,6 +3568,8 @@ final class ServerManager {
         status: Int32,
         reason: Process.TerminationReason
     ) {
+        residentRestoreToken = nil
+        isRestoringResidentServices = false
         let alias: String
         switch state {
         case .starting(let a), .ready(let a), .crashed(let a, _):

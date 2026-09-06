@@ -310,7 +310,6 @@ struct ImagesView: View {
         case .restart(let target):
             let hf = viewModel.imageModels.first { $0.alias == target }?.hfRepo
             Task {
-                await server.stop()
                 await loadImageModel(target, hfPath: hf)
             }
         case .openModelManagement:

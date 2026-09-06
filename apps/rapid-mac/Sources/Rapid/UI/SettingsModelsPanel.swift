@@ -106,6 +106,7 @@ private struct SettingsModelServicePanel: View {
                         .font(RapidFont.caption).foregroundStyle(.secondary)
                 }
             }
+            SettingsResidentServicePanel()
             SettingsSection(i18n.text(zh: "启动选项", en: "Startup")) {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle(i18n.text(zh: "打开应用时自动启动聊天模型", en: "Auto-start chat model on launch"), isOn: $autoStart)

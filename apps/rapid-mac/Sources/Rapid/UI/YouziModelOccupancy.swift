@@ -47,6 +47,7 @@ struct YouziModelOccupancy: Equatable, Sendable {
     var totalBytes: UInt64
     var hostUsedRatio: Double
     var mode: YouziRuntimeMode
+    var voiceMemoryUnknown = false
 
     var bytes: [YouziModelLane: UInt64] {
         [.chat: chatBytes, .image: imageBytes, .voice: voiceBytes, .video: videoBytes]
@@ -70,11 +71,11 @@ struct YouziModelOccupancy: Equatable, Sendable {
             case nil: break
             }
         }
-        let audioLaneResident = residency.audioLanes.contains { $0.state == "resident" }
+        let audioLaneResident = residency.audioLanes.contains { $0.model != nil && ($0.state == "resident" || $0.state == "busy") }
         let hasVoice = voice > 0 || audioLaneResident || voiceLaneResident
-        if hasVoice, voice == 0 {
-            voice = 1
-        }
+        // Shared audio caches currently report readiness but no trustworthy
+        // per-model allocation. Do not fabricate a 1-byte memory measurement.
+        let voiceMemoryUnknown = hasVoice && voice == 0
 
         let usedByModels = chat + image + voice + video
         let total = host?.totalBytes
@@ -102,7 +103,8 @@ struct YouziModelOccupancy: Equatable, Sendable {
             remainingBytes: remaining,
             totalBytes: max(total, usedByModels + remaining),
             hostUsedRatio: hostRatio,
-            mode: mode
+            mode: mode,
+            voiceMemoryUnknown: voiceMemoryUnknown
         )
     }
 }
@@ -125,6 +127,7 @@ func formatGigabytes(_ bytes: UInt64) -> String {
 }
 
 struct YouziModelOccupancyBar: View {
+    @Environment(YouziI18nConfig.self) private var i18n
     let occupancy: YouziModelOccupancy
 
     var body: some View {
@@ -172,7 +175,11 @@ struct YouziModelOccupancyBar: View {
                 if occupancy.imageBytes > 0 {
                     occupancyLegend(lane: .image, bytes: occupancy.imageBytes)
                 }
-                if occupancy.voiceBytes > 0 {
+                if occupancy.voiceMemoryUnknown {
+                    Text("VOICE · —").font(RapidFont.caption)
+                        .foregroundStyle(YouziModelLane.voice.occupancyColor)
+                        .help(i18n.text(zh: "语音模型已常驻；运行时暂未提供该模型的内存占用。", en: "Audio is resident; per-model memory is not reported by the runtime."))
+                } else if occupancy.voiceBytes > 0 {
                     occupancyLegend(lane: .voice, bytes: occupancy.voiceBytes)
                 }
                 if occupancy.videoBytes > 0 {

@@ -529,7 +529,7 @@ struct YouziSimpleTaskView: View {
     }
 
     private var currentOccupancy: YouziModelOccupancy {
-        let voiceResident = server.residency.audioLanes.contains { $0.state == "resident" }
+        let voiceResident = server.residency.audioLanes.contains { $0.model != nil && ($0.state == "resident" || $0.state == "busy") }
         return YouziModelOccupancy.resolve(
             residency: server.residency,
             host: MemoryProbe.snapshot(),
@@ -640,13 +640,14 @@ struct YouziSimpleTaskView: View {
                                     alias: entry.alias,
                                     hfPath: entry.hfRepo,
                                     residencyEligible: true,
-                                    requestIsMedia: true
+                                    requestIsMedia: true,
+                                    mediaKind: .audio
                                 )
                             }
                         } label: {
                             HStack {
                                 Text(entry.alias + (size.isEmpty ? "" : " (\(size))"))
-                                if server.residency.contains(entry.alias) || server.isVoiceLaneResident(for: entry.alias, modelPath: nil) {
+                                if server.residency.contains(entry.alias) || server.isVoiceLaneResident(for: entry.alias, modelPath: entry.hfRepo) {
                                     Image(systemName: "checkmark")
                                 }
                             }
