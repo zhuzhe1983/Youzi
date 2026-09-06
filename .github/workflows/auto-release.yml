@@ -53,6 +53,8 @@ jobs:
   # 1) Cheap detection on a hosted runner: is this a version bump we should
   #    release? Exposes should_release + version + force for downstream jobs.
   detect:
+    # Upstream automation is not Youzi's release channel.
+    if: github.repository == 'raullenchai/Rapid-MLX'
     runs-on: ubuntu-latest
     outputs:
       should_release: ${{ steps.detect.outputs.should_release }}

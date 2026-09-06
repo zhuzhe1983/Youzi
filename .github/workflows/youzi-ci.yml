@@ -1,0 +1,37 @@
+name: Youzi desktop CI
+
+on:
+  push:
+    branches: [main, 'atlas/youzi-local-delivery']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: youzi-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    if: github.repository == 'zhuzhe1983/Youzi'
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      # Test ServerManagers must not evict a developer/runner's live engine.
+      RAPID_DESKTOP_NO_PORT_SWEEP: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify Apple Silicon toolchain
+        run: |
+          test "$(uname -m)" = arm64
+          swift --version
+      - name: Compile release executable
+        run: swift build --package-path apps/rapid-mac -c release
+      - name: Run Youzi regression suites
+        run: |
+          swift test --package-path apps/rapid-mac --filter 'Youzi|ModelServiceAuthTests|ModelAPIAccessTests|ModelGenerationDefaultsTests|SettingsVoicePreviewTests|CustomInstructionsTests|BrowseProxyCompatibilityTests|SidecarBuildScriptTests|StreamingRowIsolationTests|CurrentDateTimeContextTests'
+      - name: Validate source formatting
+        run: git diff --check

@@ -9,6 +9,8 @@ permissions:
 
 jobs:
   build:
+    # Upstream automation is not Youzi's release channel.
+    if: github.repository == 'raullenchai/Rapid-MLX'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -182,6 +184,8 @@ jobs:
           packages-dir: candidate/dist/
 
   installer-assets:
+    # Upstream automation is not Youzi's release channel.
+    if: github.repository == 'raullenchai/Rapid-MLX'
     runs-on: ubuntu-latest
     permissions:
       contents: write # upload release assets

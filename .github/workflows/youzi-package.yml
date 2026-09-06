@@ -1,0 +1,85 @@
+name: Youzi manual package and draft
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_draft:
+        description: 'Create a private-to-maintainers draft release (never publish automatically)'
+        type: boolean
+        default: false
+      tag:
+        description: 'Required only for a draft: youzi-v<Info.plist version>'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: youzi-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: github.repository == 'zhuzhe1983/Youzi'
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      RAPID_DESKTOP_NO_PORT_SWEEP: '1'
+      BUNDLE_MODEL: '0'
+      SKIP_SIDECAR: '0'
+      CODESIGN_IDENTITY: '-'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate target and version
+        env:
+          CREATE_DRAFT: ${{ inputs.create_draft }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' apps/rapid-mac/Resources/Info.plist)
+          if [[ "$CREATE_DRAFT" == true ]]; then
+            test "$RELEASE_TAG" = "youzi-v$VERSION"
+          fi
+      - name: Build complete app including inference runtime
+        run: bash apps/rapid-mac/scripts/build.sh
+      - name: Verify and archive
+        run: |
+          set -euo pipefail
+          APP='apps/rapid-mac/build/Rapid-MLX Desktop.app'
+          test -d "$APP/Contents/Resources/rapid-mlx/site-packages/vllm_mlx"
+          codesign --verify --deep --strict "$APP"
+          mkdir -p dist-youzi
+          ditto -c -k --sequesterRsrc --keepParent "$APP" dist-youzi/Youzi-macos-arm64.zip
+          (cd dist-youzi && shasum -a 256 Youzi-macos-arm64.zip > SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: youzi-macos-arm64-${{ github.sha }}
+          path: dist-youzi/
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    if: inputs.create_draft == true && github.repository == 'zhuzhe1983/Youzi'
+    needs: package
+    runs-on: ubuntu-latest
+    environment: youzi-draft
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: youzi-macos-arm64-${{ github.sha }}
+          path: dist-youzi
+      - name: Create draft without publishing or touching an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" dist-youzi/* \
+            --target "$TARGET_SHA" --draft --title "Youzi $RELEASE_TAG" \
+            --notes 'Personal-use Apple Silicon build. Ad-hoc signed; NOT Apple-notarized. Includes the inference runtime, but no model weights. Review build evidence and test locally before publication.'
