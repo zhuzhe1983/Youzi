@@ -142,17 +142,25 @@ def _mount_models_app() -> tuple[TestClient, callable]:
     app = FastAPI()
     app.include_router(models_route.router)
     cfg = get_config()
-    saved_api = cfg.api_key
-    saved_name = cfg.model_name
-    saved_alias = cfg.model_alias
-    cfg.api_key = None
-    cfg.model_name = "test-alias"
-    cfg.model_alias = "test-alias"
+    # Capability checks require a loaded engine; restore every changed field.
+    values = {
+        "api_key": None,
+        "model_name": "test-alias",
+        "model_alias": "test-alias",
+        "ready": True,
+        "draining": False,
+        "engine": object(),
+        "model_registry": None,
+        "residency_manager": None,
+        "embedding_engine": None,
+    }
+    saved = {key: getattr(cfg, key) for key in values}
+    for key, value in values.items():
+        setattr(cfg, key, value)
 
     def _restore():
-        cfg.api_key = saved_api
-        cfg.model_name = saved_name
-        cfg.model_alias = saved_alias
+        for key, value in saved.items():
+            setattr(cfg, key, value)
 
     return TestClient(app), _restore
 

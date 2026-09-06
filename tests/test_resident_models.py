@@ -2139,6 +2139,7 @@ def test_performance_reload_preserves_alias_in_routing_and_models_list(monkeypat
 
     reset_config()
     cfg = get_config()
+    cfg.ready = True
     cfg.model_registry = registry
     cfg.residency_manager = manager
     cfg.api_key = None

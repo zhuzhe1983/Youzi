@@ -514,6 +514,15 @@ def _mount_models_app(monkeypatch, **cfg_overrides):
     app.include_router(models_route.router)
 
     cfg = get_config()
+    # These are live audio-card tests, not configured-only discovery.
+    for key, value in {
+        "ready": True,
+        "draining": False,
+        "engine": object(),
+        "residency_manager": None,
+        "embedding_engine": None,
+    }.items():
+        monkeypatch.setattr(cfg, key, value)
     saved = {
         k: getattr(cfg, k, None)
         for k in (

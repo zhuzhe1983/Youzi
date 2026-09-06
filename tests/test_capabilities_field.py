@@ -17,8 +17,27 @@ a fixed order. These tests pin the new contract.
 
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def _loaded_discovery_state(monkeypatch):
+    """These capability tests describe running engines, not unloaded config."""
+    from types import SimpleNamespace
+
+    from vllm_mlx.config import get_config
+
+    cfg = get_config()
+    for key, value in {
+        "ready": True,
+        "draining": False,
+        "engine": object(),
+        "residency_manager": None,
+        "embedding_engine": SimpleNamespace(is_loaded=True),
+    }.items():
+        monkeypatch.setattr(cfg, key, value)
 
 
 def _mount_models_app(monkeypatch, **cfg_overrides):

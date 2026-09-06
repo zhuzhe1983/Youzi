@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Model listing endpoints.
 
-The OpenAI-canonical `/v1/models` and `/v1/models/{id}` endpoints
-serve ``ModelInfo`` shapes that carry Rapid-MLX vendor extensions
+The OpenAI-compatible `/v1/models` endpoint lists only loaded models and
+their routable aliases. Both it and `/v1/models/{id}` retain ``ModelInfo``
+shapes with additive Rapid-MLX vendor extensions
 (see ``api/models.ModelInfo``). The extensions surface per-alias
 profile data — curated sampling, hybrid/MoE flags, parser pair,
 modality — pulled from ``model_aliases.resolve_profile``. OpenAI
@@ -12,6 +13,8 @@ on ``qwen3.5-9b-4bit`` doesn't have to hand-tune sliders.
 """
 
 import logging
+import time
+from collections.abc import Iterable
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -1176,46 +1179,72 @@ def _build_codex_model_info(info: ModelInfo) -> dict:
     return build_codex_model_info(info.id, info.context_window)
 
 
+# Keep the OpenAI list envelope and the existing Desktop/Codex extensions.
+# Stable for this service lifetime, not the time of each GET request.
+_DISCOVERY_CREATED_AT = int(time.time())
+
+
+def _loaded_model_ids() -> list[str]:
+    """Loaded ids and their aliases only; no loading or catalog side effects."""
+    cfg = get_config()
+    if not cfg.ready or cfg.draining:
+        return []
+    ids: list[str] = []
+    manager = cfg.residency_manager
+    resident_ids = None
+    if manager is not None:
+        resident_ids = {
+            item["id"]
+            for item in manager.snapshot()["models"]
+            if item.get("state") == "resident"
+        }
+
+    def append(
+        name: str | None, engine: object | None, aliases: Iterable[str] = ()
+    ) -> None:
+        if not name or engine is None:
+            return
+        if resident_ids is not None and name not in resident_ids:
+            return
+        if not getattr(engine, "is_resident", True):
+            return
+        for model_id in [name, *sorted(aliases)]:
+            if model_id and model_id not in ids:
+                ids.append(model_id)
+
+    if cfg.model_registry is not None:
+        for entry in cfg.model_registry.list_entries():
+            append(entry.model_name, entry.engine, entry.aliases)
+    else:
+        append(cfg.model_name, cfg.engine, [cfg.model_alias] if cfg.model_alias else [])
+    # Dedicated embedding engines are outside the resident registry. A locked
+    # config name alone is NOT evidence that its weights are loaded.
+    embedding = cfg.embedding_engine
+    if embedding is not None and getattr(embedding, "is_loaded", False):
+        name = cfg.embedding_model_locked
+        if name and name not in ids:
+            ids.append(name)
+    return ids
+
+
+def _discovery_model_info(model_id: str) -> ModelInfo:
+    """Use the same stable OpenAI identity in list and retrieve responses."""
+    info = _build_model_info(model_id)
+    info.created = _DISCOVERY_CREATED_AT
+    info.owned_by = "youzi"
+    return info
+
+
 @router.get("/v1/models", dependencies=[Depends(verify_api_key)])
 async def list_models() -> ModelsResponse:
-    """List available models (supports multi-model).
+    """OpenAI discovery with additive desktop/agent metadata, loaded models only.
 
-    Each entry carries the Rapid-MLX vendor extension fields when
-    its id resolves to a known alias. OpenAI-spec clients ignore
-    unknown fields, so the wire shape stays backward-compatible.
+    Keep context, parser nulls, sampling, modality and Codex's top-level
+    ``models`` catalog on the original URL. Aliases point to the same resident
+    engine; configured, loading, evicting and unloaded engines are not listed.
+    Filtering before profile construction also avoids probing unused models.
     """
-    cfg = get_config()
-
-    models = []
-    seen_ids: set[str] = set()
-
-    def _append(info: ModelInfo) -> None:
-        if info.id in seen_ids:
-            return
-        seen_ids.add(info.id)
-        models.append(info)
-
-    if cfg.model_registry:
-        for entry in cfg.model_registry.list_entries():
-            _append(_build_model_info(entry.model_name))
-            for alias in sorted(entry.aliases):
-                if alias != entry.model_name:
-                    _append(_build_model_info(alias))
-    elif cfg.model_name:
-        _append(_build_model_info(cfg.model_name))
-        if cfg.model_alias and cfg.model_alias != cfg.model_name:
-            _append(_build_model_info(cfg.model_alias))
-
-    # Surface the dedicated embedding model id (when configured) so
-    # clients discover the ``/v1/embeddings``-capable id from the same
-    # ``/v1/models`` listing. H-09 sub-fix: when no embedding model is
-    # configured the route guard already 400s on ``/v1/embeddings``,
-    # so nothing is added here — capability advertisement matches
-    # actual behavior.
-    locked = _locked_embedding_id()
-    if locked:
-        _append(_build_model_info(locked))
-
+    models = [_discovery_model_info(model_id) for model_id in _loaded_model_ids()]
     codex_models = [
         _build_codex_model_info(info) for info in models if "text" in info.capabilities
     ]
@@ -1241,13 +1270,13 @@ async def retrieve_model(model_id: str) -> ModelInfo:
     cfg = get_config()
 
     if cfg.model_registry and model_id in cfg.model_registry:
-        return _build_model_info(model_id)
+        return _discovery_model_info(model_id)
     if model_id in (cfg.model_name, cfg.model_alias):
-        return _build_model_info(model_id)
+        return _discovery_model_info(model_id)
     # The dedicated embedding model id is addressable too so callers
     # can hydrate per-model state from ``/v1/models/{id}`` without
     # extra wire heuristics.
     locked = _locked_embedding_id()
     if locked and model_id == locked:
-        return _build_model_info(model_id)
+        return _discovery_model_info(model_id)
     raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")

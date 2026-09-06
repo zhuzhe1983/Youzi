@@ -5,6 +5,7 @@ Uses FastAPI TestClient with mocked server globals to test each route
 in isolation without needing a real model or server running.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -741,12 +742,13 @@ class TestModelsRoutes:
         from vllm_mlx.config import get_config
 
         cfg = get_config()
-        # Default ``engine`` to None unless a test supplies one: these are
-        # alias/registry resolution tests that must not inherit a live engine
-        # leaked by an earlier module (a stray MLLM engine would make
-        # ``/v1/models`` report the served model as a VLM via
-        # ``_served_engine_is_mllm``). Save+restore it like any other key.
-        kwargs.setdefault("engine", None)
+        # Discovery describes a running engine. Use a neutral loaded stub so
+        # profile resolution cannot inherit an unrelated MLLM from other tests.
+        kwargs.setdefault("engine", object())
+        kwargs.setdefault("ready", True)
+        kwargs.setdefault("draining", False)
+        kwargs.setdefault("residency_manager", None)
+        kwargs.setdefault("embedding_engine", None)
         orig = {}
         for k, v in kwargs.items():
             orig[k] = getattr(cfg, k)
@@ -867,6 +869,8 @@ class TestModelsRoutes:
         path users hit.
         """
         orig = self._set_config(
+            # Pin the live probe: loaded-engine truth supersedes alias metadata.
+            engine=SimpleNamespace(_is_hybrid_model=lambda: False),
             model_registry=None,
             model_name="mlx-community/Qwen3.5-4B-MLX-4bit",
             model_alias="qwen3.5-4b-4bit",
@@ -915,6 +919,8 @@ class TestModelsRoutes:
         sampling (temperature=1.0, top_k=64, top_p=0.95) — verified via
         ``model_aliases.list_profiles()`` at 2026-06-14."""
         orig = self._set_config(
+            # Pin the live probe: loaded-engine truth supersedes alias metadata.
+            engine=SimpleNamespace(_is_hybrid_model=lambda: False),
             model_registry=None,
             model_name="mlx-community/gemma-4-12B-it-4bit",
             model_alias="gemma-4-12b-4bit",
@@ -1005,6 +1011,8 @@ class TestModelsRoutes:
         contract.
         """
         orig = self._set_config(
+            # Pin the live probe: loaded-engine truth supersedes alias metadata.
+            engine=SimpleNamespace(_is_hybrid_model=lambda: False),
             model_registry=None,
             model_name="mlx-community/Qwen3.5-4B-MLX-4bit",
             model_alias="qwen3.5-4b-4bit",
