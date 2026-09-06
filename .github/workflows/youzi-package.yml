@@ -57,6 +57,8 @@ jobs:
           APP='apps/rapid-mac/build/Rapid-MLX Desktop.app'
           test -d "$APP/Contents/Resources/rapid-mlx/site-packages/vllm_mlx"
           codesign --verify --deep --strict "$APP"
+          swift apps/rapid-mac/scripts/verify-app-resources.swift "$APP"
+          bash apps/rapid-mac/scripts/verify-relocated-templates.sh "$APP"
           mkdir -p dist-youzi
           ditto -c -k --sequesterRsrc --keepParent "$APP" dist-youzi/Youzi-macos-arm64.zip
           mkdir -p "$RUNNER_TEMP/youzi-dmg"

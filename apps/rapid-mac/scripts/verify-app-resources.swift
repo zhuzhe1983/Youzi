@@ -77,6 +77,23 @@ for name in pngNames {
     print("OK: \(name).png \(Int(s.width))x\(Int(s.height)) at \(url.path)")
 }
 
+// Check every explicitly declared JSON resource in the packaged bundle, never
+// the SwiftPM checkout. Future catalog additions must not evade this gate.
+let jsonPattern = #"\.(?:process|copy)\(\"Resources/([^\"]+\.json)\"\)"#
+let jsonRegex = try! NSRegularExpression(pattern: jsonPattern)
+for match in jsonRegex.matches(in: packageSrc, range: NSRange(location: 0, length: nsSrc.length)) {
+    let filename = nsSrc.substring(with: match.range(at: 1))
+    let name = (filename as NSString).deletingPathExtension
+    if let url = bundle.url(forResource: name, withExtension: "json"),
+       let data = try? Data(contentsOf: url),
+       (try? JSONSerialization.jsonObject(with: data)) != nil {
+        print("OK: \(filename) packaged and valid JSON")
+    } else {
+        FileHandle.standardError.write(Data("FAIL: \(filename) missing or invalid in packaged app\n".utf8))
+        ok = false
+    }
+}
+
 // Localizable.xcstrings: declared as an SPM resource in Package.swift
 // but historically the production .app shipped without it (Bundle.main
 // only sees flat resources in Contents/Resources/, not the SPM

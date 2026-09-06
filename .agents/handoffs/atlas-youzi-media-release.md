@@ -32,3 +32,12 @@ no-MLX-on-Mac broad run is NOT a pass (18,077 pass/83 fail); see operations doc.
 Cancelled packaging 34052392766 before draft to include the TTSEngine-specific
 local name required by the chat-engine AST gate. Restart packaging from the
 new commit. Isolated 18043 is stopped, real client 8000 remains healthy.
+
+Release correction: Actions 34052959770 completed, but installed 0.14.3 crashed
+because the template JSON was absent and Bundle.module fell through to a missing
+runner checkout. Kept draft unpublished and marked DO NOT PUBLISH. Previous
+complete client restored; /health ready on8000. Branch now repairs production
+resource lookup/staging, adds a poisoned-fallback relocation regression and
+all-JSON packaging gate, and bumps the replacement candidate to0.14.4(174).
+Next: hosted build, installed-artifact startup/TTS/video/API verification, then
+publish only an accepted candidate. Desktop is still locked (GUI not claimed).

@@ -121,3 +121,27 @@ status must be recorded after execution, not inferred from these checks.
   before draft creation to include the final audio-contract clarification.
   The isolated port-18043 test server was shut down; the actual client on 8000
   remains running. Screen unlock/native acceptance remains outstanding.
+
+## Hosted-only startup rejection and resource gate
+
+The 0.14.3 hosted artifact (run 34052959770, source 9d95d30e) passed archive,
+manifest and strict signature checks but crashed on first launch in
+`YouziBundledTemplateCatalog.resourceURL()`: build.sh omitted
+`youzi-templates-v1.json`, then SwiftPM's `Bundle.module` asserted because its
+absolute runner checkout was absent. The local build masked the omission by
+finding that checkout. This is separate from the earlier locked-keychain stall.
+The draft is explicitly marked DO NOT PUBLISH and remains unpublished.
+
+Restored the complete previous app from the pre-install backup, without rolling
+back user data or changing Keychain. Its /health reports ready on 8000.
+
+0.14.4 (174) copies the template catalog into Contents/Resources and removes the
+fatal SwiftPM accessor from its production loader. A missing catalog now throws
+an ordinary missingResource error. Packaging checks every declared JSON asset;
+`verify-relocated-templates.sh <app>` compiles the actual loader into a temporary
+.app with a deliberately fatal Bundle.module stub, then tests both populated
+and missing resources. This cannot accidentally pass via a developer checkout.
+Both checks run against the final app before Actions archives it. The rejected
+hosted artifact fails the new gate, as expected. Native screen interaction is
+still unverified while the user's desktop is locked; do not equate API smoke
+results with GUI conversation acceptance.

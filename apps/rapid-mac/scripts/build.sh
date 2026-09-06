@@ -138,6 +138,16 @@ for asset in youzi-logo.png; do
     fi
 done
 
+# Startup seeds the editable template gallery from this catalog. SwiftPM's
+# checkout fallback concealed its absence in local builds; require the flat
+# production resource rather than shipping an app that crashes on another Mac.
+TEMPLATES_SRC="$ROOT/Sources/Rapid/Resources/youzi-templates-v1.json"
+if [[ ! -f "$TEMPLATES_SRC" ]]; then
+    echo "ERR: bundled template catalog missing" >&2
+    exit 1
+fi
+cp "$TEMPLATES_SRC" "$CONTENTS/Resources/youzi-templates-v1.json"
+
 # Localizable.xcstrings: same Bundle.main vs Bundle.module story as the PNGs
 # above. A String Catalog is build input, not a runtime localization resource:
 # copying only the JSON file leaves Bundle.main with no .lproj strings to

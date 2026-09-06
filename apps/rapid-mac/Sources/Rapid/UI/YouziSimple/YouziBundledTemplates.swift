@@ -68,6 +68,22 @@ struct YouziBundledTemplateCatalog: Decodable, Equatable, Sendable {
         if let url = Bundle.main.url(forResource: resourceName, withExtension: "json") {
             return url
         }
-        return Bundle.module.url(forResource: resourceName, withExtension: "json")
+        // A shipped app must never consult SwiftPM's fatal, checkout-absolute
+        // Bundle.module accessor. Missing resources should throw, not crash.
+        guard Bundle.main.bundleURL.pathExtension != "app" else { return nil }
+        let anchor = Bundle(for: YouziTemplateBundleFinder.self).bundleURL
+        let candidates = [
+            Bundle.main.bundleURL.appendingPathComponent("Rapid_Rapid.bundle"),
+            anchor.deletingLastPathComponent().appendingPathComponent("Rapid_Rapid.bundle"),
+        ]
+        for candidate in candidates {
+            if let bundle = Bundle(url: candidate),
+               let url = bundle.url(forResource: resourceName, withExtension: "json") {
+                return url
+            }
+        }
+        return nil
     }
 }
+
+private final class YouziTemplateBundleFinder: NSObject {}
