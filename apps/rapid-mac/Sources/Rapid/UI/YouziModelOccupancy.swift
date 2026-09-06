@@ -133,40 +133,28 @@ struct YouziModelOccupancyBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
             GeometryReader { proxy in
-                let width = max(0, proxy.size.width)
                 let total = max(1, Double(occupancy.totalBytes))
-                let chatWidth = max(0, CGFloat(Double(occupancy.chatBytes) / total) * width)
-                let imageWidth = max(0, CGFloat(Double(occupancy.imageBytes) / total) * width)
-                let voiceWidth = max(0, CGFloat(Double(occupancy.voiceBytes) / total) * width)
-                let videoWidth = max(0, CGFloat(Double(occupancy.videoBytes) / total) * width)
-
-                HStack(spacing: 1) {
-                    if chatWidth > 1 {
-                        Rectangle()
-                            .fill(YouziModelLane.chat.occupancyColor)
-                            .frame(width: chatWidth)
+                let known = occupancy.bytes.values.reduce(UInt64(0), +)
+                let other = occupancy.totalBytes > known + occupancy.remainingBytes
+                    ? occupancy.totalBytes - known - occupancy.remainingBytes : 0
+                HStack(spacing: 0) {
+                    ForEach(YouziModelLane.allCases) { lane in
+                        let bytes = occupancy.bytes[lane] ?? 0
+                        if bytes > 0 {
+                            Rectangle().fill(lane.occupancyColor)
+                                .frame(width: CGFloat(Double(bytes) / total) * proxy.size.width)
+                        }
                     }
-                    if imageWidth > 1 {
-                        Rectangle()
-                            .fill(YouziModelLane.image.occupancyColor)
-                            .frame(width: imageWidth)
+                    if other > 0 {
+                        Rectangle().fill(Color.secondary.opacity(0.25))
+                            .frame(width: CGFloat(Double(other) / total) * proxy.size.width)
                     }
-                    if voiceWidth > 1 {
-                        Rectangle()
-                            .fill(YouziModelLane.voice.occupancyColor)
-                            .frame(width: voiceWidth)
-                    }
-                    if videoWidth > 1 {
-                        Rectangle()
-                            .fill(YouziModelLane.video.occupancyColor)
-                            .frame(width: videoWidth)
-                    }
-                    Rectangle()
-                        .fill(RapidTheme.surfaceRaised)
+                    Rectangle().fill(Color.secondary.opacity(0.08))
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
             }
-            .frame(height: 6)
+            .frame(height: 7)
+            .help(i18n.text(zh: "颜色对应不同模型类型。数值可能含运行时估算；灰色是其他占用，浅色是剩余预算。语音未上报的内存不伪造比例。", en: "Colors identify model types; values may include runtime estimates. Gray is other usage, pale is remaining budget. Unreported audio memory has no fabricated segment."))
 
             HStack(spacing: RapidTheme.Space.xs) {
                 if occupancy.chatBytes > 0 {
@@ -176,7 +164,7 @@ struct YouziModelOccupancyBar: View {
                     occupancyLegend(lane: .image, bytes: occupancy.imageBytes)
                 }
                 if occupancy.voiceMemoryUnknown {
-                    Text("VOICE · —").font(RapidFont.caption)
+                    Text(i18n.text(zh: "语音 · —", en: "VOICE · —")).font(RapidFont.caption)
                         .foregroundStyle(YouziModelLane.voice.occupancyColor)
                         .help(i18n.text(zh: "语音模型已常驻；运行时暂未提供该模型的内存占用。", en: "Audio is resident; per-model memory is not reported by the runtime."))
                 } else if occupancy.voiceBytes > 0 {
@@ -186,13 +174,23 @@ struct YouziModelOccupancyBar: View {
                     occupancyLegend(lane: .video, bytes: occupancy.videoBytes)
                 }
                 Spacer(minLength: 0)
-                Text("可用 " + formatGigabytes(occupancy.remainingBytes))
+                Text(i18n.text(zh: "可用 ", en: "Free ") + formatGigabytes(occupancy.remainingBytes))
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
             }
+            .lineLimit(1).minimumScaleFactor(0.8)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("模型内存占用: 聊天 \(formatGigabytes(occupancy.chatBytes)), 图像 \(formatGigabytes(occupancy.imageBytes)), 可用 \(formatGigabytes(occupancy.remainingBytes))")
+        .accessibilityLabel(i18n.text(zh: "模型内存占用", en: "Model memory usage"))
+    }
+
+    private func title(_ lane: YouziModelLane) -> String {
+        switch lane {
+        case .chat: i18n.text(zh: "聊天", en: "LLM")
+        case .image: i18n.text(zh: "图片", en: "IMG")
+        case .voice: i18n.text(zh: "语音", en: "VOICE")
+        case .video: i18n.text(zh: "视频", en: "VIDEO")
+        }
     }
 
     private func occupancyLegend(lane: YouziModelLane, bytes: UInt64) -> some View {
@@ -200,7 +198,7 @@ struct YouziModelOccupancyBar: View {
             Circle()
                 .fill(lane.occupancyColor)
                 .frame(width: 6, height: 6)
-            Text("\(lane.menuTitle) \(formatGigabytes(bytes))")
+            Text("\(title(lane)) \(formatGigabytes(bytes))")
                 .font(RapidFont.caption)
                 .foregroundStyle(RapidTheme.textSecondary)
         }

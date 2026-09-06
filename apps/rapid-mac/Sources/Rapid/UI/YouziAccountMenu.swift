@@ -189,7 +189,6 @@ struct YouziAccountMenu: View {
             }
             .lineLimit(1)
 
-            YouziModelOccupancyBar(occupancy: currentOccupancy)
         }
         .accessibilityIdentifier("Youzi.AccountMenu.SystemStatus")
     }

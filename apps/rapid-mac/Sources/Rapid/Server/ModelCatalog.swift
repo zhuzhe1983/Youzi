@@ -811,6 +811,43 @@ enum ModelCatalog {
         }
     }
 
+    /// Complete media discovery for the scenario picker and built-in tools.
+    /// The shared chat cache intentionally excludes these entries. Preserve a
+    /// failed probe as nil rather than claiming that no models are downloaded.
+    static func scenarioMediaEntries(
+        binary: URL,
+        hubCacheOverride: URL? = ModelsFolderPreference.validatedOverrideURL()
+    ) async -> [ModelEntry]? {
+        async let modelsTask = runRapidMlxResult(binary: binary, args: ["models"])
+        async let videoTask = runRapidMlxResult(binary: binary, args: ["models", "--json"])
+        async let cachedTask = runRapidMlxResult(binary: binary, args: ["ls"], hubCacheOverride: hubCacheOverride)
+        let (models, videos, cached) = await (modelsTask, videoTask, cachedTask)
+        guard models.succeeded, cached.succeeded else { return nil }
+        let cache = Dictionary(parseCached(cached.stdout).compactMap { _, repo, size -> (String, String?)? in
+            repo.map { ($0, size) }
+        }, uniquingKeysWith: { first, _ in first })
+        let repos = Set(cache.keys)
+        let images = mergeImageRows(parseImageRows(models.stdout), cachedRepos: repos)
+        let audio = parseAudioRows(models.stdout).filter { isDesktopAudioAliasVisible($0.alias) }.map { row in
+            ModelEntry(alias: row.alias, hfRepo: row.hfRepo,
+                       sizeOnDisk: row.hfRepo.flatMap { cache[$0] } ?? row.size,
+                       cached: row.hfRepo.map { repos.contains($0) } ?? false, kind: .audio,
+                       audioCapability: audioCapability(alias: row.alias, subtype: row.subtype, family: row.family),
+                       audioFamily: row.family)
+        }
+        // Older sidecars may not implement the JSON/video catalog. Do not
+        // discard their valid audio/image downloads in that case.
+        let video = parseVideoRowsJSON(videos.succeeded ? videos.stdout : "").filter {
+            packagedVideoAliases.contains($0.alias)
+        }.map { row in
+            ModelEntry(alias: row.alias, hfRepo: row.hfRepo,
+                       sizeOnDisk: row.hfRepo.flatMap { cache[$0] } ?? nil,
+                       cached: row.hfRepo.map { repos.contains($0) } ?? false, kind: .video,
+                       videoCapabilities: row.capabilities, minimumMemoryGB: row.minimumMemoryGB)
+        }
+        return images + audio + video
+    }
+
     /// Audio catalog with probe success preserved. The ordinary catalog API
     /// intentionally degrades subprocess failures to an empty list for picker
     /// callers. Readiness decisions cannot do that: a failed `ls` must not be

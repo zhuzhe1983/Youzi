@@ -10,6 +10,7 @@ enum YouziSkillPromptCatalog: Sendable {
     }
 
     static let entries: [Entry] = [
+        Entry(name: "多模态创作", prompts: ["制作带语音旁白的唐诗小人书网页", "把故事做成有插图和朗读的离线绘本", "查看本地模型并生成一张插图"]),
         Entry(name: "文档整理", prompts: ["提炼结论与依据", "列出行动项", "标出待确认问题"]),
         Entry(name: "周计划", prompts: ["规划我的一周", "平衡工作与生活", "排出今天的优先级"]),
         Entry(name: "用心写作", prompts: ["写一封得体的邮件", "改得更自然", "按对象调整语气"]),

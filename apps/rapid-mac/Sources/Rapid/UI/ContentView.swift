@@ -149,12 +149,11 @@ struct ContentView: View {
     /// retry without turning session restoration into a polling loop.
     @State private var catalogRestoreRetryAttempted = false
 
-    var body: some View {
-        // Capture the identity owned by this alert render. A delayed dismiss
-        // callback must not cancel a newer warning that has reached the queue
-        // head in the meantime (#1463).
-        let displayedMemoryWarning = server.pendingMemoryWarning
-        let displayedModelSwitch = server.pendingModelSwitch
+    private var localModelApproval: YouziModelApprovalStore? {
+        (chat.tools as? CompositeToolRegistry)?.builtin.localModels?.approval
+    }
+
+    private var lifecycleSurface: some View {
         // Ollama-style layout: a left sidebar (New Chat / Launch / — later —
         // history) + a detail pane. No top model-control bar; the model
         // picker lives inline in the compose box (see ChatView) and the
@@ -258,6 +257,15 @@ struct ContentView: View {
                 quickstart.clearPendingReady()
             }
         }
+    }
+
+    var body: some View {
+        // Capture the identity owned by this alert render. A delayed dismiss
+        // callback must not cancel a newer warning that has reached the queue
+        // head in the meantime (#1463).
+        let displayedMemoryWarning = server.pendingMemoryWarning
+        let displayedModelSwitch = server.pendingModelSwitch
+        lifecycleSurface
         .alert(
             displayedMemoryWarning?.title ?? "",
             isPresented: Binding(
@@ -333,6 +341,7 @@ struct ContentView: View {
         // the user has turned on auto-approve in Settings (resolved before a
         // request is ever published), so it only appears on a real prompt.
         .modifier(BrowseApprovalDialog(store: browseApproval))
+        .modifier(YouziModelApprovalDialog(store: localModelApproval))
         // Issue #1716: per-tool consent for MCP connector tools. Same shape as
         // the browse sheet above — an MCP server is an arbitrary local process,
         // so "may the model run this" is a decision that belongs on screen.
@@ -678,6 +687,7 @@ struct ContentView: View {
                 || showConversationSearch
                 || server.pendingMemoryWarning != nil
                 || server.pendingModelSwitch != nil
+                || localModelApproval?.pending != nil
                 || browseApproval.pendingRequest != nil
                 || mcpApproval.pendingRequest != nil
                 || showCommandPalette

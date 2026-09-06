@@ -158,7 +158,14 @@ final class ChatViewModel {
     /// room for the useful search → open page → refine pattern without making
     /// a user wait through a long local-model loop. After the budget is spent
     /// we give the model one tools-disabled round to synthesize what it has.
-    private let maxToolExecutions: Int = 3
+    private var maxToolExecutions: Int { Self.toolExecutionBudget(enabled: enabledDefinitions) }
+
+    /// Eight illustrated/narrated pages need 16 media calls plus discovery,
+    /// approvals and publication. Ordinary registries retain the three-call cap.
+    nonisolated static func toolExecutionBudget(enabled: [ToolDefinition]) -> Int {
+        let names = Set(enabled.map { $0.function.name })
+        return names.isSuperset(of: ["youzi_generate_image", "youzi_synthesize_speech", "youzi_create_storybook"]) ? 24 : 3
+    }
 
     nonisolated private static let toolBudgetSynthesisPreamble = """
     The tool-use budget for this turn is exhausted. Do not request or describe any more tool calls. Answer the user's question now using the evidence already present in the conversation. If that evidence is insufficient, say what remains uncertain.
@@ -355,6 +362,15 @@ final class ChatViewModel {
     /// directory instead of touching the real one.
     private static func folderStoreURL(for conversationStore: URL?) -> URL? {
         ConversationFolderStore.companionURL(forConversationStore: conversationStore)
+    }
+
+    /// App-owned tools are attached after chat construction to avoid retain
+    /// cycles. Reapply persisted opt-outs before the first conversation send.
+    func reloadToolPreferences() {
+        disabledTools = Set(tools.definitions.compactMap { definition in
+            let name = definition.function.name
+            return (toolDefaults.object(forKey: Self.toolEnabledKey(name)) as? Bool) == false ? name : nil
+        })
     }
 
     /// Toggle a tool from the UI. Persists to ``UserDefaults`` so the choice
@@ -2337,7 +2353,10 @@ final class ChatViewModel {
                 }
             }
         }
-        var toolExecutionsLeft = maxToolExecutions
+        // Merely installing local tools must not expand ordinary web/MCP loops.
+        // Expand once, only when this turn actually invokes an advertised local tool.
+        var toolExecutionsLeft = 3
+        var localToolBudgetActivated = false
         let toolExecutor = NativeToolCallExecutor(registry: tools)
         var appGroundingSources: [GroundingSource] = []
         var isFinalSynthesisRound = false
@@ -2395,6 +2414,7 @@ final class ChatViewModel {
                 dateContext: ChatViewModel.currentDateTimeContext(),
                 memoryContext: memoryContext,
                 personalizationContext: personalizationContext,
+                localToolContext: definitions.contains(where: { $0.function.name.hasPrefix("youzi_") }) ? YouziLocalModelTools.skillInstructions : nil,
                 global: globalInstruction,
                 conversation: conversationInstruction
             )
@@ -2603,6 +2623,12 @@ final class ChatViewModel {
                             failureKind: .toolFailed
                         ))
                         continue
+                    }
+                    if !localToolBudgetActivated,
+                       YouziLocalModelTools.definitions.contains(where: { $0.function.name == call.function.name }),
+                       definitions.contains(where: { $0.function.name == call.function.name }) {
+                        toolExecutionsLeft += maxToolExecutions - 3
+                        localToolBudgetActivated = true
                     }
                     toolExecutionsLeft -= 1
                     let r = await toolExecutor.execute(call, advertised: definitions)
@@ -2824,6 +2850,7 @@ final class ChatViewModel {
         dateContext: String? = nil,
         memoryContext: String? = nil,
         personalizationContext: String? = nil,
+        localToolContext: String? = nil,
         global: String,
         conversation: String
     ) -> [ChatMessage] {
@@ -2840,6 +2867,9 @@ final class ChatViewModel {
         }
         if let personalizationContext, let context = normalizedInstruction(personalizationContext) {
             parts.append("[PERSONALIZATION PREFERENCES]\nUser-editable preferences, subordinate to application and safety instructions:\n" + context)
+        }
+        if let localToolContext = localToolContext.flatMap(normalizedInstruction) {
+            parts.append(localToolContext)
         }
         if let global = normalizedInstruction(global) {
             parts.append("""

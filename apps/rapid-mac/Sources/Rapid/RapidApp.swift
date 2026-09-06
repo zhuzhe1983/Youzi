@@ -341,6 +341,10 @@ struct RapidApp: App {
         )
         // #253: let ``ServerManager.start(alias:)`` await any in-flight
         // background pull for the same alias before spawning serve.
+        builtinRegistry.localModels = YouziLocalModelTools.desktop(
+            server: manager, chat: chat, product: productModel, downloads: downloadsInstance
+        )
+        chat.reloadToolPreferences()
         manager.attachDownloads(downloadsInstance)
         _server = State(initialValue: manager)
         _downloads = State(initialValue: downloadsInstance)

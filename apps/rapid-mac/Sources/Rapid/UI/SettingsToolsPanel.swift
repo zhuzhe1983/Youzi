@@ -206,6 +206,11 @@ struct SettingsToolsPanel: View {
             case "web_search": return "联网搜索"
             case "browse":     return "浏览网页"
             case "weather":    return "天气"
+            case "youzi_models": return "查询本地模型"
+            case "youzi_load_model": return "请求启动模型"
+            case "youzi_generate_image": return "本地图片生成"
+            case "youzi_synthesize_speech": return "本地语音旁白"
+            case "youzi_create_storybook": return "制作网页话本"
             default:           return toolName
             }
         }
@@ -213,6 +218,11 @@ struct SettingsToolsPanel: View {
         case "web_search": return "Web Search"
         case "browse":     return "Browse Web Page"
         case "weather":    return "Weather"
+        case "youzi_models": return "Local model discovery"
+        case "youzi_load_model": return "Request model startup"
+        case "youzi_generate_image": return "Local image generation"
+        case "youzi_synthesize_speech": return "Local narration"
+        case "youzi_create_storybook": return "Publish HTML storybook"
         default:           return toolName
         }
     }
@@ -229,6 +239,11 @@ struct SettingsToolsPanel: View {
                 return "打开并阅读指定网页内容。每次访问均需确认。"
             case "weather":
                 return "查询指定地点的实时天气与预报。"
+            case "youzi_models": return "查看模型下载、常驻状态与可用创作能力，不会启动或下载模型。"
+            case "youzi_load_model": return "每次启动未运行模型都需你确认，不会退出当前聊天服务。"
+            case "youzi_generate_image": return "调用已启动的本地图片模型，成果自动关联当前任务。"
+            case "youzi_synthesize_speech": return "调用已启动的本地语音模型，默认使用模型设置中的音色。"
+            case "youzi_create_storybook": return "将当前任务的插图和旁白合成可离线打开的网页，保存到我的文件。"
             default:
                 return fallback
             }
@@ -240,6 +255,11 @@ struct SettingsToolsPanel: View {
             return "Opens a web page you or the model names and reads it. You approve each page."
         case "weather":
             return "Gets the current weather for a place you name."
+        case "youzi_models": return "Inspect downloaded models and ready states without loading or downloading."
+        case "youzi_load_model": return "Ask for your approval before starting a stopped model alongside chat."
+        case "youzi_generate_image": return "Generate illustrations locally and save them to the current task."
+        case "youzi_synthesize_speech": return "Generate narration locally using the configured voice by default."
+        case "youzi_create_storybook": return "Save an offline HTML book with this task's images and narration to My Files."
         default:
             return fallback
         }
@@ -525,6 +545,11 @@ struct SettingsToolsPanel: View {
         case "web_search": return "magnifyingglass"
         case "browse": return "globe"
         case "weather": return "cloud.sun"
+        case "youzi_models": return "square.stack.3d.up"
+        case "youzi_load_model": return "play.circle"
+        case "youzi_generate_image": return "photo"
+        case "youzi_synthesize_speech": return "waveform"
+        case "youzi_create_storybook": return "book"
         default: return "wrench.and.screwdriver"
         }
     }

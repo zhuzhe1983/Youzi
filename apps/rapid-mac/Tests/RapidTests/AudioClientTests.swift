@@ -31,6 +31,27 @@ struct AudioClientTests {
     }
 
     @MainActor
+    @Test("Local narration keeps alias-keyed voice defaults while requesting the canonical model")
+    func localNarrationDefaults() async throws {
+        let name = "LocalNarrationDefaults.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        var client = makeClient()
+        client.generationDefaults = ModelGenerationDefaults(defaults: defaults)
+        defaults.set(["voice-alias": "Serena"], forKey: ModelGenerationDefaults.Key.voices)
+        AudioStubProtocol.response = (200, [:], Data(#"{"voices":["Vivian","Serena"]}"#.utf8))
+        let entry = ModelEntry(alias: "voice-alias", hfRepo: "local/voice", sizeOnDisk: nil,
+            cached: true, kind: .audio, audioCapability: .speech)
+        _ = try await YouziLocalModelTools.synthesizeLocally(text: "Hello", entry: entry, voice: nil,
+            port: 8123, bearer: "test", client: client)
+        let data = try #require(AudioStubProtocol.bodies.last)
+        let body = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(body["model"] as? String == "local/voice")
+        #expect(body["voice"] as? String == "Serena")
+        #expect(AudioStubProtocol.requests.count == 2)
+    }
+
+    @MainActor
     @Test("Settings preview sends first speech request on a ready but not yet resident lazy lane")
     func settingsPreviewLazyLane() async throws {
         let client = makeClient()

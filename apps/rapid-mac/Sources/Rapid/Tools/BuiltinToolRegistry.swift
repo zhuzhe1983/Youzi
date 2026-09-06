@@ -12,10 +12,12 @@ import Foundation
 ///
 /// One instance is constructed by ``RapidApp`` and shared by the chat
 /// view model. Filesystem / shell tools are deliberately absent: this
-/// build has no ``SandboxManager``, and a tool that touches the user's
-/// disk must not ship without one.
+/// build has no ``SandboxManager``. Local multimodal tools write only through
+/// Youzi's app-managed artifact store and cannot choose paths or run programs.
 @MainActor
 final class BuiltinToolRegistry: ToolRegistry {
+    var localModels: YouziLocalModelTools?
+
     typealias WebSearchRunner = (
         _ arguments: String,
         _ provider: WebSearchProvider,
@@ -71,7 +73,7 @@ final class BuiltinToolRegistry: ToolRegistry {
             WebSearchTool.definition,
             BrowseTool.definition,
             WeatherTool.definition,
-        ]
+        ] + (localModels == nil ? [] : YouziLocalModelTools.definitions)
     }
 
     func run(_ call: ToolCall) async -> ToolCallResult {
@@ -86,6 +88,8 @@ final class BuiltinToolRegistry: ToolRegistry {
             )
         case "weather":
             result = await WeatherTool.run(arguments: call.function.arguments)
+        case let name where YouziLocalModelTools.definitions.contains(where: { $0.function.name == name }) && localModels != nil:
+            result = await localModels!.run(call)
         default:
             // The model invented a tool name we don't ship — return an
             // error result so it gets a chance to recover instead of

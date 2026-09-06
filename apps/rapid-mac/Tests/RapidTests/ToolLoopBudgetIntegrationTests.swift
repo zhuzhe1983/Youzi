@@ -41,6 +41,41 @@ struct ToolLoopBudgetIntegrationTests {
         #expect((system["content"] as? String)?.contains("tool-use budget") == true)
     }
 
+    @Test("Installing local tools does not expand an ordinary search loop")
+    func installedLocalToolsKeepOrdinaryCap() async throws {
+        ToolLoopBudgetProtocol.reset()
+        let registry = CountingToolRegistry()
+        registry.definitions += YouziLocalModelTools.definitions
+        let model = ChatViewModel(
+            client: ChatStreamClient(baseURL: URL(string: "fake://tool-loop")!, session: ToolLoopBudgetProtocol.session()),
+            tools: registry, persistsConversations: false
+        )
+        model.send("Research", alias: "test-model")
+        for _ in 0..<200 where model.isStreaming { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(!model.isStreaming && registry.runCount == 3)
+        let body = try #require(ToolLoopBudgetProtocol.requestBodies.last)
+        let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["tools"] == nil)
+    }
+
+    @Test("A local workflow expands once to 24 calls and still caps batched requests")
+    func localWorkflowBudget() async throws {
+        ToolLoopBudgetProtocol.reset(batched: true, localLoop: true)
+        let registry = CountingToolRegistry()
+        registry.definitions += YouziLocalModelTools.definitions
+        let model = ChatViewModel(
+            client: ChatStreamClient(baseURL: URL(string: "fake://tool-loop")!, session: ToolLoopBudgetProtocol.session()),
+            tools: registry, persistsConversations: false
+        )
+        model.send("Make a book", alias: "test-model")
+        for _ in 0..<200 where model.isStreaming { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(!model.isStreaming && registry.runCount == 24)
+        let body = try #require(ToolLoopBudgetProtocol.requestBodies.last)
+        let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["tools"] == nil)
+        #expect(model.messages.filter { $0.role == .tool && $0.content.contains("budget exhausted") }.count == 2)
+    }
+
     @Test("raw calls in the tools-disabled final round fail without more execution")
     func finalArtifactFails() async throws {
         ToolLoopBudgetProtocol.reset(rawFinal: true)
@@ -91,7 +126,7 @@ struct ToolLoopBudgetIntegrationTests {
 private final class CountingToolRegistry: ToolRegistry {
     private(set) var runCount = 0
 
-    let definitions = [
+    var definitions = [
         ToolDefinition(
             name: "lookup",
             description: "Look up evidence",
@@ -113,8 +148,10 @@ private final class ToolLoopBudgetProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var sendsBatchedCalls = false
 
     nonisolated(unsafe) static var rawFinal = false
+    nonisolated(unsafe) static var localLoop = false
 
-    static func reset(batched: Bool = false, rawFinal: Bool = false) {
+    static func reset(batched: Bool = false, rawFinal: Bool = false, localLoop: Bool = false) {
+        Self.localLoop = localLoop
         Self.rawFinal = rawFinal
         requestBodies = []
         sendsBatchedCalls = batched
@@ -143,8 +180,9 @@ private final class ToolLoopBudgetProtocol: URLProtocol, @unchecked Sendable {
 
         let stream: String
         if Self.sendsBatchedCalls, requestNumber == 1 {
-            let calls = (1...5).map { index in
-                "{\"index\":\(index - 1),\"id\":\"call_\(index)\",\"type\":\"function\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{}\"}}"
+            let toolName = Self.localLoop ? "youzi_models" : "lookup"
+            let calls = (1...(Self.localLoop ? 26 : 5)).map { index in
+                "{\"index\":\(index - 1),\"id\":\"call_\(index)\",\"type\":\"function\",\"function\":{\"name\":\"\(toolName)\",\"arguments\":\"{}\"}}"
             }.joined(separator: ",")
             stream = """
             data: {"choices":[{"delta":{"tool_calls":[\(calls)]},"finish_reason":"tool_calls"}]}
