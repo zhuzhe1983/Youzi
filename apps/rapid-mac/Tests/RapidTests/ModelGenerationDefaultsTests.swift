@@ -116,6 +116,11 @@ struct ModelGenerationDefaultsTests {
         #expect(ModelServicePreference.candidatePorts(environment: ["RAPID_DESKTOP_PORT": "8555"], defaults: defaults) == [8555])
         defaults.set(70000, forKey: ModelServicePreference.portKey)
         #expect(ModelServicePreference.port(in: defaults) == nil)
+        defaults.set("8333", forKey: PortAllocator.storedPortKey)
+        #expect(ModelServicePreference.candidatePorts(environment: [:], defaults: defaults) == [8333])
+        defaults.set(8123, forKey: ModelServicePreference.portKey)
+        #expect(ModelServicePreference.candidatePorts(environment: [:], defaults: defaults) == [8123])
+        #expect(ModelServicePreference.candidatePorts(environment: ["RAPID_DESKTOP_PORT": "invalid"], defaults: defaults) == [8123])
     }
 
     @MainActor

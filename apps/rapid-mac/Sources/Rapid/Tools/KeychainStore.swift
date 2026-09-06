@@ -41,7 +41,18 @@ protocol KeychainItemAccessing: Sendable {
 /// authentication UI; an authorization failure is state for the app to
 /// explain, never permission for SecurityAgent to interrupt the user.
 struct SecurityKeychainItems: KeychainItemAccessing {
+    // These items live in the legacy file-based login keychain, not the
+    // Data Protection keychain. On macOS 26 a locked keychain / changed
+    // ad-hoc signature can ignore LAContext.interactionNotAllowed and block
+    // SecItemCopyMatching in SecurityAgent indefinitely (including launch).
+    // Keep the legacy process-wide gate disabled for this non-interactive
+    // adapter too. Never toggle it back: concurrent reads must not open a
+    // prompt window. This denies unavailable access; it does not unlock the
+    // keychain, change ACLs, or replace existing credentials.
+    private static let nonInteractiveLegacyStatus = SecKeychainSetUserInteractionAllowed(false)
+
     func query(account: String, service: String) -> KeychainReadResult {
+        guard Self.nonInteractiveLegacyStatus == errSecSuccess else { return .unavailable }
         let authenticationContext = LAContext()
         authenticationContext.interactionNotAllowed = true
         let query: [String: Any] = [
@@ -68,6 +79,7 @@ struct SecurityKeychainItems: KeychainItemAccessing {
     }
 
     func upsert(account: String, service: String, secret: String) -> Bool {
+        guard Self.nonInteractiveLegacyStatus == errSecSuccess else { return false }
         guard let data = secret.data(using: .utf8) else { return false }
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -96,6 +108,7 @@ struct SecurityKeychainItems: KeychainItemAccessing {
     }
 
     func remove(account: String, service: String) -> Bool {
+        guard Self.nonInteractiveLegacyStatus == errSecSuccess else { return false }
         let authenticationContext = LAContext()
         authenticationContext.interactionNotAllowed = true
         let query: [String: Any] = [

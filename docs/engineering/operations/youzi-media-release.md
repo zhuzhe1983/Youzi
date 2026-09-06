@@ -46,3 +46,30 @@ Local evidence before native acceptance: merged release executable compiled;
 lease and dynamic-loader regressions passed; fresh sidecar import/Metal/FFmpeg
 smokes passed. Actual video generation, new-client acceptance and hosted release
 status must be recorded after execution, not inferred from these checks.
+
+### Additional acceptance findings (2026-09-07 local Mac)
+
+- Both downloaded Wan checkpoints completed real generation with the packaged
+  runtime: I2V q8 (256x256, 5 frames, 1 step, 24.0 s, 12,745-byte MP4),
+  T2V (same smoke dimensions/steps, 20.2 s, 5,022-byte MP4). These are runtime
+  smoke checks, not quality/performance benchmarks or full-resolution acceptance.
+- A real replacement/restart exposed an existing legacy login-Keychain stall
+  while the desktop session was locked. `LAContext.interactionNotAllowed` and
+  `kSecUseAuthenticationUIFail` each still blocked in SecurityAgent on this
+  machine. A separate compiled non-interactive probe with
+  `SecKeychainSetUserInteractionAllowed(false)` returned `errSecAuthFailed` in
+  11 ms without changing any item. The adapter now sets that process-wide legacy
+  gate once, retains LAContext restrictions, and fails unavailable access closed.
+  The API is deprecated, but needed for the file-based keychain compatibility
+  path; do not silently remove it in favor of the reproduced hanging replacement.
+- The rebuilt app was installed as a complete fresh bundle with deep/strict
+  signature verification. It now starts its bundled 0.14.3 runtime while locked;
+  `/health` returns ready/healthy. No keychain ACL, credential, or lock state was
+  changed. Native interaction still requires the user to unlock the desktop.
+- Merge regression: upstream default port candidates gained a second range,
+  causing Youzi's array-comparison override detection to ignore its saved port.
+  Precedence is now explicit: valid environment override > Youzi setting >
+  explicit legacy Desktop setting > Youzi's existing 8000...8009 range.
+- Fresh scoped verification: 204 Swift tests / 35 suites and 269 Python tests
+  passed. The optional native visual suite is skipped unless explicitly enabled;
+  it is not counted as an interactive GUI acceptance.

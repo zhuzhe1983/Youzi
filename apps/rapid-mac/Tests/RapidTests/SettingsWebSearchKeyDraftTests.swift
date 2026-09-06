@@ -123,6 +123,7 @@ struct SettingsWebSearchKeyDraftTests {
     func securityReadStatusMapping() {
         #expect(SecurityKeychainItems.readResult(status: errSecItemNotFound, data: nil) == .missing)
         #expect(SecurityKeychainItems.readResult(status: errSecInteractionNotAllowed, data: nil) == .unavailable)
+        #expect(SecurityKeychainItems.readResult(status: errSecAuthFailed, data: nil) == .unavailable)
         #expect(SecurityKeychainItems.readResult(
             status: errSecSuccess,
             data: Data("saved-key".utf8)

@@ -110,12 +110,14 @@ struct PortAllocatorTests {
         #expect(!PortAllocator.canBind(port: 60_031, host: "127.0.0.1"))
     }
 
-    @Test("Default candidate window is 7659..7668 plus 8000..8009 legacy fallback")
+    @Test("Youzi preserves its 8000 default independently of the upstream allocator window")
     func defaultWindow() {
-        // Primary window is the RMLX phone-keypad range; 8000…8009 is
-        // probed after it so existing 127.0.0.1:8000 clients keep working.
-        #expect(PortAllocator.candidatePorts == Array(7659...7668) + Array(8000...8009))
-        #expect(PortAllocator.candidatePorts.count == 20)
+        let name = "YouziPortDefaults.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        #expect(ModelServicePreference.candidatePorts(environment: [:], defaults: defaults) == Array(8000...8009))
+        #expect(PortAllocator.defaultCandidatePorts == Array(7659...7668))
+        #expect(PortAllocator.legacyFallbackPorts == Array(8000...8009))
     }
 
     // MARK: - #455 RAPID_DESKTOP_PORT override (test-harness isolation)

@@ -15,8 +15,18 @@ enum ModelServicePreference {
     static func candidatePorts(
         environment: [String: String], defaults: UserDefaults = .standard
     ) -> [Int] {
-        let resolved = PortAllocator.resolveCandidatePorts(environment: environment)
-        if resolved != PortAllocator.defaultCandidatePorts { return resolved }
-        return port(in: defaults).map { [$0] } ?? resolved
+        // Do not infer an env override by comparing candidate arrays: the
+        // upstream allocator now appends a legacy fallback window, making
+        // that comparison always unequal and silently ignoring Youzi Save.
+        if let raw = environment["RAPID_DESKTOP_PORT"],
+           let value = Int(raw.trimmingCharacters(in: .whitespaces)),
+           (1...65535).contains(value) { return [value] }
+        if let configured = port(in: defaults) { return [configured] }
+        // Honor an explicit older Desktop setting, but retain Youzi's
+        // existing 8000 default so this update does not break local clients.
+        if let raw = defaults.string(forKey: PortAllocator.storedPortKey),
+           let value = Int(raw.trimmingCharacters(in: .whitespaces)),
+           (1...65535).contains(value) { return [value] }
+        return PortAllocator.legacyFallbackPorts
     }
 }
