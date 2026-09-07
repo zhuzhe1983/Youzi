@@ -50,6 +50,22 @@
 6. 系统 Voice Processing 不支持 manual/offline rendering。离线真实 AVFAudio 回调测试
    可以验证线程/生命周期，**无法验证系统 AEC 或实际扬声器尾音**。
 
+## 本机只读能力探测（2026-09-07）
+
+在本次 Mac17,7 / macOS 26.6.2 上查询默认路由，未创建 IOProc/引擎、未开启麦克风、
+未写入任何设备属性。默认输入 transport 为 `bltn`（内建）。在 **input scope**：
+`VoiceActivityDetectionEnable` 存在且可写，当前值 0；`VoiceActivityDetectionState`
+存在且只读，当前值 0。global scope 无这两个属性，未来实现不可用错 scope。
+
+```sh
+RAPID_DESKTOP_NO_PORT_SWEEP=1 swift apps/rapid-mac/scripts/inspect-voice-device-capabilities.swift
+```
+
+本机 SDK `AudioHardware.h` 明确注明 HAL VAD 对输入使用回声消除，可配合 process mute，
+但不是 hardware mute；输入未运行或检测关闭时 state 为 0。因此本次读到 0 **不能证明**
+现场无语音、回声已消除或插话检测有效。探测只证明该路由有可进一步验证的接口，
+并未改变当前应用的 RMS 判定，也未证明 USB/蓝牙支持或属性的跨进程所有权。
+
 ## 建议的产品状态机（待实现）
 
 ```text

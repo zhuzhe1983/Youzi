@@ -174,3 +174,29 @@ only to exercise the block ABI; the product still waits for dataPlayedBack.
 Do not mistake either offline rendering or generated HTTP audio for a physical
 speaker/AEC qualification. The earlier installed candidate crashed despite those
 HTTP/controller gates passing. See the full-duplex assessment for attended gates.
+
+
+### Callback crash replacement — September 7, 2026
+
+The earlier delivery above is historical: `candidate-8be52684` failed at actual
+capture startup. It has been replaced locally by **`candidate-378664d6`** from
+`atlas/youzi-live-voice-callback-fix`, still marketing version0.14.4/build174.
+Complete fresh-sidecar build, strict signature/resource checks, candidate-only
+CLI/import smoke and the Release73-test/10-suite selection passed. The real
+AVFAudio offline negative control traps for the legacy tap and passes the fix,
+in both optimized and unoptimized probes. Offline is not an AEC acceptance test.
+
+The whole old app is retained under
+`~/Library/Application Support/Youzi/Client Backups/0.14.4-before-callback-fix-20260907-181211/`;
+the older pre-voice backup is unchanged. Installed app and bundled sidecar remained
+stable for7 health/ready samples over60.118s. Native launch flag was verified;
+the Python child's curated environment need not retain a desktop-only flag.
+A simple-mode existing task opened/closed Live Voice with **Microphone off** and
+explicit Start. Prior Deliverables navigation was restored; no microphone start,
+permission changes, task messages or model downloads were requested by this check.
+
+Attended device startup/AEC, actual playback and double-talk remain the next
+acceptance gates. Do not reuse the previous HTTP-chain measurements as evidence
+that this replacement underwent physical full-duplex testing. See the current
+Atlas handoff and full-duplex assessment for exact boundaries and read-only HAL
+capability-probe instructions. No main merge or formal release was performed.

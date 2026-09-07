@@ -28,12 +28,53 @@ Release regression passed: 73 tests in 10 suites (including 8 new callback tests
 Both optimized and unoptimized standalone real-ObjC probes reproduce legacy
 SIGTRAP and pass the fixed callback. Native Release build passed. These tests
 open no microphone/speaker and do not qualify acoustic AEC. Complete replacement
-client packaging/installation is still pending and will be recorded separately.
+client packaging/installation passed; current delivery evidence follows.
 
 Receiving Pixel/Atlas: [full-duplex assessment](../../docs/engineering/decisions/youzi-full-duplex-assessment.md)
 records the current RMS-only insertion gate, native AEC/HAL VAD route, separate
 half-duplex tail gap, device/near-end/double-talk acceptance matrix and unmeasured
 latency targets. This is a follow-up proposal, not shipped AEC/VAD changes.
+
+## Current callback-fix delivery — 2026-09-07 18:12 (Asia/Shanghai)
+
+- Product commit `378664d6`, candidate `candidate-378664d6`, marketing version
+  `0.14.4 (174)`. Pushed on `atlas/youzi-live-voice-callback-fix`. Subsequent
+  delivery notes/read-only capability probe do not change product code.
+- Complete normal build with fresh matching Python sidecar passed, without
+  `SKIP_SIDECAR`; strict deep codesign, app resources, bundled CLI and isolated
+  import checks passed. Audio/health/API route modules resolve to candidate
+  bytecode from `/tmp`, not checkout code. Package `__init__.py` sources are
+  intentionally retained by the builder; an initial overstrict smoke assertion
+  was corrected, not the signed bundle.
+- Entire old `candidate-8be52684` retained at
+  `~/Library/Application Support/Youzi/Client Backups/0.14.4-before-callback-fix-20260907-181211/`.
+  The earlier pre-voice `candidate-d56811c2` backup is also intact. No app/service
+  was running at replacement, so no process termination was required. Whole-bundle
+  staging/replacement retained rollback; no settings, tasks, keychain, permissions
+  or model caches were reset. No explicit model downloads/loads were requested.
+- Launched installed app with explicit `open --env RAPID_DESKTOP_NO_PORT_SWEEP=1`;
+  verified flag in the native process where PortSweep runs. Python sidecar uses a
+  curated environment, so this desktop-only flag is not required in its env.
+- Same installed native process and its bundled Python child stayed stable over
+  7 samples / 60.118s; `/health` healthy/model-loaded/ready and `/health/ready` 200
+  on every sample. Model discovery 200; unauthenticated administrative residency
+  correctly refused with 401. Strict signing still passed after use; no new Rapid
+  crash report appeared after replacement during this check.
+- GUI opened/closed Live Voice in an existing simple-mode task: **Microphone off**,
+  explicit Start, no startup model warning after service readiness. Did not press
+  Start or change half-duplex setting; restored the prior Deliverables surface.
+  No new chat message or raw recording was created by the check.
+- Read-only HAL probe confirms input-scope native VAD properties exist on this
+  Mac's built-in route, currently disabled. Probe source and reproducible command
+  are linked from the full-duplex assessment. This is capability discovery, not
+  device AEC/near-end recognition acceptance or a shipped new VAD gate.
+
+Receiving Pixel/user: next concrete action is **attended microphone startup**,
+then permissions/device lifecycle and acoustic double-talk tests. Current repair
+has a real offline ObjC regression pass, not a claim that physical AEC passed.
+Receiving Atlas/Vector: implement near-end/echo-aware interruption separately;
+current RMS-only gate and utterance ASR remain unchanged. No new inference-latency
+benchmark, main merge, formal release or GitHub release workflow in this repair.
 
 ## Implementation
 - Optional Qwen streaming PCM on the existing authenticated speech endpoint;
