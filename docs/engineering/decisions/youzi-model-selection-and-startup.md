@@ -127,3 +127,18 @@ full-duplex or multi-model inference acceptance. Native video chat tools remain 
 separate pending integration; existing video workspace/API support is not proof
 of video tool use in chat. Full-duplex AEC requires attended speaker/microphone
 validation; ASR is still utterance/window-based, not fully incremental recognition.
+
+### Video workspace capability boundary
+
+The workspace must send its exact selected alias to `GET /v1/videos/capabilities`.
+An omitted query uses the automatic pool and is **not** appropriate for an
+explicit on-demand selection. A resident auxiliary video engine is usable while
+chat remains the process-owning model; readiness must check catalog identity
+(alias or repository path) and a ready/busy runtime state, not compare the video
+alias with the primary chat alias. Loading/failed/evicting entries are not ready.
+
+Controls refresh when the selected alias, readiness or sidecar session changes,
+not on every memory sample. Capability/history/preview results are scoped to the
+sidecar epoch as well as alias/port/bearer: a persistent key on the same port does
+not make a response from a retired process current. Requests never enroll an
+on-demand model in the automatic pool or replace the chat engine.

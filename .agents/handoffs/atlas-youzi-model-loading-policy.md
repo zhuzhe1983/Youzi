@@ -123,3 +123,31 @@ chat pool (or explicitly reuse the previously running chat model without changin
 membership). Exercise Save against the running service and confirm default vs
 exact Responses behavior. Perform attended voice acceptance only after explicit
 microphone consent. Pixel owns visual acceptance; integration owns tool/API gaps.
+
+## Follow-up: explicit video workspace selection
+
+Read-only post-install inspection found two native gaps: capabilities requests
+omitted the selected alias (therefore used the automatic pool), and readiness
+required the selected video alias to own the chat process. Fixes remain scoped to
+this task branch; no changes in the primary main worktree.
+
+- Capability requests now encode the exact model query, including literal `+`.
+- A selected video can be ready through canonical repository/alias residency while
+  chat stays primary; loading/failed/evicting auxiliary entries remain unavailable.
+- The UI observes a non-secret, stable identity (selection/readiness/session), not
+  every metrics tick. Same-port/same-bearer session replacement invalidates old
+  capability responses and gates submission until new controls are available.
+- Cancellation still rejects stale results. No unsafe actor isolation changes,
+  preference writes, loading, downloads or chat process replacement were added.
+- Python policy/video/auth/residency targeted regression: **95 passed**. Native
+  Release regression: **360 tests / 45 suites passed**, including video transport,
+  workspace/co-load/session/cancellation, pool/settings/auth and live audio tests.
+  Commands use the same environment flags and interpreter documented above; native
+  filter additionally includes all `Video` suites. This is targeted regression,
+  not a claim that the documented inherited full Python suite failure is resolved.
+  Clean-commit full build/signature/bundled smoke and installation still follow.
+
+The first new co-load test selected before history reconciliation; the existing
+safety gate correctly refused that selection. The fixture now reconciles history
+before selecting and still asserts exact on-demand requests, cold-state rejection
+and unchanged automatic membership. No existing safety gate/assertion was removed.

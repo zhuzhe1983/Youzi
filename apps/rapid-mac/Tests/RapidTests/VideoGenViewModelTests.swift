@@ -59,6 +59,7 @@ struct VideoGenViewModelTests {
 
         await viewModel.refreshCatalog()
         await viewModel.refreshServerData()
+        #expect(await client.requestedCapabilityModels() == [model.alias])
         #expect(viewModel.size == "512x512")
         #expect(viewModel.seconds == 1)
         viewModel.seconds = 4
@@ -85,6 +86,145 @@ struct VideoGenViewModelTests {
         #expect(request.referenceFileName == "rock.png")
         #expect(viewModel.jobs.first?.status == .queued)
         #expect(viewModel.prompt.isEmpty)
+    }
+
+    @Test("A co-loaded video uses its own capabilities while chat stays primary", arguments: [
+        "resident", "busy", "loading", "failed", "evicting",
+    ])
+    func coLoadedVideoSelection(state: String) async throws {
+        let suite = "VideoGenViewModelTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["automatic-video"], forKey: YouziResidentServicePreference.Slot.video.selectionKey)
+        let preferred = ModelEntry(
+            alias: "automatic-video", hfRepo: "org/preferred", sizeOnDisk: "9 GB", cached: true,
+            kind: .video, videoCapabilities: [.textToVideo], minimumMemoryGB: 24
+        )
+        let selected = ModelEntry(
+            alias: "on-demand-video", hfRepo: "org/selected", sizeOnDisk: "9 GB", cached: true,
+            kind: .video, videoCapabilities: [.textToVideo], minimumMemoryGB: 24
+        )
+        let snapshot = ModelResidencySnapshot(
+            memoryLimitBytes: 64 << 30, memoryUsedBytes: 18 << 30, memoryAvailableBytes: nil,
+            idleTTLSeconds: 0, loadsTotal: 2, evictionsTotal: 0,
+            models: [preferred, selected].map { model in
+                ResidentModelStatus(
+                    id: model.hfRepo!, modelPath: model.hfRepo!, aliases: [], modality: "video-gen",
+                    state: model.alias == preferred.alias ? "resident" : state,
+                    pinned: true, primary: false, activeRequests: 0,
+                    estimatedBytes: 9 << 30, measuredBytes: nil, idleSeconds: 0
+                )
+            }
+        )
+        let server = ServerManager(
+            testingState: .ready(alias: "chat-model"), binaryPath: URL(fileURLWithPath: "/usr/bin/true"),
+            residency: snapshot, activeBearer: "test-bearer", sessionDefaults: defaults
+        )
+        let client = VideoFakeClient()
+        let viewModel = VideoGenViewModel(
+            server: server, client: client, physicalRAMGB: 64, catalogLoader: { _ in [preferred, selected] }
+        )
+        await viewModel.refreshCatalog()
+        #expect(viewModel.selectedAlias == preferred.alias)
+        await viewModel.refreshServerData()
+        #expect(viewModel.canSwitchModels)
+        let previousKey = viewModel.serverRefreshKey
+        viewModel.selectModel(selected.alias)
+        #expect(viewModel.serverRefreshKey != previousKey)
+        await viewModel.serverStateDidChange()
+        viewModel.prompt = "A quiet lake"
+        let ready = state == "resident" || state == "busy"
+        #expect(viewModel.isServerReady == ready)
+        #expect(viewModel.canSubmit == ready)
+        let expectedModels: [String?] = ready ? [preferred.alias, selected.alias] : [preferred.alias]
+        #expect(await client.requestedCapabilityModels() == expectedModels)
+        if ready {
+            await viewModel.submit()
+            #expect(await client.recordedRequests().first?.model == selected.alias)
+        }
+        #expect(server.servingAlias == "chat-model")
+        #expect(YouziResidentServicePreference.automaticPool(in: defaults)["video"] == [preferred.alias])
+    }
+
+    @Test("A retired sidecar cannot publish capabilities when alias, port and bearer are reused")
+    func reusedCredentialSessionRejectsStaleCapabilities() async throws {
+        let model = ModelEntry(
+            alias: "video-model", hfRepo: "org/video", sizeOnDisk: "9 GB", cached: true,
+            kind: .video, videoCapabilities: [.textToVideo], minimumMemoryGB: 24
+        )
+        let client = VideoSuspendingClient(capabilities: try VideoFakeClient.capabilitiesValue())
+        let server = ServerManager(
+            testingState: .ready(alias: model.alias), binaryPath: URL(fileURLWithPath: "/usr/bin/true"),
+            activeBearer: "persistent-test-bearer"
+        )
+        let viewModel = VideoGenViewModel(
+            server: server, client: client, physicalRAMGB: 64, catalogLoader: { _ in [model] }
+        )
+        await viewModel.refreshCatalog()
+        let refresh = Task { await viewModel.refreshServerData() }
+        await client.waitUntilCapabilitiesRequested()
+        let key = viewModel.serverRefreshKey
+        server._testReplaceActiveSession()
+        #expect(viewModel.serverRefreshKey != key)
+        #expect(server.activeBearer == "persistent-test-bearer")
+        await client.resumeCapabilities()
+        await refresh.value
+        #expect(viewModel.capabilities == nil)
+        #expect(viewModel.jobs.isEmpty)
+        #expect(!viewModel.jobsAreReconciled)
+    }
+
+    @Test("Submission waits for fresh controls after a same-credential service restart")
+    func submissionCannotReuseRetiredSessionControls() async {
+        let model = ModelEntry(
+            alias: "video-model", hfRepo: "org/video", sizeOnDisk: "9 GB", cached: true,
+            kind: .video, videoCapabilities: [.textToVideo], minimumMemoryGB: 24
+        )
+        let client = VideoFakeClient()
+        let server = ServerManager(
+            testingState: .ready(alias: model.alias), binaryPath: URL(fileURLWithPath: "/usr/bin/true"),
+            activeBearer: "persistent-test-bearer"
+        )
+        let viewModel = VideoGenViewModel(
+            server: server, client: client, physicalRAMGB: 64, catalogLoader: { _ in [model] }
+        )
+        await viewModel.refreshCatalog()
+        await viewModel.refreshServerData()
+        viewModel.prompt = "A quiet lake"
+        #expect(viewModel.canSubmit)
+        server._testReplaceActiveSession()
+        #expect(viewModel.isServerReady)
+        #expect(!viewModel.canSubmit)
+        await viewModel.submit()
+        #expect(await client.recordedRequests().isEmpty)
+        await viewModel.serverStateDidChange()
+        #expect(viewModel.canSubmit)
+        #expect(await client.requestedCapabilityModels() == [model.alias, model.alias])
+    }
+
+    @Test("Cancelled capability refresh cannot publish even if the transport completes")
+    func cancelledCapabilitiesAreDiscarded() async throws {
+        let model = ModelEntry(
+            alias: "video-model", hfRepo: "org/video", sizeOnDisk: "9 GB", cached: true,
+            kind: .video, videoCapabilities: [.textToVideo], minimumMemoryGB: 24
+        )
+        let client = VideoSuspendingClient(capabilities: try VideoFakeClient.capabilitiesValue())
+        let server = ServerManager(
+            testingState: .ready(alias: model.alias), binaryPath: URL(fileURLWithPath: "/usr/bin/true"),
+            activeBearer: "test-bearer"
+        )
+        let viewModel = VideoGenViewModel(
+            server: server, client: client, physicalRAMGB: 64, catalogLoader: { _ in [model] }
+        )
+        await viewModel.refreshCatalog()
+        let refresh = Task { await viewModel.refreshServerData() }
+        await client.waitUntilCapabilitiesRequested()
+        refresh.cancel()
+        await client.resumeCapabilities()
+        await refresh.value
+        #expect(viewModel.capabilities == nil)
+        #expect(!viewModel.isRefreshing)
+        #expect(!viewModel.canSubmit)
     }
 
     @Test("A running model that exceeds this Mac's memory remains ineligible")
@@ -313,7 +453,7 @@ struct VideoGenViewModelTests {
 private actor VideoPollingClient: VideoClientProtocol {
     private var listCalls = 0
 
-    func capabilities(port: Int, bearer: String?) async throws -> VideoCapabilities {
+    func capabilities(model: String?, port: Int, bearer: String?) async throws -> VideoCapabilities {
         try VideoFakeClient.capabilitiesValue()
     }
 
@@ -356,6 +496,7 @@ private actor VideoPollingClient: VideoClientProtocol {
 
 private actor VideoFakeClient: VideoClientProtocol {
     private var requests: [VideoCreateRequest] = []
+    private var capabilityModels: [String?] = []
     private var listFailures: Int
     private var listCalls = 0
 
@@ -363,8 +504,9 @@ private actor VideoFakeClient: VideoClientProtocol {
         self.listFailures = listFailures
     }
 
-    func capabilities(port: Int, bearer: String?) async throws -> VideoCapabilities {
-        try JSONDecoder().decode(VideoCapabilities.self, from: Data(Self.capabilitiesJSON.utf8))
+    func capabilities(model: String?, port: Int, bearer: String?) async throws -> VideoCapabilities {
+        capabilityModels.append(model)
+        return try JSONDecoder().decode(VideoCapabilities.self, from: Data(Self.capabilitiesJSON.utf8))
     }
 
     func create(
@@ -401,6 +543,7 @@ private actor VideoFakeClient: VideoClientProtocol {
     }
 
     func recordedRequests() -> [VideoCreateRequest] { requests }
+    func requestedCapabilityModels() -> [String?] { capabilityModels }
     func listCallCount() -> Int { listCalls }
 
     nonisolated static func capabilitiesValue() throws -> VideoCapabilities {
@@ -432,7 +575,7 @@ private actor VideoSuspendingClient: VideoClientProtocol {
         value = capabilities
     }
 
-    func capabilities(port: Int, bearer: String?) async throws -> VideoCapabilities {
+    func capabilities(model: String?, port: Int, bearer: String?) async throws -> VideoCapabilities {
         capabilitiesRequested = true
         return try await withCheckedThrowingContinuation { continuation in
             capabilitiesContinuation = continuation

@@ -128,8 +128,8 @@ struct VideoView: View {
             await viewModel.refreshCatalog()
             await viewModel.serverStateDidChange()
         }
-        .onChange(of: server.state) { _, _ in
-            Task { await viewModel.serverStateDidChange() }
+        .task(id: viewModel.serverRefreshKey) {
+            await viewModel.serverStateDidChange()
         }
         .fileImporter(
             isPresented: $showingReferenceImporter,

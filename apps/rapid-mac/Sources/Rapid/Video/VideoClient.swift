@@ -433,7 +433,7 @@ enum VideoClientError: Error, LocalizedError, Equatable {
 }
 
 protocol VideoClientProtocol: Sendable {
-    func capabilities(port: Int, bearer: String?) async throws -> VideoCapabilities
+    func capabilities(model: String?, port: Int, bearer: String?) async throws -> VideoCapabilities
     func create(_ request: VideoCreateRequest, port: Int, bearer: String?) async throws -> VideoJob
     func list(port: Int, bearer: String?, limit: Int) async throws -> [VideoJob]
     func delete(id: String, port: Int, bearer: String?) async throws
@@ -459,10 +459,20 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
         try FileManager.default.removeItem(at: $0)
     }
 
-    func capabilities(port: Int, bearer: String?) async throws -> VideoCapabilities {
-        let value: VideoCapabilities = try await decode(
-            request(path: "v1/videos/capabilities", port: port, bearer: bearer)
-        )
+    func capabilities(model: String? = nil, port: Int, bearer: String?) async throws -> VideoCapabilities {
+        var request = request(path: "v1/videos/capabilities", port: port, bearer: bearer)
+        if let model {
+            guard let requestURL = request.url,
+                  var components = URLComponents(url: requestURL, resolvingAgainstBaseURL: false) else {
+                throw VideoClientError.invalidResponse
+            }
+            components.queryItems = [URLQueryItem(name: "model", value: model)]
+            // Query parsers treat a literal + as a space (HF aliases may contain +).
+            components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+            guard let url = components.url else { throw VideoClientError.invalidResponse }
+            request.url = url
+        }
+        let value: VideoCapabilities = try await decode(request)
         return try value.validated()
     }
 

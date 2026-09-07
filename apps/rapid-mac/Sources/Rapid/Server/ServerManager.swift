@@ -918,7 +918,9 @@ final class ServerManager {
     private(set) var embeddedBearerLifetime: EmbeddedBearerLifetime = .explicit
     private(set) var embeddedBearerRotationPending = false
     private(set) var activeAnonymousInferenceAllowed = false
-    private var activeSessionGeneration: UInt64 = 0
+    // Non-secret epoch for discarding results from a retired sidecar, even
+    // when the configured port and persistent bearer are reused.
+    private(set) var activeSessionGeneration: UInt64 = 0
     private var applyingAuthentication = false
 
     private var applyingModelPolicy = false
@@ -1511,6 +1513,10 @@ final class ServerManager {
     /// stop landing mid-loop to pin the state-drift guard.
     internal func _testSetState(_ newState: ServerState) {
         self.state = newState
+    }
+
+    internal func _testReplaceActiveSession() {
+        setActiveServerSession(bearer: activeBearer)
     }
 
     internal func _testSetOperating(_ value: Bool) {

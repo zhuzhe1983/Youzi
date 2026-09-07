@@ -8,6 +8,25 @@ final class VideoGenViewModel {
         let alias: String
         let port: Int
         let bearer: String
+        let sessionGeneration: UInt64
+    }
+
+    /// Only meaningful readiness changes should refresh controls, not every
+    /// memory/progress sample. No credential is exposed to the view's task ID.
+    struct ServerRefreshKey: Equatable {
+        let alias: String
+        let primaryAlias: String?
+        let port: Int
+        let sessionGeneration: UInt64
+        let ready: Bool
+    }
+
+    var serverRefreshKey: ServerRefreshKey {
+        ServerRefreshKey(
+            alias: selectedAlias, primaryAlias: server.servingAlias,
+            port: server.activePort, sessionGeneration: server.activeSessionGeneration,
+            ready: isServerReady
+        )
     }
 
     enum Mode: String, CaseIterable, Identifiable {
@@ -132,6 +151,7 @@ final class VideoGenViewModel {
     var canSubmit: Bool {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         return isServerReady
+            && loadedServerContext == currentServerContext
             && capabilities != nil
             && isSelectedModelEligible
             && supportedModes.contains(mode)
@@ -286,7 +306,7 @@ final class VideoGenViewModel {
         }
         do {
             let newCapabilities = try await client.capabilities(
-                port: context.port, bearer: context.bearer
+                model: context.alias, port: context.port, bearer: context.bearer
             )
             guard requestIsCurrent(
                 context,
@@ -558,13 +578,14 @@ final class VideoGenViewModel {
     }
 
     private var currentServerContext: ServerRequestContext? {
-        guard !selectedAlias.isEmpty,
-              server.servingAlias == selectedAlias,
+        guard let model = selectedModel, server.servingAlias != nil,
+              server.servingAlias == selectedAlias || YouziScenarioModels.isReady(model, in: server.residency),
               let bearer = server.activeBearer, !bearer.isEmpty else { return nil }
         return ServerRequestContext(
             alias: selectedAlias,
             port: server.activePort,
-            bearer: bearer
+            bearer: bearer,
+            sessionGeneration: server.activeSessionGeneration
         )
     }
 
@@ -615,7 +636,7 @@ final class VideoGenViewModel {
         contextGeneration: UInt,
         refreshGeneration: UInt? = nil
     ) -> Bool {
-        guard contextGeneration == serverContextGeneration,
+        guard !Task.isCancelled, contextGeneration == serverContextGeneration,
               currentServerContext == context else { return false }
         return refreshGeneration.map { $0 == serverRefreshGeneration } ?? true
     }

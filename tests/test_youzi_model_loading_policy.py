@@ -98,6 +98,33 @@ def test_image_and_video_engine_entry_points_follow_pool(configured):
         _video_engine("chat-a")
 
 
+@pytest.mark.parametrize("preferred", [[], ["video-cold"], ["video-b"]])
+def test_video_capabilities_honor_explicit_resident_choice(configured, preferred):
+    from vllm_mlx.routes.video import router
+
+    configured.automatic_model_pool = {"video": preferred}
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer test-only-key"}
+    before = configured.model_registry.list_model_names()
+    response = client.get("/v1/videos/capabilities", params={"model": "video-a"}, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["model"] == "video-a"
+    automatic = client.get("/v1/videos/capabilities", headers=headers)
+    if "video-b" in preferred:
+        assert automatic.status_code == 200
+        assert automatic.json()["model"] == "video-b"
+    else:
+        assert automatic.status_code == 409
+        assert automatic.json()["detail"]["error"]["code"] == "automatic_model_not_ready"
+    rejected = client.get("/v1/videos/capabilities", params={"model": "video-cold"}, headers=headers)
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["error"]["code"] == "model_not_ready"
+    assert configured.model_registry.list_model_names() == before
+    assert configured.automatic_model_pool == {"video": preferred}
+
+
 @pytest.mark.parametrize("payload,expected", [
     ('{"automatic":{"chat":["b","a"],"speech":[]}}', {"chat": ["b", "a"], "speech": []}),
     ('{"automatic":{}}', {}),

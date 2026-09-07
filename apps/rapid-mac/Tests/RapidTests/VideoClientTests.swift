@@ -28,6 +28,26 @@ struct VideoClientTests {
         #expect(value.referenceMaximumBytes == 20 * 1024 * 1024)
         let request = try #require(VideoStubProtocol.requests.first)
         #expect(request.url?.path == "/v1/videos/capabilities")
+        #expect(request.url?.query == nil)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+    }
+
+    @Test("Capabilities preserve the exact selected model in a single encoded query item", arguments: [
+        "org/video-model", "org/video+小&model=other#?", "",
+    ])
+    func capabilitiesSelectExactModel(model: String) async throws {
+        let client = makeClient()
+        VideoStubProtocol.response = (200, Data(Self.capabilitiesJSON.utf8))
+
+        _ = try await client.capabilities(model: model, port: 8123, bearer: "secret")
+
+        let request = try #require(VideoStubProtocol.requests.first)
+        let url = try #require(request.url)
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+        #expect(url.path == "/v1/videos/capabilities")
+        #expect(components.queryItems == [URLQueryItem(name: "model", value: model)])
+        #expect(components.fragment == nil)
+        #expect(!(components.percentEncodedQuery?.contains("+") ?? false))
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
     }
 
