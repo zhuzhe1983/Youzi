@@ -151,3 +151,30 @@ The first new co-load test selected before history reconciliation; the existing
 safety gate correctly refused that selection. The fixture now reconciles history
 before selecting and still asserts exact on-demand requests, cold-state rejection
 and unchanged automatic membership. No existing safety gate/assertion was removed.
+
+## Selected video delivery completed (2026-09-07)
+
+- Clean source candidate `a6bb13f8`, identity `candidate-a6bb13f8`, version
+  0.14.4 (174). Full native + bundled sidecar build succeeded with model bundling
+  disabled. No weights downloaded or loaded by verification.
+- Strict/deep signatures verified before staging, after whole-bundle replacement,
+  and for the rollback copy. Sparkle executable-relative Frameworks rpath present.
+  Executable SHA256:
+  `87d3b60b299adb203415d946b9aefb598e4fcf18f6b0d5bafe4bd0ac49bf81f3`.
+- Bundled offline smoke used only candidate Python/stdlib/site-packages; ten
+  module-origin assertions, five text-route selection boundaries, authenticated
+  live policy, and exact resident-video capabilities beside primary chat passed.
+  An initial smoke harness check incorrectly excluded the bundle's own stdlib;
+  corrected to require all sys.path entries inside the paired runtime, retaining
+  exact module-origin/bytecode assertions. No product validation was weakened.
+- Previous client quit normally after checking no child services existed. Complete
+  original and verified backup retained under the local Youzi Client Backups
+  directory (`0.14.4-before-video-selection-20260907-205129`). Recovery: quit the
+  candidate normally and restore the entire `OriginalInstalled.app` bundle; do
+  not edit signed bundle contents or reset user state.
+- Installed app launched with `RAPID_DESKTOP_NO_PORT_SWEEP=1`, exact process
+  survived a 60-second observation with no new Rapid crash report. Automatic chat
+  pool remains empty; no inference-ready claim or silent startup enrollment.
+- Machine remained locked: real GUI Save, real model generation and acoustic
+  full-duplex acceptance remain unverified. Native video chat tools remain a
+  separate follow-up, not delivered by this UI/client fix. Main unchanged.
