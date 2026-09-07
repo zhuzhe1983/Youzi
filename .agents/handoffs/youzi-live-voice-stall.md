@@ -60,3 +60,15 @@ unloads, automatic-pool edits, port sweeps, user store resets or permission chan
 - Enhanced real-model HTTP rendering and installed GUI verification remain
   explicitly pending. Detailed repro commands/results are in the existing
   live-voice operations and performance documents.
+
+## Thinking follow-up
+
+Source/config review: native chat defaults thinking off; the stored switch was
+absent. The standalone Responses benchmark omitted the switch, which is a
+measurement caveat, not proof that it reasoned. Four read-only current-service
+requests (Responses and chat, unspecified/off) all returned visible text within
+0.185–0.578s and no observed reasoning; Responses usage reported0 reasoning
+tokens. Cached prompt tokens and output lengths differed. See the performance
+note for exact payload conditions, numbers and reproduction artifact location.
+No source or user setting was changed. The earlier13-second first-text delay's
+cause remains unproven; the layout stall remains a separate confirmed symptom.

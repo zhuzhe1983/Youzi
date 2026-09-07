@@ -359,3 +359,49 @@ Thus the first sentence can start before the LLM finishes, but subsequent
 sentences can still have synthesis gaps. ASR remains utterance/window based.
 Neither full-duplex acoustic performance nor low-latency end-to-end streaming
 is established by these results.
+
+### Follow-up: thinking is a hypothesis, not the measured cause of the stall
+
+Read-only configuration review found `SamplingConfig.enableThinkingDefault`
+false and no persisted `rapid.sampling.v0.enableThinking` value in the running
+app's defaults domain. `sendLiveVoice` uses the normal chat route; its request
+builder sends `chat_template_kwargs: {"enable_thinking": false}` when the setting
+is off. This is source/config evidence, not capture of the original hung turn.
+Conversely, `youzi_live_voice_chain.py` omits thinking controls in its Responses
+requests, leaving them to the server/model. That omission does **not** prove the
+model actually reasoned.
+
+A follow-up compared four sequential, synthetic requests against the already
+serving `qwen3.8-27b-4bit`, with no model lifecycle calls, microphone, TTS, native
+app replacement or settings writes. The service had changed since the earlier
+hang and now listed only the chat model's two identities. Same host/toolchain as
+above. Both routes used the exact prompt:
+
+> 请介绍静夜思并解释这首诗的含义。 请用中文讲解六到八句话，直接回答，不要标题、Markdown或工具。
+
+All requests used `stream:true` and a640-token limit; Responses additionally
+used `store:false`. Sampling controls were left unspecified in both conditions.
+Explicit-off requests added only `chat_template_kwargs.enable_thinking=false`.
+The local HTTP client disabled proxy inheritance; first text excluded whitespace.
+
+| Route / condition, in execution order | First text | Total | Reasoning observed |
+| --- | ---: | ---: | --- |
+| Responses / unspecified |0.578s|7.517s|0 reasoning deltas; usage reasoning_tokens=0|
+| Responses / explicit off |0.185s|5.197s|0 reasoning deltas; usage reasoning_tokens=0|
+| Chat completions / explicit off |0.195s|6.437s|0 reasoning_content/reasoning delta characters|
+| Chat completions / unspecified |0.185s|4.255s|0 reasoning_content/reasoning delta characters|
+
+All four completed normally. The first request reported0 cached input tokens;
+subsequent requests reported26. Outputs differed in length. These single runs
+are **not a controlled throughput benchmark**, and the first-request latency
+difference must not be attributed to thinking. They show that omission did not
+produce observable reasoning in this current service. They do not establish why
+the earlier co-resident-model probe took12.904s to first text, nor exonerate the
+independently observed native layout hang. Local results and the reproduction
+script were retained in `/tmp/youzi-live-voice-stall/thinking-check/`; only timing,
+event counts and usage were recorded, not raw reasoning.
+
+For future voice latency comparisons, pin thinking explicitly and record the
+actual reasoning lane, token/cache usage and resident-model set. Do not equate
+all time before visible prose with thinking or change global user preferences to
+make a benchmark faster.
