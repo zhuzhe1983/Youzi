@@ -220,3 +220,65 @@ voice tests55/6 suites and final durable backend16 tests also passed.
 These selections overlap: do not add their counts into a unique-test total.
 One opt-in resident HTTP PCM test was disabled in the hermetic native run; its
 separate real-service measurements are documented above.
+
+
+## Installed-client delivery verification
+
+The full normal desktop build (fresh matching sidecar, not a skipped-sidecar
+assembly) was installed as `0.14.4 candidate-8be52684` on2026-09-07. Source
+integration branch: `atlas/youzi-live-voice-delivery`. Subsequent changes are
+**test/docs only**; they do not change the installed product executable/runtime.
+Complete old app retained for rollback. Strict deep signing, resource checks,
+CLI help and candidate-only imports from outside the checkout passed. The
+application modules were confirmed sourceless; dependencies may legitimately
+retain `.py` initializers. Do not require all third-party modules to be `.pyc`.
+
+Same installed service, both ports8000, Qwen27B + Whisper-large-v3-turbo + Qwen
+CustomVoice BF16 on the same M5 Max/128GiB environment above. Existing image and
+video residents were preserved. The recognition lane was explicitly warmed from
+verified existing cached weights/processor files with `preserve_loaded=true`;
+no startup preferences were changed and no model download was requested.
+
+Two native HTTP/controller runs used `YOUZI_LIVE_PRODUCTION_READINESS=1`:
+actual authenticated ServerManager residency refresh and production model
+selection, not the earlier readiness fixture. Server process ownership,
+microphone capture and speaker drain remain synthetic/isolated. The bearer was
+passed only in process memory, not result files or repository content.
+
+| Measurement | Installed first run | Installed warm repeat |
+| --- | ---: | ---: |
+| Exact synthetic transcript recognized | yes | yes |
+| PCM before streamed assistant text completed | yes | yes |
+| PCM chunks / bytes |356 /1,697,280 |485 /2,311,680 |
+| Generated24kHz mono audio |35.36s |48.16s |
+| First PCM after session start (includes synthetic capture) |11.794s |11.188s |
+| Last synthetic input frame after session start |not separately recorded |4.624s |
+| First PCM after last synthetic input frame |not separately recorded |6.564s |
+| Whole run with synthetic drain |44.010s |52.534s |
+| Conversation persisted and reloaded |yes |yes |
+| Physical microphone / speaker activated |no /no |no /no |
+
+Input: “请用六句话简要介绍静夜思的含义。” Isolated sampling:640 max tokens,
+thinking disabled; generated replies differ, so complete times are **not** a
+controlled cold/warm speedup comparison. The6.564s post-input latency is the
+relevant current chain observation, not the standalone TTS first-packet number.
+This does not establish GPT-Live-like responsiveness or audible latency. Future
+latency work should attribute readiness, ASR, prompt prefill/first safe sentence,
+TTS scheduling and real playback separately, without bypassing tools/approvals.
+
+The installed-service native PCM/cancellation probe also passed all15 core tests:
+116 chunks /556,800bytes, first PCM0.266s, synthesis completion6.286s at speed1.0.
+Cancel after exactly one callback; the same URLSession's fresh request delivered
+41 chunks /195,840bytes; no late cancelled callbacks, and the lane became idle.
+The first attempt failed **before speech** because the test assumed the standalone
+helper's `/health` shape contained `lanes`. The repaired **test** defaults to
+production authenticated `/v1/models/residency` with `audio_lanes`; standalone
+helper health now requires an explicit opt-in. Authentication was not weakened,
+and the initial failed log was retained rather than described as a pass.
+
+Both real GUI chat modes showed the voice panel with Microphone off and explicit
+Start. Open/close and mode round-trip passed without microphone activation; user
+was left in the original simple mode. Seven healthy/ready samples over60.076s
+retained the same installed app and service PIDs. Signing still verified after
+runtime use. These delivery checks add evidence to the independent product
+reviews; they do not replace attended acoustic/device/permission acceptance.

@@ -327,20 +327,27 @@ struct YouziLiveAudioCoreTests {
         let model = try #require(environment["YOUZI_LIVE_AUDIO_TEST_MODEL"])
         let voice = try #require(environment["YOUZI_LIVE_AUDIO_TEST_VOICE"])
         let bearer = environment["YOUZI_LIVE_AUDIO_TEST_BEARER"]
+        // Production /health does not expose audio residency. A standalone
+        // test server can explicitly opt into its non-product health fixture;
+        // never silently fall back around authenticated admin discovery.
+        let probeHealth = environment["YOUZI_LIVE_AUDIO_PROBE_HEALTH"] == "1"
+        let residencyPath = probeHealth ? "/health" : "/v1/models/residency"
+        let lanesKey = probeHealth ? "lanes" : "audio_lanes"
         let configuration = URLSessionConfiguration.ephemeral
+        configuration.connectionProxyDictionary = [:]
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 120
         let client = AudioClient(session: URLSession(configuration: configuration))
         defer { client.session.invalidateAndCancel() }
 
         @MainActor func laneIsIdle() async throws -> Bool {
-            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/health")!)
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(residencyPath)")!)
             if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
             let (data, response) = try await client.session.data(for: request)
             let http = try #require(response as? HTTPURLResponse)
             try #require(http.statusCode == 200)
             let root = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-            let lanes = try #require(root["lanes"] as? [[String: Any]])
+            let lanes = try #require(root[lanesKey] as? [[String: Any]])
             let lane = try #require(lanes.first { $0["model"] as? String == model })
             return lane["state"] as? String == "resident" && lane["active_requests"] as? Int == 0
         }

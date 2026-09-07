@@ -3,8 +3,10 @@ import Foundation
 import Testing
 @testable import Rapid
 
-/// Explicitly opt-in real native HTTP orchestration. The ONLY simulated edges
-/// are microphone capture and speaker drain; this must not be called acoustic QA.
+/// Explicitly opt-in real native HTTP orchestration with synthetic microphone
+/// capture and speaker drain; this must not be called acoustic QA. The default
+/// probe also supplies a readiness fixture. Enable YOUZI_LIVE_PRODUCTION_READINESS
+/// to exercise authenticated ServerManager residency and production model selection.
 /// Uses synthetic input and an isolated conversation store. No model lifecycle,
 /// real microphone, keychain or user conversation mutations.
 @MainActor
@@ -23,6 +25,10 @@ struct YouziLiveVoiceHTTPTests {
         try #require((1024...65535).contains(chatPort) && (1024...65535).contains(speechPort))
         let alias = env["YOUZI_LIVE_CHAT_MODEL"] ?? "qwen3.8-27b-4bit"
         let key = env["YOUZI_PROBE_API_KEY"]
+        let productionReadiness = env["YOUZI_LIVE_PRODUCTION_READINESS"] == "1"
+        if productionReadiness {
+            try #require(chatPort == speechPort, "Production readiness selects lanes on one service")
+        }
         let suite = "YouziLiveVoiceHTTPTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -41,8 +47,9 @@ struct YouziLiveVoiceHTTPTests {
         let listing = try #require(JSONSerialization.jsonObject(with: residencyData) as? [String: Any])
         let entries = try #require(listing["data"] as? [[String: Any]])
         try #require(entries.contains { ($0["id"] as? String) == alias })
-        // Explicit test-only readiness seam. Production uses authenticated
-        // ServerManager residency; this probe tests inference orchestration.
+        // Isolated server ownership fixture: never spawn/stop the user service.
+        // Production-readiness mode still fetches the actual authenticated
+        // residency snapshot; the default mode supports split-port probes.
         let server = ServerManager(testingState: .ready(alias: alias), residency: .empty,
                                    activePort: chatPort, activeBearer: key, sessionDefaults: defaults)
         let sampling = SamplingConfig(defaults: defaults)
@@ -63,8 +70,11 @@ struct YouziLiveVoiceHTTPTests {
         let audio = HTTPProbeAudio()
         var transport = AudioClient(session: session)
         transport.generationDefaults = ModelGenerationDefaults(defaults: defaults)
+        let readiness: any LiveVoiceModelReadiness = productionReadiness
+            ? LiveVoiceResidentModels(server: server, chatAlias: alias)
+            : HTTPProbeReadiness(models: models)
         let controller = YouziLiveVoiceController(audio: audio, transport: transport,
-            chat: LiveVoiceChatAdapter(chat: chat), readiness: HTTPProbeReadiness(models: models),
+            chat: LiveVoiceChatAdapter(chat: chat), readiness: readiness,
             defaults: ModelGenerationDefaults(defaults: defaults))
         defer { controller.stop() }
         var firstPCMWhileChatStreaming = false
@@ -93,6 +103,7 @@ struct YouziLiveVoiceHTTPTests {
             audio.onInputFrame?(Array(samples[offset..<min(offset + 320, samples.count)]))
             try await Task.sleep(for: .milliseconds(20))
         }
+        let captureFinishedSeconds = Date().timeIntervalSince(started)
         controller.finishUtterance()
         let deadline = Date().addingTimeInterval(120)
         while Date() < deadline {
@@ -106,6 +117,8 @@ struct YouziLiveVoiceHTTPTests {
             "problem": String(describing: controller.problem), "pcm_chunks": audio.chunks,
             "pcm_bytes": audio.byteCount, "first_pcm_seconds": firstPCMSeconds ?? -1,
             "first_pcm_while_chat_streaming": firstPCMWhileChatStreaming,
+            "capture_finished_seconds": captureFinishedSeconds,
+            "first_pcm_after_capture_seconds": firstPCMSeconds.map { $0 - captureFinishedSeconds } ?? -1,
             "total_seconds": Date().timeIntervalSince(started), "mic_activated": false,
         ]
         try JSONSerialization.data(withJSONObject: diagnostics, options: [.prettyPrinted, .sortedKeys])
@@ -127,11 +140,17 @@ struct YouziLiveVoiceHTTPTests {
             "scope": "real native controller/ASR/chat/TTS HTTP; synthetic capture and playback drain, NOT acoustic AEC",
             "first_pcm_while_chat_streaming": firstPCMWhileChatStreaming,
             "first_pcm_seconds": firstPCMSeconds ?? -1,
+            "capture_finished_seconds": captureFinishedSeconds,
+            "first_pcm_after_capture_seconds": firstPCMSeconds.map { $0 - captureFinishedSeconds } ?? -1,
             "pcm_chunks": audio.chunks, "pcm_bytes": audio.byteCount,
             "total_seconds": Date().timeIntervalSince(started),
             "transcript": controller.recognizedText,
             "reply": chat.messages.filter { $0.role == .assistant }.map(\.content).joined(separator: "\n"),
             "conversation_persisted": true, "mic_activated": false,
+            "production_readiness": productionReadiness,
+            "readiness_scope": productionReadiness
+                ? "real authenticated residency and production model selection; synthetic server ownership"
+                : "explicit test-only readiness fixture",
         ]
         try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
             .write(to: output.appendingPathComponent("result.json"))

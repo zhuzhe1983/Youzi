@@ -58,16 +58,30 @@ Supply a short, single-utterance synthetic Chinese16/24kHz WAV requesting about
 six sentences; a one-word answer cannot establish overlap with a still-running
 LLM. Ports may be the same for a fully integrated candidate. The test does not
 load models or start services. Optional `YOUZI_PROBE_API_KEY` stays in environment
-memory and is never written to results. Admin residency auth remains mandatory;
-the probe uses public model discovery plus an explicit readiness fixture. It
-proves native inference orchestration and persistence, not production residency
-refresh, actual speaker playback or OS consent presentation.
+memory and is never written to results. Admin residency auth remains mandatory. By default the probe uses public model
+discovery plus an explicit readiness fixture for split-port experiments. Set
+`YOUZI_LIVE_PRODUCTION_READINESS=1` with both ports pointing to the installed
+candidate and a valid bearer to exercise **real authenticated residency refresh
+and production model selection**. Server ownership is still synthetic: the test
+never starts/stops the app's child. A failed admin request must fail readiness;
+do not remove auth to make the probe pass. Both modes use synthetic capture and
+drain, not actual speaker playback or OS consent presentation.
+
+Results distinguish session-start first PCM from `first_pcm_after_capture_seconds`
+(the interval after the last synthetic input frame). Do not present either the
+first-PCM time of standalone TTS or a synchronous test sink's drain time as the
+user's audible conversation latency.
 
 `YouziLiveAudioCoreTests` has a separate opt-in live PCM cancellation test. Set
 `YOUZI_LIVE_AUDIO_TEST_PORT`, `YOUZI_LIVE_AUDIO_TEST_MODEL` to the fully qualified
 resident lane model ID, `YOUZI_LIVE_AUDIO_TEST_VOICE` and optional bearer. Its
-preflight must find an already-idle lane. A short alias differing from the lane's
-canonical ID intentionally fails preflight rather than loading a replacement.
+preflight must find an already-idle lane. It defaults to authenticated
+`/v1/models/residency` (`audio_lanes`), not the integrated server's `/health`, which
+does not include lane details. Only a standalone test server with the explicit
+health fixture should set `YOUZI_LIVE_AUDIO_PROBE_HEALTH=1` (`lanes`). There is no
+automatic fallback on an authentication failure. A short alias differing from
+the lane's canonical ID intentionally fails preflight rather than loading a
+replacement.
 
 ## Required attended acoustic/device checks — not synthetic-test passes
 
@@ -103,3 +117,33 @@ ports or kill unrelated Python processes. Relaunch with the no-port-sweep flag.
 If startup, resources or health fail, stop the candidate and restore the complete
 backup app; do not reset settings or data. Formal release/main merge requires
 separate authorization. Exact installation status is recorded in the task handoff.
+
+
+### Delivered local candidate — September 7, 2026
+
+Installed/restarted `0.14.4 candidate-8be52684` from the complete normal build,
+including its freshly compiled sidecar and the separately committed tray card.
+Strict deep signature/resource verification and candidate-only CLI/import smoke
+passed before replacement and launch. The previous complete
+`candidate-d56811c2` app is retained under
+`~/Library/Application Support/Youzi/Client Backups/0.14.4-before-live-voice-20260907-151414/`.
+No sealed resources, tasks, settings or keychain were reset. Launch used explicit
+`open --env RAPID_DESKTOP_NO_PORT_SWEEP=1`, not implicit LaunchServices inheritance.
+
+The installed bundle's child served the real same-port native HTTP chain with
+production authenticated readiness. Known cached Whisper was explicitly warmed
+using `preserve_loaded=true` after checking an idle/empty recognition lane;
+existing chat/image/video/TTS models remained loaded. Startup preferences were
+not changed. Both GUI chat modes opened the voice sheet with **Microphone off**
+and an explicit Start button; no Start/permission action was taken, and the
+original simple mode was restored. Seven health samples over60 seconds retained
+the same healthy/ready app and service processes.
+
+The existing InstallTracker heuristic produced a false "failed replace" warning:
+it compares only the marketing version and plist mtime, so two different local
+candidates both labelled0.14.4 look like a failed replacement. Candidate identity,
+strict signature, bundled-runtime process path and real new PCM behavior verified
+that installation actually succeeded. The warning was dismissed through its
+session-only UI action; no tracking preferences were cleared. Harbor should
+separately teach this heuristic about candidate/build identity. This is not a
+streaming inference failure or evidence that the old app is still running.
