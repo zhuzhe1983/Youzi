@@ -1,4 +1,6 @@
 import AVFoundation
+import AppKit
+import SwiftUI
 import Foundation
 import Testing
 @testable import Rapid
@@ -62,6 +64,19 @@ struct YouziLiveVoiceHTTPTests {
                                  customInstructions: instructions, server: server,
                                  conversationStoreURL: store)
         defer { chat.stopAndPersist() }
+        // Include the actual simple transcript layout when investigating a GUI
+        // stall. Previously this HTTP test never mounted SwiftUI and therefore
+        // could pass even while the application's main-thread layout spun.
+        let renderTranscript = env["YOUZI_LIVE_RENDER_TRANSCRIPT"] == "1"
+        let transcriptWindow: NSWindow?
+        if renderTranscript {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: HTTPProbeTranscript(chat: chat))
+            transcriptWindow = window
+        } else { transcriptWindow = nil }
+        defer { transcriptWindow?.close() }
         let models = LiveVoiceModels(chatAlias: alias,
             recognition: LiveVoiceEndpoint(model: env["YOUZI_LIVE_ASR_MODEL"] ?? "whisper-large-v3-turbo",
                                            port: chatPort, bearer: key),
@@ -106,7 +121,17 @@ struct YouziLiveVoiceHTTPTests {
         let captureFinishedSeconds = Date().timeIntervalSince(started)
         controller.finishUtterance()
         let deadline = Date().addingTimeInterval(120)
+        var lastHeartbeat = ProcessInfo.processInfo.systemUptime
+        var maxHeartbeatGap: TimeInterval = 0
+        var chatCompletedSeconds: TimeInterval?
         while Date() < deadline {
+            let now = ProcessInfo.processInfo.systemUptime
+            maxHeartbeatGap = max(maxHeartbeatGap, now - lastHeartbeat)
+            lastHeartbeat = now
+            if !chat.isStreaming && !controller.recognizedText.isEmpty && chatCompletedSeconds == nil {
+                chatCompletedSeconds = Date().timeIntervalSince(started)
+            }
+            transcriptWindow?.contentView?.layoutSubtreeIfNeeded()
             if controller.problem != nil { break }
             if audio.chunks > 0 && controller.phase == .listening && !chat.isStreaming { break }
             try await Task.sleep(for: .milliseconds(20))
@@ -120,6 +145,10 @@ struct YouziLiveVoiceHTTPTests {
             "capture_finished_seconds": captureFinishedSeconds,
             "first_pcm_after_capture_seconds": firstPCMSeconds.map { $0 - captureFinishedSeconds } ?? -1,
             "total_seconds": Date().timeIntervalSince(started), "mic_activated": false,
+            "transcript_rendered": renderTranscript, "max_main_actor_gap_seconds": maxHeartbeatGap,
+            "first_text_after_chat_send_seconds": controller.firstTextSeconds ?? -1,
+            "first_pcm_after_chat_send_seconds": controller.firstPCMSeconds ?? -1,
+            "chat_completed_seconds": chatCompletedSeconds ?? -1,
         ]
         try JSONSerialization.data(withJSONObject: diagnostics, options: [.prettyPrinted, .sortedKeys])
             .write(to: output.appendingPathComponent("diagnostics.json"))
@@ -189,4 +218,21 @@ private final class HTTPProbeReadiness: LiveVoiceModelReadiness {
     init(models: LiveVoiceModels) { self.models = models }
     func refresh() async -> LiveVoiceModels? { models }
     func isStillReady(_ models: LiveVoiceModels) -> Bool { self.models == models }
+}
+
+@MainActor
+private struct HTTPProbeTranscript: View {
+    let chat: ChatViewModel
+    var body: some View {
+        YouziSimpleTranscript(messages: chat.messages, followsReply: false) { message in
+            HStack(alignment: .top) {
+                Text(message.role == .assistant ? "AI" : "You")
+                if message.status == .streaming || message.role != .assistant {
+                    Text(message.content).textSelection(.enabled)
+                } else {
+                    TextKitMarkdownView(content: message.content).textSelection(.enabled)
+                }
+            }
+        }
+    }
 }

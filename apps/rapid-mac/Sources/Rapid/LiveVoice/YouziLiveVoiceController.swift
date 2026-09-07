@@ -6,6 +6,7 @@ import Observation
 @MainActor @Observable
 final class YouziLiveVoiceController {
     enum Phase: Equatable { case stopped, preparing, listening, transcribing, responding }
+    enum ReplyStage: Equatable { case waitingForText, waitingForSentence, synthesizing, speaking }
     enum Problem: Equatable {
         case modelsMissing, chatBusy, microphone, voiceProcessing, recognition, speech
         case deviceChanged, replyChanged, replyTooLong, preparation, chatFailed
@@ -18,6 +19,13 @@ final class YouziLiveVoiceController {
     private(set) var isHalfDuplex = false
     private(set) var recognizedText = ""
     private(set) var assistantPreview = ""
+    private(set) var replyStage: ReplyStage = .waitingForText
+    /// Monotonic time since this voice turn called chat.send (not ASR start).
+    private(set) var firstTextSeconds: TimeInterval?
+    /// First PCM accepted by the playback queue, NOT measured speaker onset.
+    private(set) var firstPCMSeconds: TimeInterval?
+    private(set) var firstPCMWhileChatStreaming = false
+    @ObservationIgnored private var replyStartedAt: TimeInterval?
     private(set) var selectedModels: LiveVoiceModels?
     private(set) var isUserSpeaking = false
     var isActive: Bool { lifetime.isActive }
@@ -231,6 +239,11 @@ final class YouziLiveVoiceController {
                 guard self.readiness.isStillReady(models) else { self.fail(.modelsMissing); return }
                 self.historicalMessageIDs = Set(self.chat.assistantText.map(\.id))
                 self.textProgress = [:]; self.pendingSpeech = []
+                self.assistantPreview = ""
+                self.replyStage = .waitingForText
+                self.firstTextSeconds = nil; self.firstPCMSeconds = nil
+                self.firstPCMWhileChatStreaming = false
+                self.replyStartedAt = ProcessInfo.processInfo.systemUptime
                 guard let turn = self.chat.send(text, alias: models.chatAlias) else {
                     self.fail(.preparation); return
                 }
@@ -258,6 +271,7 @@ final class YouziLiveVoiceController {
                     guard self.acceptsAudio(epoch) else { return }
                     if !self.pendingSpeech.isEmpty {
                         let sentence = self.pendingSpeech.removeFirst()
+                        self.replyStage = .synthesizing
                         try await self.transport.streamSpeech(text: sentence, model: models.speech.model,
                             voice: self.voice, port: models.speech.port, bearer: models.speech.bearer
                         ) { [weak self] data, sampleRate in
@@ -276,6 +290,11 @@ final class YouziLiveVoiceController {
                             self.playbackPacing.scheduled(byteCount: data.count, sampleRate: sampleRate,
                                 now: ProcessInfo.processInfo.systemUptime)
                             try self.audio.enqueuePCM(data, sampleRate: sampleRate)
+                            if self.replyStage != .speaking { self.replyStage = .speaking }
+                            if self.firstPCMSeconds == nil, let started = self.replyStartedAt {
+                                self.firstPCMSeconds = ProcessInfo.processInfo.systemUptime - started
+                                self.firstPCMWhileChatStreaming = self.chat.isStreaming
+                            }
                         }
                         // Serial speech requests; next sentence starts only when
                         // this one's native buffers drain. Chat deltas continue.
@@ -290,6 +309,10 @@ final class YouziLiveVoiceController {
                         self.detector.reset()
                         return
                     } else {
+                        if !self.playbackOutstanding {
+                            let waitingStage: ReplyStage = self.firstTextSeconds == nil ? .waitingForText : .waitingForSentence
+                            if self.replyStage != waitingStage { self.replyStage = waitingStage }
+                        }
                         try await Task.sleep(for: .milliseconds(40))
                     }
                 }
@@ -345,7 +368,16 @@ final class YouziLiveVoiceController {
                 progress.finished = true
             }
             textProgress[message.id] = progress
-            if !message.text.isEmpty { assistantPreview = String(message.text.suffix(2000)) }
+            if !message.text.isEmpty {
+                if firstTextSeconds == nil, let started = replyStartedAt {
+                    firstTextSeconds = ProcessInfo.processInfo.systemUptime - started
+                    if replyStage == .waitingForText { replyStage = .waitingForSentence }
+                }
+                let preview = String(message.text.suffix(2000))
+                // A 40 ms readiness poll is not a text delta. Re-publishing the
+                // same preview needlessly invalidates the live sheet's layout.
+                if assistantPreview != preview { assistantPreview = preview }
+            }
             // Headings, poetry and short Chinese sentences can produce many
             // small segments. Bound text and count without rejecting an
             // ordinary explanation merely because it exceeds 24 lines.

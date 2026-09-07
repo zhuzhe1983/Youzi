@@ -350,12 +350,37 @@ struct LiveVoiceOrchestrationTests {
         rig.controller.pollChat()
         try await voiceEventually { !rig.audio.chunks.isEmpty }
         #expect(rig.chat.isStreaming, "PCM must arrive before the chat turn finishes")
+        #expect(rig.controller.firstTextSeconds != nil)
+        #expect(rig.controller.firstPCMSeconds != nil)
+        #expect(rig.controller.firstPCMWhileChatStreaming)
         #expect(await rig.transport.speechTexts == ["First sentence."])
         rig.chat.delta(" sentence.", finish: true)
         try await voiceEventually { rig.controller.phase == .listening }
         #expect(await rig.transport.speechTexts == ["First sentence.", "Next sentence."])
         #expect(rig.audio.chunks.count == 2)
         #expect(rig.controller.isMicrophoneOn)
+    }
+
+    @Test("Waiting for LLM text and a sentence is not reported as already speaking")
+    func replyStages() async throws {
+        let rig = VoiceTestRig()
+        rig.audio.autoDrain = false
+        defer { rig.controller.stop() }
+        try await rig.sendUtterance()
+        #expect(rig.controller.replyStage == .waitingForText)
+        #expect(rig.controller.firstTextSeconds == nil)
+        #expect(rig.controller.firstPCMSeconds == nil)
+        rig.chat.delta("An unfinished sentence")
+        rig.controller.pollChat()
+        #expect(rig.controller.replyStage == .waitingForSentence)
+        #expect(rig.controller.firstTextSeconds != nil)
+        #expect(rig.controller.firstPCMSeconds == nil)
+        #expect(await rig.transport.speechTexts.isEmpty)
+        rig.chat.delta(". Next")
+        rig.controller.pollChat()
+        try await voiceEventually { !rig.audio.chunks.isEmpty }
+        #expect(rig.controller.replyStage == .speaking)
+        #expect(rig.controller.firstPCMWhileChatStreaming)
     }
 
     @Test("Short-line explanations are accepted; runaway speech queues still hand off safely", arguments: [35, 100])

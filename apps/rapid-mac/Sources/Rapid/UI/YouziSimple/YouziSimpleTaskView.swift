@@ -227,25 +227,9 @@ struct YouziSimpleTaskView: View {
     private var transcript: some View {
         let artifactIDs = artifactIDs
         let toolResults = toolResults
-        return ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
-                    ForEach(chat.messages) { message in
-                        if SimpleTranscriptPresentation.isVisible(message) {
-                            simpleMessage(message, artifactIDs: artifactIDs, toolResults: toolResults)
-                                .id(message.id)
-                        }
-                    }
-                }
-                .frame(maxWidth: RapidTheme.Layout.contentMaxWidth)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, RapidTheme.Space.xl)
-                .padding(.vertical, RapidTheme.Space.xl)
-            }
-            .onChange(of: chat.messages.last?.content) { _, _ in
-                if let lastID = chat.messages.last?.id {
-                    proxy.scrollTo(lastID, anchor: .bottom)
-                }
+        return YouziSimpleTranscript(messages: chat.messages, followsReply: !showsLiveVoice) { message in
+            if SimpleTranscriptPresentation.isVisible(message) {
+                simpleMessage(message, artifactIDs: artifactIDs, toolResults: toolResults)
             }
         }
     }

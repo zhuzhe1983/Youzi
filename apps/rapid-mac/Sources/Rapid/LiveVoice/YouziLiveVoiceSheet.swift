@@ -128,7 +128,7 @@ struct YouziLiveVoiceSheet: View {
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 180)
+                .frame(height: 180)
             }
             Divider()
             HStack {
@@ -185,7 +185,17 @@ struct YouziLiveVoiceSheet: View {
             return controller.isUserSpeaking ? i18n.text(zh: "正在听 · 说完后停顿", en: "Listening · Pause when finished")
                 : i18n.text(zh: "正在听 · 可以开始说话", en: "Listening · Speak when ready")
         case .transcribing: return i18n.text(zh: "识别本次语音窗口…", en: "Transcribing this utterance window…")
-        case .responding: return i18n.text(zh: "回复中 · 按句朗读", en: "Replying · Speaking sentence by sentence")
+        case .responding:
+            switch controller.replyStage {
+            case .waitingForText:
+                return i18n.text(zh: "等待模型输出 · 尚未开始朗读", en: "Waiting for model text · Audio has not started")
+            case .waitingForSentence:
+                return i18n.text(zh: "正在接收回复 · 等待完整语句", en: "Receiving reply · Waiting for a speakable sentence")
+            case .synthesizing:
+                return i18n.text(zh: "生成本句语音 · 等待音频", en: "Synthesizing this sentence · Waiting for audio")
+            case .speaking:
+                return i18n.text(zh: "正在朗读 · 可打断", en: "Speaking · You can interrupt")
+            }
         }
     }
     private func problemText(_ problem: YouziLiveVoiceController.Problem) -> String {

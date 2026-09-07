@@ -282,3 +282,80 @@ was left in the original simple mode. Seven healthy/ready samples over60.076s
 retained the same installed app and service PIDs. Signing still verified after
 runtime use. These delivery checks add evidence to the independent product
 reviews; they do not replace attended acoustic/device/permission acceptance.
+
+## Later attended failure: main-thread stall, not a proven full-answer TTS wait
+
+A later user voice attempt on candidate `8b11044e` hung. A four-second native
+`sample` at **2026-09-07 22:17 +0800** was dominated by
+`NSHostingView.beginTransaction` / `GraphHost` / `LazySubviewPlacements` on the
+main thread. The native process sustained about one CPU core while the backend
+was idle and answering HTTP. Accessibility requests timed out. This is evidence
+of a client layout stall, **not a definitive reproduction of its precise trigger**.
+Do not equate a healthy HTTP service or the “speaking sentence by sentence” label
+with working native playback. The original turn has no reliable first-text or
+speaker-onset timestamps.
+
+An independent same-port synthetic probe during investigation used the existing
+resident models; no model lifecycle endpoints, microphone or speakers were used.
+Environment: Apple M5 Max / Mac17,7, 128 GiB RAM, macOS26.6.2 (25G83).
+
+```sh
+RAPID_DESKTOP_NO_PORT_SWEEP=1 PYTHONDONTWRITEBYTECODE=1 python \
+  scripts/benchmarks/youzi_live_voice_chain.py \
+  --chat-base http://127.0.0.1:8000 --tts-base http://127.0.0.1:8000 \
+  --chat-model qwen3.8-27b-4bit --tts-model qwen3-tts \
+  --asr-model whisper-large-v3-turbo --output /tmp/youzi-live-http-chain
+```
+
+| Measurement | Single-run result |
+| --- | ---: |
+| Utterance HTTP ASR |1.454s|
+| First actual LLM text delta after request |12.904s|
+| First response PCM after LLM request |14.339s|
+| LLM response completed after request |22.139s|
+| First sentence TTS request → first PCM |0.361s|
+| ASR + LLM + TTS generation, excluding playback |41.356s|
+| Generated audio duration |44.560s|
+
+First PCM preceded LLM completion by about7.8s; the synthetic read-only function
+roundtrip also passed. This rules out full-answer buffering in **this HTTP run**,
+not every utterance. It is not the original GUI turn, and not a speaker test.
+This Responses probe leaves thinking at model/server defaults; the isolated
+native harness disables thinking. Do not compare their first-text times as if
+request parameters were identical or silently alter user thinking preferences.
+Artifacts for this investigation were retained locally under
+`/tmp/youzi-live-voice-stall/http-chain/` (not committed).
+
+### Candidate mitigation and verification limits
+
+The task branch `youzi/live-voice-stall` extracts the simple transcript into an
+eager stack, defers/cancels stale scroll requests, and suppresses auto-follow
+beneath the live-voice sheet. It bounds the voice transcript height, avoids
+identical preview/stage publications, and distinguishes waiting-for-text,
+waiting-for-sentence, synthesis and PCM-queued stages. Controller diagnostics
+measure first text and first PCM accepted by the playback queue relative to
+`chat.send`, **not acoustic output**.
+
+Opt-in offscreen native layout QA covers8 streaming/completion transitions,
+Text → AppKit-backed Markdown,560/900pt widths, voice-overlay scroll suppression
+and116 total messages. Run with the external deadline wrapper described in the
+operations guide. On Apple Swift6.3.3 the final release compilation succeeded;
+65 targeted test entries passed (3 opt-in tests skipped), and the separate
+bounded layout QA passed in3.414s. The wrapper's success/failure/deadline paths
+were also checked with isolated fake children. This does not reproduce the exact
+hung task or qualify very large histories; eager layout may cost more for long
+tasks.
+
+The real native HTTP harness can now mount the production transcript using
+`YOUZI_LIVE_RENDER_TRANSCRIPT=1` and records a MainActor heartbeat gap alongside
+first-text/PCM/completion times. **That enhanced real-model run and attended
+speaker playback were not completed in this investigation**: by22:50 the old
+process had exited, a different build was serving port8000, and its model list
+contained only chat identities. No audio models were started to manufacture a
+pass. The running client was neither replaced nor force-terminated by this task.
+
+Sentence requests remain serialized with actual playback-drain backpressure.
+Thus the first sentence can start before the LLM finishes, but subsequent
+sentences can still have synthesis gaps. ASR remains utterance/window based.
+Neither full-duplex acoustic performance nor low-latency end-to-end streaming
+is established by these results.

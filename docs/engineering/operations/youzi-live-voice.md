@@ -200,3 +200,41 @@ acceptance gates. Do not reuse the previous HTTP-chain measurements as evidence
 that this replacement underwent physical full-duplex testing. See the current
 Atlas handoff and full-duplex assessment for exact boundaries and read-only HAL
 capability-probe instructions. No main merge or formal release was performed.
+
+## If voice appears frozen: separate inference, UI and playback
+
+1. Check the exact native executable/PID and model service before acting. A live
+   `/v1/models` response does not prove that the UI or speaker is functioning;
+   `/health` primary-model fields alone do not describe every resident lane.
+2. Sample that exact native PID (`sample <pid> 4 -file /tmp/youzi-native-sample.txt`).
+   Main-thread SwiftUI layout churn can block MainActor speech orchestration even
+   after backend generation finishes. Do not infer an LLM hang from the spinner.
+3. Distinguish `waitingForText`, `waitingForSentence`, `synthesizing`, `speaking`.
+   First PCM in the controller means enqueue, not physical speaker onset. Read
+   the performance note's scope before quoting latency numbers.
+4. If normal Quit does not work, ask before force termination; an unfinished
+   reply may be lost. Do not broad-kill processes, sweep ports, unload models,
+   reset settings/permissions, or edit the installed signed bundle in place.
+
+Build and run the targeted hermetic tests first:
+
+```sh
+RAPID_DESKTOP_NO_PORT_SWEEP=1 swift test --package-path apps/rapid-mac \
+  -c release -j 4 --filter 'LiveVoice|YouziLive|YouziSimpleTranscript|SimpleTranscript'
+python3 apps/rapid-mac/scripts/verify-youzi-transcript-layout.py --timeout 60
+```
+
+The second command uses the compiled tests (`--skip-build`), mounts an offscreen
+NSWindow with the production transcript, and kills only its own new process
+group if the deadline is exceeded. The external deadline matters: a timeout Task
+on MainActor cannot fire while MainActor is stuck in layout. It does not open a
+microphone, start a model service or change user task data.
+
+For the existing opt-in HTTP harness, `YOUZI_LIVE_RENDER_TRANSCRIPT=1` additionally
+mounts that transcript and writes `max_main_actor_gap_seconds`,
+`first_text_after_chat_send_seconds`, `first_pcm_after_chat_send_seconds` and
+`chat_completed_seconds` into the isolated output's diagnostics. Run it with an
+external process deadline and **already-serving chat/STT/TTS models only**. The
+first two latency fields use the same `chat.send` origin; completion remains
+relative to test-session start. Simulated capture and drain do not qualify actual
+microphone/speaker, permission handling or acoustic echo cancellation.
