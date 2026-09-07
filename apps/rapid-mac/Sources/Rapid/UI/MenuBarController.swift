@@ -29,8 +29,11 @@ final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
     private var resourceTask: Task<Void, Never>?
-    private var resourceItem: NSMenuItem?
-    private var lastResourceLine: String?
+    private var resourceView: NSHostingView<YouziTrayResourceCard>?
+    private var modelsMenu: NSMenu?
+    private var lastCPU: Double?
+    private var lastGPU: Double?
+    private var lastMemory: MemoryProbe.Snapshot?
 
 
     override init() {
@@ -129,18 +132,14 @@ final class MenuBarController: NSObject {
     /// every open without an AppKit-side observer.
     private func rebuildMenu() {
         menu.removeAllItems()
-        resourceItem = nil
-        let resourceLine = lastResourceLine ?? "CPU — · GPU — · \(YouziI18nConfig.shared.isChinese ? "内存" : "Memory") —"
+        resourceView = nil
+        modelsMenu = nil
         for item in MenuBarStatus.menuItems(
             state: AppDelegate.shared.server?.state ?? .idle,
             hasUpdate: Self.hasAvailableUpdate(),
             updateVersion: AppDelegate.shared.updater?.availableUpdate?.version ?? "",
             checking: AppDelegate.shared.updater?.checking ?? false,
             baseURL: Self.apiBaseURL(),
-            resourceLine: resourceLine,
-            modelLines: AppDelegate.shared.server.map {
-                YouziTraySnapshot.modelLines(residency: $0.residency, isChinese: YouziI18nConfig.shared.isChinese)
-            } ?? [],
             hasAPIKey: AppDelegate.shared.server?.activeBearer?.isEmpty == false,
             isChinese: YouziI18nConfig.shared.isChinese
         ) {
@@ -148,12 +147,26 @@ final class MenuBarController: NSObject {
             case .separator:
                 menu.addItem(.separator())
 
-            case .status(let text):
-                // A nil action renders the row as a disabled label.
-                let line = NSMenuItem(title: text, action: nil, keyEquivalent: "")
-                line.isEnabled = false
-                if text == resourceLine { resourceItem = line }
+            case .resources:
+                // Native title-only informational rows are greyed out. A custom
+                // AppKit view preserves the shared SwiftUI colours and contrast.
+                let line = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+                let host = NSHostingView(rootView: resourceCard())
+                host.frame = NSRect(x: 0, y: 0, width: YouziTrayResourceCard.width,
+                                    height: YouziTrayResourceCard.height)
+                line.view = host
                 menu.addItem(line)
+                resourceView = host
+
+            case .models(let title):
+                let line = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                let details = NSMenu(title: title)
+                details.autoenablesItems = false
+                details.delegate = self
+                line.submenu = details
+                menu.addItem(line)
+                modelsMenu = details
+                rebuildModelDetails()
 
             case .button(let action, let title, let enabled, let shortcut):
                 let key = shortcut.map { String($0.key) } ?? ""
@@ -170,6 +183,32 @@ final class MenuBarController: NSObject {
                 }
                 menu.addItem(menuItem)
             }
+        }
+    }
+
+    private func resourceCard() -> YouziTrayResourceCard {
+        let state = AppDelegate.shared.server?.state ?? .idle
+        let chinese = YouziI18nConfig.shared.isChinese
+        return YouziTrayResourceCard(
+            status: MenuBarStatus.statusLine(state: state, isChinese: chinese),
+            state: state, residency: AppDelegate.shared.server?.residency ?? .empty,
+            cpu: lastCPU, gpu: lastGPU, memory: lastMemory, isChinese: chinese)
+    }
+
+    private func rebuildModelDetails() {
+        guard let modelsMenu else { return }
+        modelsMenu.removeAllItems()
+        let lines = YouziTraySnapshot.modelLines(
+            residency: AppDelegate.shared.server?.residency ?? .empty,
+            isChinese: YouziI18nConfig.shared.isChinese)
+        for text in lines {
+            let line = NSMenuItem(title: text, action: nil, keyEquivalent: "")
+            line.isEnabled = false
+            line.attributedTitle = NSAttributedString(string: text, attributes: [
+                .foregroundColor: NSColor.labelColor,
+                .font: NSFont.menuFont(ofSize: 0)
+            ])
+            modelsMenu.addItem(line)
         }
     }
 
@@ -303,10 +342,12 @@ extension MenuBarController: NSMenuDelegate {
     /// observer of the ``@Observable`` server / updater — buys nothing
     /// for content only visible during a click.
     func menuNeedsUpdate(_ menu: NSMenu) {
-        rebuildMenu()
+        if menu === self.menu { rebuildMenu() }
+        else if menu === modelsMenu { rebuildModelDetails() }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        guard menu === self.menu else { return }
         resourceTask?.cancel()
         resourceTask = Task { [weak self] in
             var previous: CPUProbe.Snapshot?
@@ -320,16 +361,23 @@ extension MenuBarController: NSMenuDelegate {
                     previous.map { CPUProbe.percentBusy(previous: $0, current: current) }
                 }
                 previous = sample.0
-                let line = YouziTraySnapshot.resourceLine(cpu: cpu, gpu: sample.1?.percent,
-                    memory: sample.2, isChinese: YouziI18nConfig.shared.isChinese)
-                self.lastResourceLine = line
-                self.resourceItem?.title = line
+                if let cpu { self.lastCPU = cpu }
+                self.lastGPU = sample.1?.percent
+                self.lastMemory = sample.2
+                self.resourceView?.rootView = self.resourceCard()
+                // A tray-only user may never open the main window's picker.
+                // Refresh readiness here too, through the existing read-only,
+                // authenticated transport; never start/load a service.
+                await AppDelegate.shared.server?.refreshResidency()
+                guard !Task.isCancelled else { return }
+                self.resourceView?.rootView = self.resourceCard()
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
     }
 
     func menuDidClose(_ menu: NSMenu) {
+        guard menu === self.menu else { return }
         resourceTask?.cancel()
         resourceTask = nil
     }
