@@ -30,7 +30,7 @@ struct MenuBarStatusTests {
         return (title, enabled)
     }
 
-    @Test("The 'Copy API endpoint' row appears, enabled, directly under the status line, when serving")
+    @Test("The 'Copy API endpoint' row appears, enabled, under the resource card and model details, when serving")
     func copyEndpointRowPresentWhenServing() {
         let items = MenuBarStatus.menuItems(
             state: .ready(alias: "lfm2.5-1.2b"),
@@ -54,7 +54,7 @@ struct MenuBarStatusTests {
         // It sits immediately below the status line — the highest-value
         // action floats toward the top for serve-type users.
         let statusIndex = items.firstIndex {
-            if case .status = $0 { return true }
+            if case .resources = $0 { return true }
             return false
         }
         let copyIndex = items.firstIndex {
@@ -62,7 +62,7 @@ struct MenuBarStatusTests {
             return false
         }
         #expect(
-            copyIndex == statusIndex.map { $0 + 1 },
+            copyIndex == statusIndex.map { $0 + 2 },
             "Copy row (at \(copyIndex.map(String.init) ?? "nil")) must sit right under the status line"
         )
     }

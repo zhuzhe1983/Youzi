@@ -62,7 +62,7 @@ struct YouziModelOccupancy: Equatable, Sendable {
         var image: UInt64 = 0
         var voice: UInt64 = 0
         var video: UInt64 = 0
-        for model in residency.models where model.state != "evicting" {
+        for model in residency.models where model.state == "resident" || model.state == "busy" {
             switch YouziModelLane.classify(modality: model.modality) {
             case .chat: chat += model.displayBytes
             case .image: image += model.displayBytes
@@ -83,6 +83,8 @@ struct YouziModelOccupancy: Equatable, Sendable {
         let remaining: UInt64
         if let available = residency.memoryAvailableBytes, total > 0 {
             remaining = min(available, total)
+        } else if let host {
+            remaining = host.totalBytes > host.usedBytes ? host.totalBytes - host.usedBytes : 0
         } else if total >= usedByModels {
             remaining = total - usedByModels
         } else {
@@ -112,7 +114,7 @@ struct YouziModelOccupancy: Equatable, Sendable {
 extension ModelResidencySnapshot {
     var containsTextOrMLLM: Bool {
         models.contains {
-            ($0.modality == "text" || $0.modality == "mllm") && $0.state != "evicting"
+            ($0.modality == "text" || $0.modality == "mllm") && ($0.state == "resident" || $0.state == "busy")
         }
     }
 }
@@ -132,29 +134,8 @@ struct YouziModelOccupancyBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
-            GeometryReader { proxy in
-                let total = max(1, Double(occupancy.totalBytes))
-                let known = occupancy.bytes.values.reduce(UInt64(0), +)
-                let other = occupancy.totalBytes > known + occupancy.remainingBytes
-                    ? occupancy.totalBytes - known - occupancy.remainingBytes : 0
-                HStack(spacing: 0) {
-                    ForEach(YouziModelLane.allCases) { lane in
-                        let bytes = occupancy.bytes[lane] ?? 0
-                        if bytes > 0 {
-                            Rectangle().fill(lane.occupancyColor)
-                                .frame(width: CGFloat(Double(bytes) / total) * proxy.size.width)
-                        }
-                    }
-                    if other > 0 {
-                        Rectangle().fill(Color.secondary.opacity(0.25))
-                            .frame(width: CGFloat(Double(other) / total) * proxy.size.width)
-                    }
-                    Rectangle().fill(Color.secondary.opacity(0.08))
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-            }
-            .frame(height: 7)
-            .help(i18n.text(zh: "颜色对应不同模型类型。数值可能含运行时估算；灰色是其他占用，浅色是剩余预算。语音未上报的内存不伪造比例。", en: "Colors identify model types; values may include runtime estimates. Gray is other usage, pale is remaining budget. Unreported audio memory has no fabricated segment."))
+            YouziModelOccupancyTrack(occupancy: occupancy)
+                .help(i18n.text(zh: "颜色对应不同模型类型。数值可能含运行时估算；灰色是其他占用，浅色是剩余预算。语音未上报的内存不伪造比例。", en: "Colors identify model types; values may include runtime estimates. Gray is other usage, pale is remaining budget. Unreported audio memory has no fabricated segment."))
 
             HStack(spacing: RapidTheme.Space.xs) {
                 if occupancy.chatBytes > 0 {
@@ -202,5 +183,35 @@ struct YouziModelOccupancyBar: View {
                 .font(RapidFont.caption)
                 .foregroundStyle(RapidTheme.textSecondary)
         }
+    }
+}
+
+/// Shared visual only: no polling, loading, or model-selection side effects.
+struct YouziModelOccupancyTrack: View {
+    let occupancy: YouziModelOccupancy
+
+    var body: some View {
+        GeometryReader { proxy in
+            let total = max(1, Double(occupancy.totalBytes))
+            let known = occupancy.bytes.values.reduce(UInt64(0), +)
+            let other = occupancy.totalBytes > known + occupancy.remainingBytes
+                ? occupancy.totalBytes - known - occupancy.remainingBytes : 0
+            HStack(spacing: 0) {
+                ForEach(YouziModelLane.allCases) { lane in
+                    let bytes = occupancy.bytes[lane] ?? 0
+                    if bytes > 0 {
+                        Rectangle().fill(lane.occupancyColor)
+                            .frame(width: CGFloat(Double(bytes) / total) * proxy.size.width)
+                    }
+                }
+                if other > 0 {
+                    Rectangle().fill(Color.secondary.opacity(0.25))
+                        .frame(width: CGFloat(Double(other) / total) * proxy.size.width)
+                }
+                Rectangle().fill(Color.secondary.opacity(0.08))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+        }
+        .frame(height: 7)
     }
 }

@@ -19,23 +19,24 @@ import Foundation
 enum MenuBarStatus {
 
     /// One-line "<model> · <state>" or just "<state>" when no model is
-    /// resolved yet. Rendered as a disabled informational row in the
+    /// resolved yet. Rendered in the resource card in the
     /// tray menu; the user reads it, doesn't act on it.
-    static func statusLine(state: ServerState) -> String {
+    static func statusLine(state: ServerState, isChinese: Bool = false) -> String {
+        let alias: String
+        let label: String
         switch state {
-        case .idle:
-            return "Idle"
-        case .stopped:
-            return "Idle"
+        case .idle, .stopped:
+            alias = ""; label = isChinese ? "服务未启动" : "Idle"
         case .missing:
-            return "Setup needed"
-        case .starting(let alias):
-            return alias.isEmpty ? "Starting…" : "\(alias) · Starting…"
-        case .ready(let alias):
-            return alias.isEmpty ? "Ready" : "\(alias) · Ready"
-        case .crashed(let alias, _):
-            return alias.isEmpty ? "Crashed" : "\(alias) · Crashed"
+            alias = ""; label = isChinese ? "需要初始化" : "Setup needed"
+        case .starting(let model):
+            alias = model; label = isChinese ? "启动中…" : "Starting…"
+        case .ready(let model):
+            alias = model; label = isChinese ? "就绪" : "Ready"
+        case .crashed(let model, _):
+            alias = model; label = isChinese ? "服务异常" : "Crashed"
         }
+        return alias.isEmpty ? label : "\(alias) · \(label)"
     }
 
     // NOTE: a ``glyphIsTemplate(hasUpdate:)`` helper used to live here,
@@ -82,8 +83,10 @@ enum MenuBarStatus {
     enum MenuBarItem: Equatable {
         /// A tappable command.
         case button(MenuBarAction, title: String, enabled: Bool, shortcut: MenuShortcut?)
-        /// A non-interactive, disabled informational line.
-        case status(String)
+        /// A non-interactive, full-colour resource card.
+        case resources(String)
+        /// Ready model names live in a submenu, not a tall disabled list.
+        case models(title: String)
         /// A separator rule.
         case separator
     }
@@ -101,8 +104,6 @@ enum MenuBarStatus {
         updateVersion: String,
         checking: Bool,
         baseURL: String?,
-        resourceLine: String? = nil,
-        modelLines: [String] = [],
         hasAPIKey: Bool = false,
         isChinese: Bool = false
     ) -> [MenuBarItem] {
@@ -115,11 +116,10 @@ enum MenuBarStatus {
                 shortcut: MenuShortcut(key: "n", modifiers: [.command])
             ),
             .separator,
-            .status(statusLine(state: state)),
+            .resources(statusLine(state: state, isChinese: isChinese)),
+            .models(title: "Ready models"),
         ]
 
-        if let resourceLine { items.append(.status(resourceLine)) }
-        items.append(contentsOf: modelLines.map { .status($0) })
         // Serve-type users live in the tray and never open the main
         // window; their highest-frequency action is copying the API
         // endpoint into their own agent/script. Only render the row when
@@ -180,13 +180,7 @@ enum MenuBarStatus {
         guard isChinese else { return items }
         return items.map { item in
             guard case .button(let action, let title, let enabled, let shortcut) = item else {
-                if case .status(let line) = item, line == statusLine(state: state) {
-                    return .status(line.replacingOccurrences(of: "Ready", with: "就绪")
-                        .replacingOccurrences(of: "Idle", with: "服务未启动")
-                        .replacingOccurrences(of: "Starting…", with: "启动中…")
-                        .replacingOccurrences(of: "Crashed", with: "服务异常")
-                        .replacingOccurrences(of: "Setup needed", with: "需要初始化"))
-                }
+                if case .models = item { return .models(title: "已就绪模型") }
                 return item
             }
             let titles: [MenuBarAction: String] = [
