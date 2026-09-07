@@ -61,6 +61,17 @@ API 地址按 `model` 调用；内存不足会提示，不会为加载图片或�
 未知，不伪造占用数字。使用方式、验证模型与限制见
 [常驻服务说明](docs/engineering/operations/youzi-resident-services.md)。
 
+### 语音对话（开发版）
+
+聊天输入区域的「语音对话」沿用当前任务、专家/技能/工具和原有确认流程，
+打开面板不会开启麦克风，需手动点「开始」。需要先加载聊天模型、语音识别模型
+和 Qwen3-TTS CustomVoice；此入口不会自动下载或启动模型。
+
+当前实现是 **停顿后识别一段语音 → 聊天流式生成 → 按句流式合成并播放**，
+不是原生增量 ASR。优先使用 macOS 系统语音处理，可显式切换半双工、按键打断。
+系统功能启用不代表所有声学环境下都能消除回声，实际设备效果仍需现场验证。
+使用方式、测试边界和验收步骤见 [语音对话说明](docs/engineering/operations/youzi-live-voice.md)。
+
 ## 获取与尝试
 
 - 项目仓库：[zhuzhe1983/Youzi](https://github.com/zhuzhe1983/Youzi)

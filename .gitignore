@@ -148,3 +148,6 @@ TODO.md
 workflow.md
 CLAUDE.md
 0.*-TODO.md
+
+# Local autonomous execution evidence; durable conclusions live in docs/tests.
+.butler/

@@ -140,6 +140,29 @@ final class ChatViewModel {
     /// outlives a switch can't bleed tokens into, or persist over, the
     /// conversation the user moved to (codex BLOCKING).
     private var conversationEpoch = 0
+    /// Per-send identity; tool rounds keep this ID, regeneration replaces it.
+    /// Voice cancellation may only target this identity in this conversation.
+    private(set) var liveVoiceTurnID = UUID()
+    var liveVoiceCurrentTurn: LiveVoiceChatTurn {
+        LiveVoiceChatTurn(conversationID: activeConversationID, turnID: liveVoiceTurnID)
+    }
+
+    @discardableResult
+    func sendLiveVoice(
+        _ text: String, alias: String, fileAttachments: [ChatFileAttachment] = []
+    ) -> LiveVoiceChatTurn? {
+        guard !isStreaming, server?.isModelResident(alias) == true,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        send(text, alias: alias, fileAttachments: fileAttachments, requireAlreadyLoaded: true)
+        return isStreaming ? liveVoiceCurrentTurn : nil
+    }
+
+    func stopLiveVoiceTurn(_ turn: LiveVoiceChatTurn) {
+        guard isStreaming, liveVoiceCurrentTurn == turn else { return }
+        // Unlike stop(), don't cancel unrelated background title/memory work.
+        inflight?.cancel()
+    }
+
 
     /// ``var`` not ``let`` because ``ChatStreamClient`` is a struct
     /// and ``send()`` re-targets ``client.baseURL`` to track
@@ -1245,11 +1268,13 @@ final class ChatViewModel {
         alias: String,
         supportsImageInput: Bool? = nil,
         imageAttachments: [ChatImageAttachment] = [],
-        fileAttachments: [ChatFileAttachment] = []
+        fileAttachments: [ChatFileAttachment] = [],
+        requireAlreadyLoaded: Bool = false
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !imageAttachments.isEmpty || !fileAttachments.isEmpty else { return }
         guard !isStreaming else { return }
+        guard !requireAlreadyLoaded || server?.isModelResident(alias) == true else { return }
 
         // The reader has taken the wheel. Anything we were asking the model
         // on our own account stops now — it would land on a transcript that
@@ -1276,7 +1301,8 @@ final class ChatViewModel {
         beginAssistantTurn(
             alias: alias,
             supportsImageInput: resolvedImageCapability,
-            imageMessageID: imageAttachments.isEmpty ? nil : user.id
+            imageMessageID: imageAttachments.isEmpty ? nil : user.id,
+            requireAlreadyLoaded: requireAlreadyLoaded
         )
     }
 
@@ -1299,8 +1325,10 @@ final class ChatViewModel {
     private func beginAssistantTurn(
         alias: String,
         supportsImageInput: Bool,
-        imageMessageID: UUID? = nil
+        imageMessageID: UUID? = nil,
+        requireAlreadyLoaded: Bool = false
     ) {
+        liveVoiceTurnID = UUID()
         let placeholder = ChatMessage(role: .assistant, status: .streaming)
         let placeholderIndex = appendMessage(placeholder)
 
@@ -1327,12 +1355,19 @@ final class ChatViewModel {
             // `ensureServing` short-circuits when we are already serving
             // this alias, so the warm path pays only a state read.
             if let server {
-                let ready = await server.ensureServing(
-                    alias: alias,
-                    hfPath: startupHFPath,
-                    estimatedMemoryGB: nil,
-                    replacementGroup: .assistant
-                )
+                // Voice is resident-only, including this asynchronous race
+                // boundary. It never calls the automatic load/start path.
+                let ready: Bool
+                if requireAlreadyLoaded {
+                    ready = server.isModelResident(alias)
+                } else {
+                    ready = await server.ensureServing(
+                        alias: alias,
+                        hfPath: startupHFPath,
+                        estimatedMemoryGB: nil,
+                        replacementGroup: .assistant
+                    )
+                }
                 // A user Stop during the (possibly cold, multi-second)
                 // bring-up cancels THIS task. That is a deliberate
                 // cancel, not a start failure — route it through the
@@ -2159,6 +2194,7 @@ final class ChatViewModel {
         // user is leaving. Cancel them before adopting another visible path,
         // otherwise switching back could resurrect an old rail.
         cancelInflightWork()
+        liveVoiceTurnID = UUID() // Branch navigation invalidates pending spoken audio.
         // From here on the operation MUTATES: leave the snapshot (its node
         // values may be stale — see ``TreeSnapshot``) and work on the live
         // buffers, which always carry the finished content.

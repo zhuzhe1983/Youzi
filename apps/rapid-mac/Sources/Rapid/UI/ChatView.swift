@@ -259,6 +259,7 @@ struct ChatView: View {
     @Environment(DownloadManager.self) private var downloads
     @Environment(QuickstartCoordinator.self) private var quickstart
 
+    @State private var showsLiveVoice = false
     @State private var draft: String = ""
     @State private var attachmentDrafts = ChatAttachmentDraftStore()
     /// A rejected photo is a capability explanation, not an attachment
@@ -352,6 +353,9 @@ struct ChatView: View {
         .rapidAnimation(RapidMotion.standard, value: showsLifecycleBand)
         .background(RapidTheme.surfaceCanvas)
         // Drop a stale error banner once the server is provably ready.
+        .modifier(YouziLiveVoicePresentation(
+            chat: viewModel, server: server, alias: alias, isPresented: $showsLiveVoice
+        ))
         .onChange(of: server.state) { _, newState in
             if case .ready = newState { viewModel.clearStaleErrorBanner() }
         }
@@ -834,6 +838,8 @@ struct ChatView: View {
     /// right, then the send/stop button — Ollama's `model ▾  ⬆` cluster.
     private var composerControls: some View {
         HStack(spacing: RapidTheme.Space.sm) {
+            YouziLiveVoiceButton(isPresented: $showsLiveVoice)
+
             Button {
                 showsAttachmentMenu.toggle()
             } label: {

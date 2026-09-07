@@ -27,6 +27,11 @@ struct YouziSimpleTaskView: View {
     /// Scene storage keeps an unfinished request intact while onboarding or
     /// Professional Mode temporarily replaces this presentation.
     @SceneStorage("YouziSimple.NewTask.draft.v1") private var draft = ""
+    @State private var showsLiveVoice = false
+    // The voice sheet retains its preparation closure across multiple sends.
+    // Keep a newly created task ID in shared State rather than a captured nil
+    // taskID, which would otherwise create a second task on the next utterance.
+    @State private var preparedTaskID: UUID?
     @State private var focusRequest = 0
     @State private var selectedWorkspaceID: UUID?
     @State private var selectedProjectID: UUID?
@@ -60,6 +65,10 @@ struct YouziSimpleTaskView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(RapidTheme.surfaceCanvas)
         .accessibilityIdentifier("YouziSimple.Surface.newTask")
+        .modifier(YouziLiveVoicePresentation(
+            chat: chat, server: server, alias: assistantAlias,
+            prepareTurn: prepareTaskRequest, isPresented: $showsLiveVoice
+        ))
         .onAppear {
             loadTaskContext()
             resolveAssistantAliasIfNeeded()
@@ -490,6 +499,8 @@ struct YouziSimpleTaskView: View {
 
                     Spacer(minLength: 0)
 
+                    YouziLiveVoiceButton(isPresented: $showsLiveVoice)
+
                     modelQuickPicker
 
                     YouziContextUsageRing(messages: chat.messages, alias: assistantAlias)
@@ -639,6 +650,7 @@ struct YouziSimpleTaskView: View {
     }
 
     private func loadTaskContext() {
+        preparedTaskID = taskID
         guard let taskID, let task = productModel.task(id: taskID) else {
             selectedProjectID = projectID
             selectedWorkspaceID = nil
@@ -669,7 +681,7 @@ struct YouziSimpleTaskView: View {
     }
 
     private func ensureTaskDraft(request: String? = nil) -> YouziTask? {
-        if let taskID, let task = productModel.task(id: taskID) {
+        if let id = taskID ?? preparedTaskID, let task = productModel.task(id: id) {
             return task
         }
         let request = (request ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -685,6 +697,7 @@ struct YouziSimpleTaskView: View {
         if let selectedWorkspaceID {
             productModel.assignWorkspace(selectedWorkspaceID, toTask: task.id)
         }
+        preparedTaskID = task.id
         onTaskPersisted(task.id)
         return productModel.task(id: task.id) ?? task
     }
@@ -794,7 +807,16 @@ struct YouziSimpleTaskView: View {
             onPrepareAssistant()
             return
         }
-        guard var task = ensureTaskDraft(request: request) else { return }
+        guard let attachments = prepareTaskRequest(request) else { return }
+        draft = ""
+        focusRequest &+= 1
+        chat.send(request, alias: assistantAlias, fileAttachments: attachments)
+    }
+
+    /// Text and voice share task/workspace preparation and attachment handling.
+    /// Voice does not consume or clear the user's unfinished typed draft.
+    private func prepareTaskRequest(_ request: String) -> [ChatFileAttachment]? {
+        guard var task = ensureTaskDraft(request: request) else { return nil }
         task.title = (task.title == "未命名任务" || task.title == "Untitled Task") ? taskTitle(from: request) : task.title
         task.request = request
         task.updatedAt = Date()
@@ -806,18 +828,16 @@ struct YouziSimpleTaskView: View {
             attachments = try chatAttachments(for: productModel.task(id: task.id) ?? task)
         } catch {
             fileImportError = i18n.text(zh: "无法读取已添加的任务资料。", en: "Could not read added task files.")
-            return
+            return nil
         }
         guard productModel.beginTaskExecution(
             taskID: task.id,
             conversationID: chat.activeConversationID
         ) != nil else {
             fileImportError = i18n.text(zh: "无法准备任务的工作空间。", en: "Could not prepare workspace for task.")
-            return
+            return nil
         }
-        draft = ""
-        focusRequest &+= 1
-        chat.send(request, alias: assistantAlias, fileAttachments: attachments)
+        return attachments
     }
 
 }

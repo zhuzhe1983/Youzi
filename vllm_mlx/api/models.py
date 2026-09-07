@@ -2844,6 +2844,10 @@ class AudioSpeechRequest(BaseModel):
     # matches the documented contract.
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
     response_format: str = "wav"
+    # Opt-in native PCM chunking. Buffered OpenAI-compatible formats are
+    # unchanged unless stream=true is explicitly requested.
+    stream: bool = False
+    streaming_interval: float = Field(default=0.32, ge=0.08, le=1.0)
     # Rapid-MLX extensions for callers mixing speech with other audio lanes.
     # Omitted values preserve the model's native output (commonly 24 kHz
     # mono); explicit values resample/rechannel after synthesis.

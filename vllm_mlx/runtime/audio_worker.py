@@ -183,7 +183,8 @@ class AudioWorkerDispatcher:
             state.active_requests = max(0, state.active_requests - 1)
             state.last_used_at = now
             if error is None:
-                state.state = "registered" if operation == "unload" else "resident"
+                state.state = ("busy" if state.active_requests else
+                               "registered" if operation == "unload" else "resident")
                 state.last_error = None
                 if operation == "load":
                     state.loaded_at = now
@@ -265,6 +266,65 @@ class AudioWorkerDispatcher:
             except BaseException:
                 pass
             raise
+
+    async def iterate(self, lane, model, factory):
+        """Advance/close a lazy iterator on its owner, releasing the worker
+        between chunks while retaining the residency lease for the entire
+        stream. Backpressure must never park the LLM worker in a queue.put().
+        """
+        self._begin(lane, model, "infer")
+        iterator = None
+        error = None
+
+        def create():
+            nonlocal iterator
+            # execute() drains a cancelled factory but deliberately discards
+            # its result. Publish ownership inside the worker so that finally
+            # can close a created iterator even when the await is cancelled.
+            iterator = factory()
+
+        def step():
+            try:
+                return True, next(iterator)
+            except StopIteration:
+                # StopIteration cannot propagate through an asyncio Future.
+                return False, None
+
+        try:
+            await self.execute(lane, model, "infer", create)
+            while True:
+                available, chunk = await self.execute(lane, model, "infer", step)
+                if not available:
+                    break
+                yield chunk
+        except (GeneratorExit, asyncio.CancelledError):
+            # Client interruption is not a model failure.
+            raise
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            try:
+                if iterator is not None:
+                    close = getattr(iterator, "close", None)
+                    if close is not None:
+                        def close_owned():
+                            nonlocal error
+                            try:
+                                close()
+                            except BaseException as exc:
+                                # Preserve cleanup health even when a repeated
+                                # cancellation discards execute()'s exception.
+                                error = exc
+                                raise
+                        await self.execute(lane, model, "infer", close_owned)
+            except (GeneratorExit, asyncio.CancelledError):
+                raise
+            except BaseException as exc:
+                error = exc
+                raise
+            finally:
+                self._finish(lane, model, "infer", error)
 
     def execute_sync(
         self,

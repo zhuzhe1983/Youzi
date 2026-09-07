@@ -952,42 +952,65 @@ class TTSEngine:
         text: str,
         voice: str = "af_heart",
         speed: float = 1.0,
+        *,
+        instruct: str | None = None,
+        voice_seed: int | None = None,
+        streaming_interval: float = 0.32,
+        exaggeration: float | None = None,
     ) -> Iterator[AudioOutput]:
-        """
-        Stream speech generation chunk by chunk.
+        """Yield real Qwen PCM chunks, not a buffered utterance in an iterator.
 
-        Args:
-            text: Text to synthesize
-            voice: Voice ID
-            speed: Speech speed
-
-        Yields:
-            AudioOutput chunks
+        Qwen3-TTS explicitly enables incremental waveform generation. Other
+        families preserve the existing Python iterator API (whose chunking is
+        backend-dependent); only Qwen is qualified for the new HTTP PCM route.
+        Creation, iteration and close must all run on the owning MLX worker.
         """
         if not self._loaded:
             self.load()
-
-        sample_rate = 24000
-
-        for result in self.model.generate(
-            text=text,
-            voice=voice,
-            speed=speed,
-        ):
-            audio_data = result.audio
-            if hasattr(result, "sample_rate"):
-                sample_rate = result.sample_rate
-
-            if hasattr(audio_data, "tolist"):
-                audio_np = np.array(audio_data.tolist(), dtype=np.float32)
-            else:
-                audio_np = np.array(audio_data, dtype=np.float32)
-
-            yield AudioOutput(
-                audio=audio_np,
-                sample_rate=sample_rate,
-                duration=len(audio_np) / sample_rate,
-            )
+        if self._model_family != "qwen3_tts":
+            # Backwards-compatible Python API. Do not inject Qwen-only options
+            # into existing Kokoro/other backend generators. HTTP streaming
+            # qualification is separately enforced by the route.
+            results = self.model.generate(text=text, voice=voice, speed=speed)
+            try:
+                sample_rate = 24000
+                for result in results:
+                    sample_rate = int(getattr(result, "sample_rate", sample_rate))
+                    audio = np.asarray(result.audio, dtype=np.float32).copy()
+                    yield AudioOutput(audio, sample_rate, len(audio) / sample_rate)
+            finally:
+                close = getattr(results, "close", None)
+                if close is not None:
+                    close()
+            return
+        if not 0.08 <= streaming_interval <= 1.0:
+            raise ValueError("streaming_interval must be between 0.08 and 1 second")
+        if voice_seed is not None and not self._is_qwen3_voicedesign():
+            raise ValueError("voice_seed is supported only by Qwen3-TTS VoiceDesign")
+        kwargs = dict(text=text, voice=voice, speed=speed, lang_code="auto",
+                      stream=True, streaming_interval=streaming_interval)
+        if self._is_qwen3_voicedesign():
+            kwargs["instruct"] = instruct or QWEN3_TTS_VOICEDESIGN_DEFAULT_INSTRUCT
+        elif instruct:
+            kwargs["instruct"] = instruct
+        with _qwen_seeded_sampling(self.model, voice_seed):
+            results = self.model.generate(**kwargs)
+            try:
+                for result in results:
+                    # Materialize on the owning worker; no lazy MLX arrays may
+                    # escape into the ASGI event loop or a different thread.
+                    audio = np.asarray(result.audio, dtype=np.float32).reshape(-1).copy()
+                    if not audio.size:
+                        continue
+                    if not np.isfinite(audio).all():
+                        raise ValueError("TTS returned nonfinite audio")
+                    sample_rate = int(getattr(result, "sample_rate", 24000))
+                    yield AudioOutput(audio=audio, sample_rate=sample_rate,
+                                      duration=len(audio) / sample_rate)
+            finally:
+                close = getattr(results, "close", None)
+                if close is not None:
+                    close()
 
     def save(
         self,

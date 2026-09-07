@@ -3085,6 +3085,35 @@ def _generate_speech_blocking(
     )
 
 
+async def _stream_speech_pcm(model_name, input_text, gen_kwargs, interval):
+    """Keep the lane/residency leased, but yield the model worker per chunk."""
+    import numpy as np
+
+    from ..runtime.audio_worker import audio_worker
+
+    async with _get_tts_lane_lock():
+        await run_to_completion(_ensure_tts_loaded_blocking, model_name)
+        engine = _tts_engine
+        if engine is None:
+            raise RuntimeError("TTS model did not finish loading")
+        iterator = audio_worker.iterate(
+            "tts", model_name,
+            lambda: engine.stream_generate(input_text, streaming_interval=interval,
+                                           **gen_kwargs),
+        )
+        try:
+            async for audio in iterator:
+                if audio.sample_rate != 24000 or audio.audio.ndim != 1:
+                    raise ValueError("Streaming Qwen audio must be 24 kHz mono")
+                if not np.isfinite(audio.audio).all():
+                    raise ValueError("TTS returned nonfinite audio")
+                yield (np.clip(audio.audio, -1, 1) * 32767).astype("<i2").tobytes()
+        finally:
+            from ._audio_streaming import close_stream
+
+            await close_stream(iterator)
+
+
 @router.post("/v1/audio/speech", dependencies=[Depends(verify_api_key)])
 async def create_speech(request: AudioSpeechRequest = Body(...)):
     """Generate speech from text (OpenAI TTS API compatible).
@@ -3418,6 +3447,30 @@ async def create_speech(request: AudioSpeechRequest = Body(...)):
                         }
                     },
                 ) from exc
+        if request.stream:
+            from ..audio.tts import is_qwen3_tts_model
+            from ._audio_streaming import PCMStreamingResponse, close_stream
+
+            # Refuse unsupported formats/families explicitly, never claim a
+            # one-shot waveform is a real streaming backend. Resampling a
+            # chunk independently would introduce discontinuities at joins.
+            if (response_format != "pcm" or sample_rate not in (None, 24000)
+                    or channels not in (None, 1) or ref_bytes is not None
+                    or not is_qwen3_tts_model(model_name) or len(input_text) > 4096):
+                raise HTTPException(status_code=400, detail={"error": {
+                    "message": "Streaming requires reference-free Qwen3-TTS, "
+                               "response_format=pcm, 24000 Hz mono, and input <=4096 characters",
+                    "type": "invalid_request_error", "code": "unsupported_speech_stream",
+                    "param": "stream",
+                }})
+            source = _stream_speech_pcm(model_name, input_text, gen_kwargs,
+                                        request.streaming_interval)
+            try:
+                first = await anext(source)
+                return PCMStreamingResponse(source, first)
+            except BaseException:
+                await close_stream(source)
+                raise
         try:
             async with _get_tts_lane_lock():
                 audio_bytes, output_rate, output_channels = await run_to_completion(
