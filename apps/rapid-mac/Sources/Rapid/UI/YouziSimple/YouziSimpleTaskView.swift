@@ -578,6 +578,10 @@ struct YouziSimpleTaskView: View {
            downloadedChatModels.contains(where: { $0.alias == assistantAlias }) {
             return
         }
+        if let preferred = YouziResidentServicePreference.defaultAlias(for: .chat, entries: downloadedChatModels) {
+            assistantAlias = preferred
+            return
+        }
         if let serving = server.servingAlias, !serving.isEmpty,
            downloadedChatModels.contains(where: { $0.alias == serving }) {
             assistantAlias = serving

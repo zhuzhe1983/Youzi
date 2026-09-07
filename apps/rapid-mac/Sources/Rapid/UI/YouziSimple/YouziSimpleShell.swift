@@ -669,6 +669,9 @@ struct YouziSimpleShell: View {
 
     private func startNewTask() {
         chat.newConversation()
+        if let preferred = YouziResidentServicePreference.defaultAlias(for: .chat, entries: catalogEntries) {
+            assistantAlias = preferred
+        }
         selectedTaskID = nil
         selectedProjectID = nil
         selection = .newTask

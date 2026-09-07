@@ -431,13 +431,13 @@ final class AudioViewModel {
         if !transcriptionSelectionModels.contains(where: {
             $0.alias == selectedTranscriptionAlias
         }) {
-            selectedTranscriptionAlias = preferredAlias(
+            selectedTranscriptionAlias = YouziResidentServicePreference.defaultAlias(for: .transcription, entries: transcriptionSelectionModels) ?? preferredAlias(
                 from: transcriptionSelectionModels,
                 preferred: ["whisper-small", "whisper-large-v3-turbo", "whisper-large-v3"]
             )
         }
         if !speechModels.contains(where: { $0.alias == selectedSpeechAlias }) {
-            selectedSpeechAlias = preferredAlias(
+            selectedSpeechAlias = YouziResidentServicePreference.defaultAlias(for: .speech, entries: speechModels) ?? preferredAlias(
                 from: speechModels,
                 preferred: ["qwen3-tts-4bit", "qwen3-tts-6bit", "qwen3-tts"]
             )

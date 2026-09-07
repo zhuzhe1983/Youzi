@@ -2982,7 +2982,7 @@ def _check_audio_preload_capacity(model_name: str) -> None:
         )
 
 
-async def preload_audio_model(model: str) -> dict:
+async def preload_audio_model(model: str, *, preserve_loaded: bool = False) -> dict:
     """Explicit picker load, without synthesis or replacing the chat process.
 
     Locks and cancellation draining are shared with inference. This is not a
@@ -2997,6 +2997,15 @@ async def preload_audio_model(model: str) -> dict:
         raise HTTPException(status_code=404, detail="Unknown audio model")
     if entry.type == "tts":
         async with _get_tts_lane_lock():
+            if (
+                preserve_loaded
+                and _tts_engine is not None
+                and _tts_engine.model_name != entry.hf_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="The speech lane already has a model; explicitly unload it before loading another.",
+                )
             if _tts_engine is None or _tts_engine.model_name != entry.hf_id:
                 await run_to_completion(_check_audio_preload_capacity, entry.hf_id)
             await run_to_completion(_ensure_tts_loaded_blocking, entry.hf_id)
@@ -3004,6 +3013,14 @@ async def preload_audio_model(model: str) -> dict:
     else:
         async with _get_stt_lane_lock():
             cached = _aligner_engine if _is_aligner_model(entry.hf_id) else _stt_engine
+            if preserve_loaded and any(
+                engine is not None and engine.model_name != entry.hf_id
+                for engine in (_stt_engine, _aligner_engine)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="The speech-input lane already has a model; explicitly unload it before loading another.",
+                )
             if cached is None or cached.model_name != entry.hf_id:
                 await run_to_completion(_check_audio_preload_capacity, entry.hf_id)
             await run_to_completion(_preload_stt_blocking, entry.hf_id)

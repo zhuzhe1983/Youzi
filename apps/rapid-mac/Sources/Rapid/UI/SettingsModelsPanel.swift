@@ -37,10 +37,18 @@ struct SettingsModelsPanel: View {
                 switch selection {
                 case .service: SettingsModelServicePanel()
                 case .files: SettingsModelManagementPanel(showsPageHeader: false)
-                case .chat: SettingsChatModelPanel()
-                case .audio: SettingsAudioDefaultsPanel(generation: generation)
-                case .image: imageDefaults
-                case .video: SettingsVideoDefaultsPanel(generation: generation)
+                case .chat:
+                    SettingsResidentServicePanel(slots: [.chat], showsLaunchGuidance: false)
+                    SettingsChatModelPanel()
+                case .audio:
+                    SettingsResidentServicePanel(slots: [.transcription, .speech], showsLaunchGuidance: false)
+                    SettingsAudioDefaultsPanel(generation: generation)
+                case .image:
+                    SettingsResidentServicePanel(slots: [.image], showsLaunchGuidance: false)
+                    imageDefaults
+                case .video:
+                    SettingsResidentServicePanel(slots: [.video], showsLaunchGuidance: false)
+                    SettingsVideoDefaultsPanel(generation: generation)
                 }
             }
             .id(selection)
@@ -193,7 +201,7 @@ private struct SettingsAudioDefaultsPanel: View {
                         subtitle: i18n.text(zh: "每个语音模型单独保存音色。聊天、技能等应用内调用未指定参数时使用这些默认值。", en: "Voices are saved per model. App callers use these defaults when no explicit parameters are provided.")) {
             VStack(alignment: .leading, spacing: 16) {
                 if let audio {
-                    Picker(i18n.text(zh: "语音模型", en: "Speech model"), selection: Binding(
+                    Picker(i18n.text(zh: "音色试听模型（不改变默认）", en: "Voice preview model (does not change default)"), selection: Binding(
                         get: { audio.selectedSpeechAlias }, set: {
                             preview.stop()
                             audio.selectSpeechModel($0)

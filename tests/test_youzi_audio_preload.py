@@ -183,3 +183,28 @@ async def test_preload_rejects_whisper_weights_without_processor(lanes, monkeypa
     assert exc.value.status_code == 409
     assert "processor" in exc.value.detail
     assert audio._stt_engine is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,alias", [("tts", "kokoro"), ("stt", "whisper-small")])
+async def test_preserved_preload_rejects_occupied_lane_under_its_lock(
+    lanes, monkeypatch, kind, alias
+):
+    old = SimpleNamespace(model_name="another-model")
+    monkeypatch.setattr(audio, f"_{kind}_engine", old)
+    with pytest.raises(HTTPException) as exc:
+        await audio.preload_audio_model(alias, preserve_loaded=True)
+    assert exc.value.status_code == 409
+    assert getattr(audio, f"_{kind}_engine") is old
+    _, tts, stt = lanes
+    tts.load.assert_not_called()
+    stt.load.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_preserved_preload_reuses_matching_speech_model(lanes):
+    await audio.preload_audio_model("kokoro")
+    old = audio._tts_engine
+    await audio.preload_audio_model("kokoro", preserve_loaded=True)
+    assert audio._tts_engine is old
+    lanes[1].load.assert_called_once()

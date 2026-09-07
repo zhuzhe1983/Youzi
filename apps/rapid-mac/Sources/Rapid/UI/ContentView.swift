@@ -645,6 +645,7 @@ struct ContentView: View {
                         chat: chat,
                         onNewChat: {
                             chat.newConversation()
+                            applyDefaultChatModel()
                             section = .chat
                         },
                         onSearchChats: {
@@ -798,11 +799,18 @@ struct ContentView: View {
         .accessibilityIdentifier("ContentView.CommandPalette")
     }
 
+    private func applyDefaultChatModel() {
+        if let preferred = YouziResidentServicePreference.defaultAlias(for: .chat, entries: catalogEntries) {
+            alias = preferred
+        }
+    }
+
     private func runCommandPaletteAction(_ command: CommandPalette.Command) {
         showCommandPalette = false
         switch command {
         case .newChat:
             chat.newConversation()
+            applyDefaultChatModel()
             section = .chat
         case .searchChats:
             openConversationSearch()
@@ -870,6 +878,7 @@ struct ContentView: View {
                     onNewChat: {
                         showConversationSearch = false
                         chat.newConversation()
+                        applyDefaultChatModel()
                         section = .chat
                     },
                     onSelectConversation: { id in
@@ -1700,7 +1709,7 @@ struct ContentView: View {
             sessionCatalog = []
         }
         let launchPlan = SessionModelRestore.launchPlan(
-            legacyLastAlias: ServerManager.lastServedAlias(),
+            legacyLastAlias: YouziResidentServicePreference.defaultAlias(for: .chat, entries: sessionCatalog) ?? ServerManager.lastServedAlias(),
             dictationAlias: nil,
             speechAlias: nil,
             catalog: sessionCatalog,

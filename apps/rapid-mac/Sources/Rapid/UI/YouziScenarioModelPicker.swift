@@ -50,6 +50,8 @@ struct YouziScenarioModelPicker: View {
                     .accessibilityLabel(i18n.text(zh: "刷新模型", en: "Refresh models"))
                     .accessibilityIdentifier("YouziScenarioModelPicker.Button.389a1e56c3")
             }
+            Text(i18n.text(zh: "勾选表示已就绪，星标表示默认。点击仅用于本次选择或加载，不修改默认及启动清单。", en: "Checkmark: ready. Star: default. Selecting or loading here does not change defaults or startup choices."))
+                .font(RapidFont.caption).foregroundStyle(.secondary)
             YouziModelOccupancyBar(occupancy: occupancy)
                 .accessibilityIdentifier("Youzi.ScenarioModels.Memory")
             Picker(i18n.text(zh: "场景", en: "Scenario"), selection: $selectedKind) {
@@ -94,14 +96,23 @@ struct YouziScenarioModelPicker: View {
             Task {
                 loadingAlias = entry.alias
                 defer { loadingAlias = nil }
-                let success = await server.ensureServing(alias: entry.alias, hfPath: entry.hfRepo,
-                    residencyEligible: true, requestIsMedia: entry.kind != .chat, mediaKind: entry.kind)
+                let success: Bool
+                if ready { success = true }
+                else if server.servingAlias != nil { success = await server.loadStartupModel(entry) }
+                else if entry.kind == .chat { success = await server.ensureServing(alias: entry.alias, hfPath: entry.hfRepo) }
+                else { success = false }
                 if success && entry.kind == .chat { assistantAlias = entry.alias }
                 if !success { error = i18n.text(zh: "模型未能启动，请在模型设置中查看详情。", en: "Model could not start. See model settings for details.") }
             }
         } label: {
             HStack(spacing: 8) {
                 Text(entry.alias).font(RapidFont.secondary).lineLimit(1).truncationMode(.middle)
+                if YouziResidentServicePreference.Slot.allCases.contains(where: {
+                    YouziResidentServicePreference.defaultAlias(for: $0, entries: entries) == entry.alias
+                }) {
+                    Image(systemName: "star.fill").font(RapidFont.caption).foregroundStyle(.orange)
+                        .accessibilityLabel(i18n.text(zh: "默认模型", en: "Default model"))
+                }
                 Spacer(minLength: 4)
                 Text(memoryLabel(entry)).font(RapidFont.caption).foregroundStyle(.secondary)
                 if loadingAlias == entry.alias { ProgressView().controlSize(.mini) }

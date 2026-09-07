@@ -80,6 +80,7 @@ class ModelLoadRequest(BaseModel):
     # wire form with a 4xx naming the field via the unified validation
     # envelope.
     pin: StrictBool = False
+    preserve_loaded: StrictBool = False
     replace_group: str | None = Field(default=None, pattern="^(assistant)$")
     image_mode: Literal["generation", "editing"] | None = None
     performance: ModelPerformanceRequest | None = None
@@ -92,6 +93,7 @@ class ModelLoadRequest(BaseModel):
 
 class AudioModelLoadRequest(BaseModel):
     model: str = Field(..., min_length=1)
+    preserve_loaded: StrictBool = False
 
 
 @router.post("/v1/audio/models/load")
@@ -100,7 +102,10 @@ async def load_audio_model(request: AudioModelLoadRequest):
     from .audio import preload_audio_model
 
     try:
-        return await preload_audio_model(request.model)
+        return await preload_audio_model(
+            request.model,
+            **({"preserve_loaded": True} if request.preserve_loaded else {}),
+        )
     except HTTPException:
         raise
     except Exception as exc:
@@ -157,6 +162,7 @@ async def model_residency():
 
     snapshot = _manager().snapshot()
     snapshot["audio_lanes"] = audio_worker.snapshot()
+    snapshot["supports_preserve_loaded"] = True
     return snapshot
 
 
@@ -233,6 +239,7 @@ async def load_resident_model(request: ModelLoadRequest):
             replace_mode=request.replace_mode,
             memory_policy=request.memory_policy,
             resolved_group=resolved_group,
+            **({"preserve_loaded": True} if request.preserve_loaded else {}),
         )
     except HTTPException:
         raise

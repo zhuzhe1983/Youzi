@@ -421,9 +421,8 @@ final class ServerManager {
         )
     }
 
-    /// Prepare the process contract used by the future Video surface. Video
-    /// aliases cannot join the resident chat/image engine, and completed
-    /// artifacts must survive process exits in an app-owned directory.
+    /// Join a healthy service without replacing chat; cold starts still stage
+    /// an app-owned video artifact directory that survives process exits.
     @discardableResult
     func ensureVideoServing(
         alias: String,
@@ -469,6 +468,11 @@ final class ServerManager {
             ])
             return false
         }
+        if case .ready = state, child != nil, let binary = binaryPath {
+            let catalog = await ModelCatalog.videoEntries(binary: binary)
+            guard let entry = catalog.first(where: { $0.alias == alias && $0.cached }) else { return false }
+            return await loadStartupModel(entry)
+        }
         return await ensureServing(
             alias: alias,
             hfPath: hfPath,
@@ -481,9 +485,9 @@ final class ServerManager {
     /// Restore the explicitly selected media set after the primary is healthy.
     /// Sequential loading bounds allocation spikes; errors never stop siblings.
     /// A user stop/restart supersedes this restore at the next await boundary.
-    func restoreResidentServices() async {
+    func restoreResidentServices(manually: Bool = false) async {
         let defaults = sessionDefaults ?? .standard
-        guard YouziResidentServicePreference.enabled(in: defaults),
+        guard (manually || YouziResidentServicePreference.enabled(in: defaults)),
               !isRestoringResidentServices, let process = child,
               case .ready = state, let binary = binaryPath else { return }
         let token = UUID()
@@ -500,8 +504,8 @@ final class ServerManager {
         let catalog = await residentServiceCatalogProvider(binary)
         for (slot, alias) in selections {
             guard !Task.isCancelled, residentRestoreToken == token, child === process,
-                  YouziResidentServicePreference.enabled(in: defaults),
-                  defaults.string(forKey: slot.key) == alias else { return }
+                  manually || YouziResidentServicePreference.enabled(in: defaults) else { return }
+            guard YouziResidentServicePreference.aliases(for: slot, in: defaults).contains(alias) else { continue }
             guard let entry = catalog.first(where: { $0.alias == alias && slot.accepts($0) }) else {
                 residentLoadFailures[alias] = ResidentLoadFailure(
                     alias: alias,
@@ -509,16 +513,73 @@ final class ServerManager {
                 )
                 continue
             }
-            _ = await ensureServing(
-                alias: entry.alias,
-                hfPath: entry.hfRepo,
-                estimatedMemoryGB: ModelSizing.residentEstimateGB(alias: entry.alias, sizeText: entry.sizeOnDisk),
-                imageMode: slot == .image ? .generation : nil,
-                residencyEligible: true,
-                requestIsMedia: true,
-                mediaKind: slot.kind
-            )
+            _ = await loadStartupModel(entry)
         }
+    }
+
+    /// The startup list never enters ensureServing's legacy restart path.
+    /// Admission is explicit, capability-gated, and preserves all siblings.
+    @discardableResult
+    func loadStartupModel(_ entry: ModelEntry) async -> Bool {
+        guard entry.cached, case .ready = state, let process = child else { return false }
+        let alias = entry.alias
+        residentLoadsInFlight[alias, default: 0] += 1
+        residentLoadFailures[alias] = nil
+        defer {
+            let remaining = (residentLoadsInFlight[alias] ?? 1) - 1
+            residentLoadsInFlight[alias] = remaining > 0 ? remaining : nil
+        }
+        func reject(_ message: String) -> Bool {
+            residentLoadFailures[alias] = ResidentLoadFailure(alias: alias, message: message)
+            return false
+        }
+        guard await refreshResidency(), child === process, !Task.isCancelled else { return false }
+        if entry.kind == .audio && YouziScenarioModels.isReady(entry, in: residency) { return true }
+        guard residency.supportsPreserveLoaded else {
+            return reject("Update the model runtime to use the non-replacing startup list. Running models were preserved.")
+        }
+        if entry.kind == .audio {
+            // The audio route owns one engine per lane. Do not evict a manual
+            // selection during startup restore, even if it is idle.
+            let lane = entry.audioCapability == .speech ? "tts" : "stt"
+            if residency.audioLanes.contains(where: {
+                ($0.lane == lane || (lane == "stt" && $0.lane == "alignment"))
+                    && $0.model != nil && ($0.state == "resident" || $0.state == "busy")
+            }) {
+                return reject("This audio lane already has a loaded model. Unload it explicitly before loading another; multi-model audio caching is not supported yet.")
+            }
+            let message = await residencyClient.preloadAudio(alias: entry.hfRepo ?? alias, preserveLoaded: true, port: activePort, bearer: activeBearer)
+            guard child === process, !Task.isCancelled else { return false }
+            if let message { return reject(LogScrubber.scrub(message)) }
+        } else {
+            if entry.kind == .video, !Self.videoMemoryFloorSatisfied(minimumMemoryGB: entry.minimumMemoryGB, snapshot: memorySnapshotProvider()) {
+                return reject("This Mac does not meet the video model's verified memory requirement.")
+            }
+            // MTP is currently process-scoped; do not silently drop it when
+            // admitting a secondary chat model, or restart the active process.
+            if entry.kind == .chat, !isModelResident(alias), Self.speculativeDecodingRequested(
+                defaultPreset: entry.speculativeDecodingPreset, userOverrides: perfLaunchFlagsProvider?(alias) ?? []
+            ) {
+                return reject("This chat model requests process-scoped speculative decoding. Start it as the primary chat model or disable speculative decoding before co-loading it.")
+            }
+            let result = await residencyClient.load(
+                alias: alias, hfPath: entry.hfRepo,
+                estimatedSizeGB: ModelSizing.residentEstimateGB(alias: alias, sizeText: entry.sizeOnDisk),
+                memoryPolicy: .keepThenCommit, imageMode: entry.kind == .image ? .generation : nil,
+                performance: entry.kind == .chat ? perfConfigProvider?(alias) : nil,
+                pin: true, preserveLoaded: true, port: activePort, bearer: activeBearer)
+            guard child === process, !Task.isCancelled else { return false }
+            switch result {
+            case .loaded: break
+            case .unsupported: return reject("The runtime does not support co-loading; running models were preserved.")
+            case .rejected(let message): return reject(LogScrubber.scrub(message))
+            }
+        }
+        guard await refreshResidency(), child === process, !Task.isCancelled else { return false }
+        guard YouziScenarioModels.isReady(entry, in: residency) else {
+            return reject("The model did not report ready. Refresh its status before retrying.")
+        }
+        return true
     }
 
     /// Video catalog metadata describes a whole-machine capacity floor, not
@@ -704,9 +765,9 @@ final class ServerManager {
     private(set) var isRestoringResidentServices = false
     private var residentRestoreToken: UUID?
     internal var residentServiceCatalogProvider: @MainActor @Sendable (URL) async -> [ModelEntry] = { binary in
-        async let audio = ModelCatalog.audioEntries(binary: binary)
-        async let images = ModelCatalog.imageEntries(binary: binary)
-        return (await audio) + (await images)
+        async let chat = ModelCatalog.load(binary: binary)
+        async let media = ModelCatalog.scenarioMediaEntries(binary: binary)
+        return YouziScenarioModels.merge(chat: await chat, media: await media ?? [])
     }
 
 
@@ -2010,6 +2071,7 @@ final class ServerManager {
                 imageMode: imageMode,
                 performance: requestIsMedia ? nil : perfConfigProvider?(trimmed),
                 pin: requestIsMedia && YouziResidentServicePreference.enabled(in: sessionDefaults ?? .standard),
+                preserveLoaded: residency.supportsPreserveLoaded && replacementGroup == nil,
                 port: activePort,
                 bearer: activeBearer
             )

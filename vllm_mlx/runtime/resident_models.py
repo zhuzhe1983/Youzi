@@ -986,6 +986,17 @@ class ResidentModelManager:
         )
         return evicted
 
+    def _check_preserved_capacity_locked(self, incoming_bytes: int) -> None:
+        """Explicit startup lists may fail admission, never evict siblings."""
+        if (
+            self.memory_limit_bytes > 0
+            and self._accounted_usage() + incoming_bytes > self.memory_limit_bytes
+        ):
+            raise ResidentModelCapacityError(
+                "Insufficient capacity to co-load this model; running models were preserved. "
+                "Explicitly unload a model or choose a smaller startup list."
+            )
+
     async def _evict_for_locked(
         self,
         incoming_bytes: int,
@@ -1318,10 +1329,15 @@ class ResidentModelManager:
         replace_mode: str = "reject",
         memory_policy: str = "keep_then_commit",
         resolved_group: str | None = None,
+        preserve_loaded: bool = False,
     ) -> ResidencyRecord:
         model_name = model_name.strip()
         if not model_name:
             raise ResidentModelError("model must not be empty")
+        if preserve_loaded and (replace_group is not None or reload_if_changed):
+            raise ResidentModelError(
+                "preserve_loaded cannot replace or reload running models"
+            )
         estimate = max(1, estimated_bytes or estimate_model_bytes(model_name))
         if memory_policy not in {"keep_then_commit", "evict_first_if_needed"}:
             raise ResidentModelError(f"unsupported memory policy {memory_policy!r}")
@@ -1332,7 +1348,11 @@ class ResidentModelManager:
             canonical = self._canonical(model_name)
             if canonical is not None:
                 existing_record = self._records[canonical]
-                group = _effective_replace_group(existing_record.entry, replace_group)
+                group = (
+                    None
+                    if preserve_loaded
+                    else _effective_replace_group(existing_record.entry, replace_group)
+                )
                 did_reload = False
                 if reload_if_changed and existing_record.performance != performance:
                     reload_candidates: list[ResidencyRecord] = []
@@ -1448,10 +1468,16 @@ class ResidentModelManager:
                         elif paused_engines:
                             await self._resume_engines(paused_engines)
                             paused_engines = []
-                    await self._evict_for_locked(
-                        estimate,
-                        exclude={model_name, *(item.model_id for item in candidates)},
-                    )
+                    if preserve_loaded:
+                        self._check_preserved_capacity_locked(estimate)
+                    else:
+                        await self._evict_for_locked(
+                            estimate,
+                            exclude={
+                                model_name,
+                                *(item.model_id for item in candidates),
+                            },
+                        )
                     before = self._read_memory()
                     if image_mode is None:
                         entry = await self.loader(model_name, model_path, performance)
@@ -1472,7 +1498,11 @@ class ResidentModelManager:
                         performance=performance,
                         replacement_projection=projection,
                     )
-                    group = _effective_replace_group(record.entry, replace_group)
+                    group = (
+                        None
+                        if preserve_loaded
+                        else _effective_replace_group(record.entry, replace_group)
+                    )
                     if destructive_replacement:
                         record.primary = destructive_primary
                         if destructive_primary:
@@ -1504,13 +1534,16 @@ class ResidentModelManager:
                     if destructive_primary and self._on_primary_changed is not None:
                         destructive_primary_publish_attempted = True
                         self._on_primary_changed(entry)
-                    await self._evict_for_locked(
-                        0,
-                        exclude={
-                            record.model_id,
-                            *(item.model_id for item in candidates),
-                        },
-                    )
+                    if preserve_loaded:
+                        self._check_preserved_capacity_locked(0)
+                    else:
+                        await self._evict_for_locked(
+                            0,
+                            exclude={
+                                record.model_id,
+                                *(item.model_id for item in candidates),
+                            },
+                        )
                     if destructive_handoff is not None:
                         destructive_handoff.commit(entry)
                         destructive_handoff = None

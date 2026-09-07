@@ -203,7 +203,8 @@ final class VideoGenViewModel {
         catalogLoaded = true
         let stillValid = filtered.contains { $0.alias == selectedAlias }
         if selectedAlias.isEmpty || !stillValid {
-            selectedAlias = (filtered.first { $0.cached && isModelEligible($0) }
+            selectedAlias = YouziResidentServicePreference.defaultAlias(for: .video, entries: filtered.filter(isModelEligible))
+                ?? (filtered.first { $0.cached && isModelEligible($0) }
                 ?? filtered.first(where: isModelEligible)
                 ?? filtered.first)?.alias ?? ""
         }

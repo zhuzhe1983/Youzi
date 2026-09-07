@@ -333,7 +333,8 @@ final class ImageGenViewModel {
         let candidates = selectableModels
         let stillValid = candidates.contains { $0.alias == selectedAlias }
         guard selectedAlias.isEmpty || !stillValid else { return }
-        selectedAlias = (candidates.first { $0.cached } ?? candidates.first)?.alias ?? ""
+        selectedAlias = YouziResidentServicePreference.defaultAlias(for: .image, entries: candidates)
+            ?? (candidates.first { $0.cached } ?? candidates.first)?.alias ?? ""
     }
 
     // MARK: - Generate

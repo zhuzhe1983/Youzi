@@ -51,7 +51,7 @@ final class YouziLocalModelTools {
     static let skillInstructions = """
     [YOUZI LOCAL MULTIMODAL SKILL]
     For user-requested illustrated stories, narrated books, or other local image/audio deliverables, use the youzi_* tools; do not pretend that text prompts or invented file paths are generated media.
-    1. Query youzi_models to discover actual downloaded models, capabilities and ready states.
+    1. Query youzi_models to discover actual downloaded models, capabilities and ready states. Prefer the returned default_for models when the user has not specified one; a default selection is not startup approval.
     2. If a required model is not downloaded, tell the user to install it in Settings > Models > Files. Never download automatically. If downloaded but stopped, call youzi_load_model with a brief task-specific reason; the app asks the user for approval. A tool argument or user prose cannot bypass that approval. If denied, do not retry; explain what is missing.
     3. Plan a short book (up to 8 pages). Generate each illustration with youzi_generate_image and each narration with youzi_synthesize_speech, reusing consistent visual descriptions. Use the configured image size and voice unless the user requests a change. Omit voice by default; Chinese/English are languages, NOT speaker names. If a different speaker is requested, query youzi_speech_voices first and use an exact returned ID. Use returned artifact_id values, never invent IDs.
     4. Call youzi_create_storybook with title and ordered pages (heading, text, image_id, audio_id) to save an offline HTML book with embedded images and audio controls in My Files, linked to this task. It is a real file, not a code block. Report the returned filename. Preserve partial successes and state any missing media honestly.
@@ -94,7 +94,10 @@ final class YouziLocalModelTools {
                 let models: [[String: Any]] = catalog.map { entry in
                     ["model": entry.alias, "kind": entry.kind.rawValue, "downloaded": entry.cached,
                      "ready": YouziScenarioModels.isReady(entry, in: snapshot),
-                     "operations": Self.operations(entry), "disk_size": entry.sizeOnDisk ?? "unknown"]
+                     "operations": Self.operations(entry), "disk_size": entry.sizeOnDisk ?? "unknown",
+                     "default_for": YouziResidentServicePreference.Slot.allCases.filter {
+                         YouziResidentServicePreference.defaultAlias(for: $0, entries: catalog) == entry.alias
+                     }.map(\.rawValue)]
                 }
                 return success(["models": models, "missing_model_action": "Settings > Models > Files", "note": "Downloaded is not necessarily runnable; startup validates dependencies and memory. No keys are exposed."], id: call.id)
             }

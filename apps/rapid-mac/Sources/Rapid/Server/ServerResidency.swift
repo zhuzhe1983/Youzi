@@ -163,6 +163,7 @@ struct ModelResidencySnapshot: Codable, Sendable, Equatable {
     let evictionsTotal: Int
     let models: [ResidentModelStatus]
     let audioLanes: [ResidentAudioLaneStatus]
+    let supportsPreserveLoaded: Bool
 
     enum CodingKeys: String, CodingKey {
         case memoryLimitBytes = "memory_limit_bytes"
@@ -173,6 +174,7 @@ struct ModelResidencySnapshot: Codable, Sendable, Equatable {
         case evictionsTotal = "evictions_total"
         case models
         case audioLanes = "audio_lanes"
+        case supportsPreserveLoaded = "supports_preserve_loaded"
     }
 
     init(
@@ -183,7 +185,8 @@ struct ModelResidencySnapshot: Codable, Sendable, Equatable {
         loadsTotal: Int,
         evictionsTotal: Int,
         models: [ResidentModelStatus],
-        audioLanes: [ResidentAudioLaneStatus] = []
+        audioLanes: [ResidentAudioLaneStatus] = [],
+        supportsPreserveLoaded: Bool = false
     ) {
         self.memoryLimitBytes = memoryLimitBytes
         self.memoryUsedBytes = memoryUsedBytes
@@ -193,6 +196,7 @@ struct ModelResidencySnapshot: Codable, Sendable, Equatable {
         self.evictionsTotal = evictionsTotal
         self.models = models
         self.audioLanes = audioLanes
+        self.supportsPreserveLoaded = supportsPreserveLoaded
     }
 
     init(from decoder: Decoder) throws {
@@ -204,6 +208,7 @@ struct ModelResidencySnapshot: Codable, Sendable, Equatable {
         loadsTotal = try values.decode(Int.self, forKey: .loadsTotal)
         evictionsTotal = try values.decode(Int.self, forKey: .evictionsTotal)
         models = try values.decode([ResidentModelStatus].self, forKey: .models)
+        supportsPreserveLoaded = try values.decodeIfPresent(Bool.self, forKey: .supportsPreserveLoaded) ?? false
         audioLanes = try values.decodeIfPresent(
             [ResidentAudioLaneStatus].self,
             forKey: .audioLanes
@@ -370,6 +375,7 @@ struct ServerResidencyClient {
         let model_path: String?
         let estimated_size_gb: Double
         let pin: Bool
+        let preserve_loaded: Bool?
         let replace_group: String?
         let memory_policy: ResidentMemoryPolicy?
         let image_mode: ResidentImageMode?
@@ -446,11 +452,13 @@ struct ServerResidencyClient {
 
     /// A voice selection must materialize weights, not use the text/image loader.
     /// Returns an actionable error; nil means the server confirmed residency.
-    func preloadAudio(alias: String, port: Int, bearer: String?) async -> String? {
+    func preloadAudio(alias: String, preserveLoaded: Bool = false, port: Int, bearer: String?) async -> String? {
         var request = request(path: "/v1/audio/models/load", port: port, bearer: bearer)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONEncoder().encode(["model": alias])
+        var body: [String: Any] = ["model": alias]
+        if preserveLoaded { body["preserve_loaded"] = true }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
@@ -483,6 +491,7 @@ struct ServerResidencyClient {
         imageMode: ResidentImageMode? = nil,
         performance: ModelPerfConfig? = nil,
         pin: Bool = false,
+        preserveLoaded: Bool = false,
         reloadIfChanged: Bool = false,
         port: Int,
         bearer: String?
@@ -496,6 +505,7 @@ struct ServerResidencyClient {
                 model_path: hfPath,
                 estimated_size_gb: estimatedSizeGB,
                 pin: pin,
+                preserve_loaded: preserveLoaded ? true : nil,
                 replace_group: replaceGroup?.rawValue,
                 memory_policy: memoryPolicy,
                 image_mode: imageMode,
