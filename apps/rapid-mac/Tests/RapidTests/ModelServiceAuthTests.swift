@@ -68,6 +68,35 @@ struct ModelServiceAuthTests {
         return (server, defaults, name, ModelServiceAuthClient(session: URLSession(configuration: config)))
     }
 
+    @Test func modelPolicySaveAppliesExactPoolWithoutLoadingOrRestarting() async throws {
+        AuthWireProtocol.reset()
+        let (server, defaults, name, auth) = try fixture()
+        defer { defaults.removePersistentDomain(forName: name) }
+        YouziResidentServicePreference.setAliases(["b", "a"], for: .chat, in: defaults)
+        let client = ModelLoadingPolicyClient(session: auth.session)
+        let oldPort = server.activePort
+        try await server.applySavedModelPolicy(client: client)
+        #expect(server.state == .ready(alias: "test"))
+        #expect(server.activePort == oldPort)
+        #expect(server.activeBearer == "test-only-key")
+        #expect(AuthWireProtocol.captured().map { $0.url?.path } == ["/v1/service/model-policy"])
+        #expect(AuthWireProtocol.captured().first?.httpMethod == "PUT")
+        AuthWireProtocol.reset(status: 404)
+        await #expect(throws: ModelLoadingPolicyClient.Failure.self) {
+            try await server.applySavedModelPolicy(client: client)
+        }
+        #expect(YouziResidentServicePreference.aliases(for: .chat, in: defaults) == ["b", "a"])
+    }
+
+    @Test func stoppedPolicySaveDoesNotContactOrStartServer() async throws {
+        AuthWireProtocol.reset()
+        let (server, defaults, name, auth) = try fixture(state: .stopped)
+        defer { defaults.removePersistentDomain(forName: name) }
+        try await server.applySavedModelPolicy(client: .init(session: auth.session))
+        #expect(AuthWireProtocol.captured().isEmpty)
+        #expect(server.state == .stopped)
+    }
+
     @Test func savesWithoutChangingModelPortOrKey() async throws {
         AuthWireProtocol.reset()
         let (server, defaults, name, client) = try fixture()

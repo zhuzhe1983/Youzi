@@ -474,6 +474,7 @@ struct SettingsView: View {
             do {
                 if selection.selected == .modelManagement {
                     try await server?.applySavedAuthentication()
+                    try await server?.applySavedModelPolicy()
                 }
                 withAnimation { hasSavedRecently = true }
                 Task { @MainActor in

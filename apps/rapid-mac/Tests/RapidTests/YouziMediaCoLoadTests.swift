@@ -77,6 +77,24 @@ struct YouziMediaCoLoadTests {
         #expect(server.servingAlias == "chat")
     }
 
+    @Test("Restore reuses an already-ready speech model without duplicate loading")
+    func restoreReadyAudio() async throws {
+        let suite = "YouziMediaCoLoadTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: YouziResidentServicePreference.enabledKey)
+        defaults.set("media", forKey: YouziResidentServicePreference.Slot.speech.key)
+        let server = makeServer(kind: .audio, defaults: defaults, binaryPath: URL(fileURLWithPath: "/nonexistent/rapid-mlx"))
+        defer { server._testClearChild() }
+        MediaCoLoadProtocol.audioReady = true
+        server.residentServiceCatalogProvider = { _ in [
+            ModelEntry(alias: "media", hfRepo: "local/media", sizeOnDisk: nil, cached: true, kind: .audio, audioCapability: .speech)
+        ] }
+        await server.restoreResidentServices()
+        #expect(server.isVoiceLaneResident(for: "media", modelPath: "local/media"))
+        #expect(!MediaCoLoadProtocol.paths.contains("/v1/audio/models/load"))
+    }
+
     @Test("Restore loads valid media and retains chat despite a missing sibling")
     func partialRestore() async throws {
         let suite = "YouziMediaCoLoadTests." + UUID().uuidString
@@ -103,6 +121,7 @@ struct YouziMediaCoLoadTests {
         MediaCoLoadProtocol.paths = []
         MediaCoLoadProtocol.loadBody = nil
         MediaCoLoadProtocol.reject = false
+        MediaCoLoadProtocol.audioReady = false
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MediaCoLoadProtocol.self]
         var client = ServerResidencyClient()
@@ -122,6 +141,7 @@ private final class MediaCoLoadProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var paths: [String] = []
     nonisolated(unsafe) static var loadBody: Data?
     nonisolated(unsafe) static var reject = false
+    nonisolated(unsafe) static var audioReady = false
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -130,11 +150,13 @@ private final class MediaCoLoadProtocol: URLProtocol, @unchecked Sendable {
         let payload: String
         var status = 200
         if path == "/v1/models/residency" {
-            payload = #"{"memory_limit_bytes":0,"memory_used_bytes":0,"memory_available_bytes":null,"idle_ttl_seconds":0,"loads_total":1,"evictions_total":0,"models":[],"audio_lanes":[{"lane":"tts","model":"local/media","state":"resident"}]}"#
+            let lanes = Self.audioReady ? #"[{"lane":"tts","model":"local/media","state":"resident"}]"# : "[]"
+            payload = "{\"supports_preserve_loaded\":true,\"memory_limit_bytes\":0,\"memory_used_bytes\":0,\"memory_available_bytes\":null,\"idle_ttl_seconds\":0,\"loads_total\":1,\"evictions_total\":0,\"models\":[],\"audio_lanes\":" + lanes + "}"
         } else if Self.reject {
             status = 507
             payload = #"{"error":{"message":"insufficient memory","type":"capacity_error"}}"#
         } else if path == "/v1/audio/models/load" {
+            Self.audioReady = true
             payload = #"{"lane":"tts","model":"local/media","state":"resident"}"#
         } else {
             if let stream = request.httpBodyStream {

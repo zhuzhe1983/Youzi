@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// One model-management vocabulary in Service and each scenario tab. Default
-/// choice, next-start intent and observed service state are independent.
+/// One pool for startup and automatic routing; readiness remains observed state.
 struct SettingsResidentServicePanel: View {
     var slots: [YouziResidentServicePreference.Slot] = YouziResidentServicePreference.Slot.allCases
     var showsLaunchGuidance = true
@@ -17,9 +16,9 @@ struct SettingsResidentServicePanel: View {
     }
 
     var body: some View {
-        SettingsSection(i18n.text(zh: "模型选择与启动", en: "Model selection & startup")) {
+        SettingsSection(i18n.text(zh: "模型加载策略", en: "Model loading policy")) {
             VStack(alignment: .leading, spacing: 12) {
-                Toggle(i18n.text(zh: "聊天服务启动后，自动加载启动清单", en: "Load the startup list after the chat service starts"), isOn: $enabled)
+                Toggle(i18n.text(zh: "服务启动时加载优选清单", en: "Load the preferred pool when the service starts"), isOn: $enabled)
                     .accessibilityIdentifier("Settings.Models.Resident.Enabled")
                 if slots.count > 1 {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -40,7 +39,7 @@ struct SettingsResidentServicePanel: View {
                 }
                 ResidentServiceSlotList(slot: slot, entries: entries).id(slot)
                 HStack {
-                    Button(i18n.text(zh: "立即加载启动清单", en: "Load startup list now")) {
+                    Button(i18n.text(zh: "立即加载优选清单", en: "Load preferred pool now")) {
                         Task { await server.restoreResidentServices(manually: true) }
                     }
                     .disabled(server.servingAlias == nil || server.isRestoringResidentServices || loadingCatalog)
@@ -52,8 +51,8 @@ struct SettingsResidentServicePanel: View {
                         .accessibilityIdentifier("Settings.Models.Selection.Refresh")
                 }
                 Text(i18n.text(
-                    zh: "默认：新任务或工作台未指定模型时使用。自动加载：加入下次聊天服务启动后的加载清单，不改变默认模型。选择立即保存，不会启动或卸载模型；立即加载无需开启自动加载开关。",
-                    en: "Default is used for new tasks or workspaces without an explicit model. Auto-load adds a model to the next chat-service startup, without changing the default. Choices are saved immediately and never start or unload models; Load now works even with automatic loading off."
+                    zh: "未指定模型时，优先复用自动加载清单中已就绪的模型，同等状态按清单顺序选择。指定模型时精确使用该模型，未启动则按需加载；不会自动下载。修改策略不会立即加载或卸载模型；点击右下角“保存”同步到运行中的 API。",
+                    en: "Unspecified requests reuse a ready model in the automatic pool, in saved priority order. Explicit requests use that exact model on demand; downloads are never automatic. Policy changes do not load or unload models. Click Save to apply them to the running API."
                 )).font(RapidFont.caption).foregroundStyle(.secondary)
                 if showsLaunchGuidance {
                     Text(i18n.text(zh: "打开客户端后自动加载，还需开启下方的“打开应用时自动启动聊天模型”。视频就绪表示服务可用，不代表权重持续驻留内存。", en: "To load on app launch, also enable chat auto-start below. Video ready means service availability, not permanent weight residency."))
@@ -80,15 +79,19 @@ struct ResidentServiceSlotList: View {
     @Environment(ServerManager.self) private var server
     @Environment(YouziI18nConfig.self) private var i18n
     @State private var selected: [String] = []
-    @State private var defaultAlias = ""
     @State private var query = ""
 
     private var choices: [ModelEntry] {
         entries.filter { slot.accepts($0) && (query.isEmpty || $0.alias.localizedCaseInsensitiveContains(query)) }
-            .sorted { $0.alias.localizedStandardCompare($1.alias) == .orderedAscending }
+            .sorted { lhs, rhs in
+                let left = selected.firstIndex(of: lhs.alias) ?? Int.max
+                let right = selected.firstIndex(of: rhs.alias) ?? Int.max
+                if left != right { return left < right }
+                return lhs.alias.localizedStandardCompare(rhs.alias) == .orderedAscending
+            }
     }
     private var unavailable: [String] {
-        Set(selected + (defaultAlias.isEmpty ? [] : [defaultAlias])).filter { alias in
+        selected.filter { alias in
             !entries.contains { $0.alias == alias && slot.accepts($0) }
         }.sorted()
     }
@@ -99,14 +102,14 @@ struct ResidentServiceSlotList: View {
                 TextField(i18n.text(zh: "搜索已下载模型", en: "Search downloaded models"), text: $query)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("Settings.Models.Selection.Search.\(slot.rawValue)")
-                Button(i18n.text(zh: "默认：自动", en: "Default: automatic")) {
-                    defaults.removeObject(forKey: slot.defaultKey)
-                    sync()
-                }.disabled(defaultAlias.isEmpty)
-                    .accessibilityIdentifier("Settings.Models.Selection.DefaultAutomatic.\(slot.rawValue)")
+
             }
             if !slot.allowsMultiple {
-                Text(i18n.text(zh: "当前语音运行时每个场景仅支持一个已加载模型；多模型缓存尚未支持。默认模型与自动加载仍独立设置。", en: "The audio runtime currently supports one loaded model per scenario, not multiple cached engines. Default and auto-load remain independent."))
+                Text(i18n.text(zh: "语音识别与语音合成各支持一个已加载模型；每个场景只能选一个自动加载模型。其他模型可按需使用，切换时需先明确卸载原模型。", en: "Transcription and speech each support one loaded model and one automatic selection. Other models remain on demand; switching requires explicitly unloading the occupied lane."))
+                    .font(RapidFont.caption).foregroundStyle(.secondary)
+            }
+            if selected.isEmpty {
+                Text(i18n.text(zh: "未配置自动加载模型。请添加优选模型，或在使用场景中明确选择一个按需模型。", en: "No automatic models configured. Add a preferred model, or explicitly select an on-demand model in the workspace."))
                     .font(RapidFont.caption).foregroundStyle(.secondary)
             }
             if choices.isEmpty {
@@ -125,7 +128,6 @@ struct ResidentServiceSlotList: View {
                     Spacer()
                     Button(i18n.text(zh: "移除选择", en: "Clear selection")) {
                         YouziResidentServicePreference.setAliases(selected.filter { $0 != alias }, for: slot, in: defaults)
-                        if defaultAlias == alias { defaults.removeObject(forKey: slot.defaultKey) }
                         sync()
                     }.accessibilityIdentifier("Settings.Models.Selection.Clear.\(alias)")
                 }
@@ -149,24 +151,29 @@ struct ResidentServiceSlotList: View {
                 Spacer(minLength: 4)
                 Text(loading ? i18n.text(zh: "加载中", en: "Loading") : failure != nil ? i18n.text(zh: "加载失败", en: "Failed") : ready ? i18n.text(zh: "已就绪", en: "Ready") : i18n.text(zh: "未加载", en: "Not loaded"))
                     .font(RapidFont.caption).foregroundStyle(failure != nil ? Color.red : ready ? Color.green : Color.secondary)
-                Button {
-                    defaults.set(entry.alias, forKey: slot.defaultKey)
-                    sync()
-                } label: {
-                    Label(i18n.text(zh: "默认", en: "Default"), systemImage: defaultAlias == entry.alias ? "star.fill" : "star")
-                }.buttonStyle(.borderless)
-                    .foregroundStyle(defaultAlias == entry.alias ? Color.accentColor : Color.secondary)
-                    .accessibilityIdentifier("Settings.Models.Selection.Default.\(entry.alias)")
-                    .accessibilityValue(defaultAlias == entry.alias ? i18n.text(zh: "已选择", en: "selected") : i18n.text(zh: "未选择", en: "not selected"))
-                Toggle(i18n.text(zh: "自动加载", en: "Auto-load"), isOn: Binding(
-                    get: { selected.contains(entry.alias) },
-                    set: { checked in
-                        let aliases = checked ? selected + [entry.alias] : selected.filter { $0 != entry.alias }
-                        YouziResidentServicePreference.setAliases(aliases, for: slot, in: defaults)
+                if let index = selected.firstIndex(of: entry.alias) {
+                    Button {
+                        YouziResidentServicePreference.promote(entry.alias, for: slot, in: defaults)
+                        sync()
+                    } label: {
+                        Text("#\(index + 1)").monospacedDigit()
+                    }.buttonStyle(.borderless).disabled(index == 0)
+                        .help(i18n.text(zh: "提升清单优先级；已就绪模型仍优先复用", en: "Move first in the pool; ready models are still reused first"))
+                        .accessibilityLabel(i18n.text(zh: "提升优先级", en: "Move first"))
+                        .accessibilityIdentifier("Settings.Models.Selection.Priority.\(entry.alias)")
+                }
+                Picker(i18n.text(zh: "加载策略", en: "Loading policy"), selection: Binding(
+                    get: { selected.contains(entry.alias) ? YouziResidentServicePreference.LoadingPolicy.automatic : .onDemand },
+                    set: { policy in
+                        YouziResidentServicePreference.setLoadingPolicy(policy, for: entry.alias, slot: slot, in: defaults)
                         sync()
                     }
-                )).toggleStyle(.checkbox)
-                    .disabled(!slot.allowsMultiple && !selected.isEmpty && !selected.contains(entry.alias))
+                )) {
+                    Text(i18n.text(zh: "按需加载", en: "On demand"))
+                        .tag(YouziResidentServicePreference.LoadingPolicy.onDemand)
+                    Text(i18n.text(zh: "自动加载", en: "Automatic"))
+                        .tag(YouziResidentServicePreference.LoadingPolicy.automatic)
+                }.pickerStyle(.menu).labelsHidden().frame(width: 115)
                     .accessibilityIdentifier("Settings.Models.Resident.\(slot.rawValue).\(entry.alias)")
             }
             if let failure { Text(failure.message).font(RapidFont.caption).foregroundStyle(.red).lineLimit(2) }
@@ -181,6 +188,5 @@ struct ResidentServiceSlotList: View {
 
     private func sync() {
         selected = YouziResidentServicePreference.aliases(for: slot, in: defaults)
-        defaultAlias = defaults.string(forKey: slot.defaultKey) ?? ""
     }
 }

@@ -81,6 +81,7 @@ from ..api.utils import (
     validate_content_blocks_for_capabilities,
 )
 from ..config import get_config
+from ..runtime.model_loading_policy import reported_model_name
 from ..engine import BaseEngine
 from ..middleware.auth import check_rate_limit, verify_api_key
 from ..reasoning import finalize_streaming_compat
@@ -968,7 +969,12 @@ async def create_response(request: Request):
     # ``gpt-*`` model names pass through to the loaded engine instead of
     # 404'ing on _validate_model_name. Codex sends ``gpt-5``,
     # ``gpt-5-codex``, etc. — none of which match a local alias.
-    if not (responses_request.model or "").startswith(("claude-", "gpt-")):
+    from ..runtime.model_loading_policy import policy_enabled, resolve_request_model
+
+    if responses_request.model == "":
+        _validate_model_name(responses_request.model)
+    responses_request.model = resolve_request_model(responses_request.model, "chat")
+    if policy_enabled() or not (responses_request.model or "").startswith(("claude-", "gpt-")):
         _validate_model_name(responses_request.model)
     engine = get_engine(responses_request.model)
 
@@ -2038,7 +2044,7 @@ async def _non_stream(
         failed_payload = ResponsesResponse(
             id=f"resp_{uuid.uuid4().hex[:24]}",
             created_at=created_at,
-            model=cfg.model_name or responses_request.model,
+            model=reported_model_name(responses_request.model, cfg.model_name),
             status="failed",
             output=[],
             usage=ResponsesUsage(
@@ -2157,7 +2163,7 @@ async def _non_stream(
         failed_payload = ResponsesResponse(
             id=f"resp_{uuid.uuid4().hex[:24]}",
             created_at=created_at,
-            model=cfg.model_name or responses_request.model,
+            model=reported_model_name(responses_request.model, cfg.model_name),
             status="failed",
             output=[],
             usage=ResponsesUsage(
@@ -2255,7 +2261,7 @@ async def _non_stream(
         failed_payload = ResponsesResponse(
             id=f"resp_{uuid.uuid4().hex[:24]}",
             created_at=created_at,
-            model=cfg.model_name or responses_request.model,
+            model=reported_model_name(responses_request.model, cfg.model_name),
             status="failed",
             output=[],
             usage=ResponsesUsage(
@@ -2292,7 +2298,7 @@ async def _non_stream(
 
     responses_response = openai_to_responses(
         openai_response,
-        model=cfg.model_name or responses_request.model,
+        model=reported_model_name(responses_request.model, cfg.model_name),
         request=responses_request,
         created_at=created_at,
         namespace_by_tool=namespace_by_tool,
@@ -2488,7 +2494,7 @@ async def _stream_responses_with_nonprogress_retry(
     public_response = _responses_initial_payload(
         response_id=public_response_id,
         created_at=public_created_at,
-        served_model=cfg.model_name or responses_request.model,
+        served_model=reported_model_name(responses_request.model, cfg.model_name),
         responses_request=responses_request,
     )
     if heartbeat_state is not None:
@@ -2714,7 +2720,7 @@ async def _stream_responses(
     response_id = response_id_override or f"resp_{uuid.uuid4().hex[:24]}"
     created_at = created_at_override or int(time.time())
     start_time = time.perf_counter()
-    served_model = cfg.model_name or responses_request.model
+    served_model = reported_model_name(responses_request.model, cfg.model_name)
 
     # R10-C3: openai-python event models mark ``sequence_number`` as
     # required on every Responses-API event. Monotonic counter starting

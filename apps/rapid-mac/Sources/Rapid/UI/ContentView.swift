@@ -645,7 +645,7 @@ struct ContentView: View {
                         chat: chat,
                         onNewChat: {
                             chat.newConversation()
-                            applyDefaultChatModel()
+                            applyAutomaticChatModel()
                             section = .chat
                         },
                         onSearchChats: {
@@ -799,10 +799,8 @@ struct ContentView: View {
         .accessibilityIdentifier("ContentView.CommandPalette")
     }
 
-    private func applyDefaultChatModel() {
-        if let preferred = YouziResidentServicePreference.defaultAlias(for: .chat, entries: catalogEntries) {
-            alias = preferred
-        }
+    private func applyAutomaticChatModel() {
+        alias = server.automaticModelAlias(for: .chat, entries: catalogEntries) ?? ""
     }
 
     private func runCommandPaletteAction(_ command: CommandPalette.Command) {
@@ -810,7 +808,7 @@ struct ContentView: View {
         switch command {
         case .newChat:
             chat.newConversation()
-            applyDefaultChatModel()
+            applyAutomaticChatModel()
             section = .chat
         case .searchChats:
             openConversationSearch()
@@ -878,7 +876,7 @@ struct ContentView: View {
                     onNewChat: {
                         showConversationSearch = false
                         chat.newConversation()
-                        applyDefaultChatModel()
+                        applyAutomaticChatModel()
                         section = .chat
                     },
                     onSelectConversation: { id in
@@ -1709,7 +1707,7 @@ struct ContentView: View {
             sessionCatalog = []
         }
         let launchPlan = SessionModelRestore.launchPlan(
-            legacyLastAlias: YouziResidentServicePreference.defaultAlias(for: .chat, entries: sessionCatalog) ?? ServerManager.lastServedAlias(),
+            legacyLastAlias: server.automaticModelAlias(for: .chat, entries: sessionCatalog) ?? ServerManager.lastServedAlias(),
             dictationAlias: nil,
             speechAlias: nil,
             catalog: sessionCatalog,
@@ -1764,7 +1762,8 @@ struct ContentView: View {
         catalogEntries: [ModelEntry],
         launchPlan: SessionModelRestore.LaunchPlan
     ) async -> LaunchAutoStartOutcome {
-        guard launchPlan.shouldAutoStart else {
+        guard launchPlan.shouldAutoStart,
+              let automaticAlias = YouziResidentServicePreference.startupChatAlias(entries: catalogEntries) else {
             autoStartPendingDownload = nil
             return .noPrimaryLaunch
         }
@@ -1812,8 +1811,8 @@ struct ContentView: View {
                 )
         }
         let decision = AutoStartDecision.decide(
-            lastServedAlias: launchPlan.models.chatAlias,
-            bundledFallbackAlias: BundledModel.firstLaunchAlias(lastServedAlias: nil),
+            lastServedAlias: automaticAlias,
+            bundledFallbackAlias: nil,
             binaryReachable: server.binaryPath != nil,
             cachedAliases: cachedAliases,
             serverState: server.state,

@@ -482,6 +482,14 @@ final class ServerManager {
         )
     }
 
+    /// UI and workspaces share the same ordered pool as startup. A ready pool
+    /// member wins over a stopped one, avoiding needless co-loads.
+    func automaticModelAlias(for slot: YouziResidentServicePreference.Slot, entries: [ModelEntry]) -> String? {
+        YouziResidentServicePreference.automaticAlias(
+            for: slot, entries: entries, snapshot: residency, in: sessionDefaults ?? .standard
+        )
+    }
+
     /// Restore the explicitly selected media set after the primary is healthy.
     /// Sequential loading bounds allocation spikes; errors never stop siblings.
     /// A user stop/restart supersedes this restore at the next await boundary.
@@ -912,6 +920,30 @@ final class ServerManager {
     private(set) var activeAnonymousInferenceAllowed = false
     private var activeSessionGeneration: UInt64 = 0
     private var applyingAuthentication = false
+
+    private var applyingModelPolicy = false
+
+    func applySavedModelPolicy(client: ModelLoadingPolicyClient = .init()) async throws {
+        guard !applyingModelPolicy else { throw ModelLoadingPolicyClient.Failure.unavailable }
+        switch state {
+        case .missing, .idle, .stopped, .crashed:
+            guard activeBearer == nil else { throw ModelLoadingPolicyClient.Failure.unavailable }
+            return // Spawn receives the saved pool, without starting anything now.
+        case .starting: throw ModelLoadingPolicyClient.Failure.unavailable
+        case .ready: break
+        }
+        guard let bearer = activeBearer else { throw ModelLoadingPolicyClient.Failure.unavailable }
+        let defaults = sessionDefaults ?? .standard
+        let policy = ModelLoadingPolicyClient.Policy(automatic: YouziResidentServicePreference.automaticPool(in: defaults))
+        let generation = activeSessionGeneration
+        let port = activePort
+        applyingModelPolicy = true
+        defer { applyingModelPolicy = false }
+        try await client.apply(policy, port: port, bearer: bearer)
+        guard generation == activeSessionGeneration, activePort == port, activeBearer == bearer,
+              policy.automatic == YouziResidentServicePreference.automaticPool(in: defaults)
+        else { throw ModelLoadingPolicyClient.Failure.staleSession }
+    }
 
     /// Save acknowledges the running process. Never call start/stop/load here.
     func applySavedAuthentication(client: ModelServiceAuthClient = .init()) async throws {
@@ -3187,7 +3219,8 @@ final class ServerManager {
                     // Exact app-managed links are a separate Layer-2
                     // contract. Never turn their parent into an external
                     // model root: pass only revalidated individual links.
-                    exactModelLinks: ExternalModelRegistry.encodedEnvironmentValue()
+                    exactModelLinks: ExternalModelRegistry.encodedEnvironmentValue(),
+                    automaticModelPolicy: YouziResidentServicePreference.encodedPolicy(in: sessionDefaults ?? .standard)
                 ),
                 replaceEnvironment: true,
                 startMonitorImmediately: false
@@ -5026,7 +5059,8 @@ final class ServerManager {
         availableRAMBytes: UInt64 = 0,
         supervisorPID: Int32 = -1,
         modelsFolderOverride: String? = nil,
-        exactModelLinks: String? = nil
+        exactModelLinks: String? = nil,
+        automaticModelPolicy: String? = nil
     ) -> [String: String] {
         // Layer 1: allowlisted ambient. The cache-root keys
         // (``HF_HOME`` / ``HF_HUB_CACHE`` / ``XDG_CACHE_HOME``)
@@ -5124,6 +5158,7 @@ final class ServerManager {
         // keeps the key absent; a supplied value contains exact managed
         // symlinks and cannot widen into a parent-directory scan.
         env[ExternalModelRegistry.environmentKey] = exactModelLinks
+        env["YOUZI_AUTOMATIC_MODEL_POOL"] = automaticModelPolicy
         // Force Python to flush stdout/stderr line-by-line so
         // huggingface_hub's tqdm progress bars reach our readability
         // handler without sitting in the libc block-buffer until the

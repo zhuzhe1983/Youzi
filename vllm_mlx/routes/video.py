@@ -687,7 +687,9 @@ async def _run_in_generation_thread(function, /, **kwargs) -> None:
 def _video_engine(model_name: str = ""):
     """Resolve the requested resident video lane without replacing chat."""
     from ..config import get_config
+    from ..runtime.model_loading_policy import resolve_request_model
 
+    model_name = resolve_request_model(model_name, "video")
     cfg = get_config()
     registry = getattr(cfg, "model_registry", None)
     engine = None
@@ -1058,7 +1060,7 @@ async def _run_job(
 @router.post("/v1/videos", dependencies=[Depends(verify_api_key)])
 async def create_video(
     prompt: str = Form(..., min_length=1, max_length=4096),
-    model: str = Form("ltx-2.3-mlx-q4"),
+    model: str | None = Form(None),
     seconds: str = Form("4"),
     size: str = Form("768x512"),
     seed: int = Form(42),
@@ -1069,6 +1071,9 @@ async def create_video(
     negative_prompt: Annotated[str | None, Form(max_length=4096)] = None,
     input_reference: UploadFile | None = File(None),
 ):
+    from ..runtime.model_loading_policy import resolve_request_model
+
+    model = resolve_request_model(model, "video") or "ltx-2.3-mlx-q4"
     engine = _video_engine(model)
     is_cogvideox = getattr(engine, "video_family", "") == "cogvideox-fun"
     is_wan = getattr(engine, "video_family", "") == "wan"

@@ -36,6 +36,47 @@ struct YouziResidentServiceTests {
         #expect(selected.first?.1 == "missing")
     }
 
+    @Test("Changing a single-lane policy replaces intent only; wire payload preserves pool order")
+    func policyWireAndSingleLane() throws {
+        let suite = "YouziResidentServiceTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        YouziResidentServicePreference.setAliases(["old"], for: .speech, in: defaults)
+        YouziResidentServicePreference.setLoadingPolicy(.automatic, for: "new", slot: .speech, in: defaults)
+        #expect(YouziResidentServicePreference.aliases(for: .speech, in: defaults) == ["new"])
+        #expect(YouziResidentServicePreference.loadingPolicy(for: "old", slot: .speech, in: defaults) == .onDemand)
+        YouziResidentServicePreference.setAliases(["b", "a"], for: .chat, in: defaults)
+        let json = try #require(YouziResidentServicePreference.encodedPolicy(in: defaults))
+        let decoded = try JSONDecoder().decode(ModelLoadingPolicyClient.Policy.self, from: Data(json.utf8))
+        #expect(decoded.automatic["chat"] == ["b", "a"])
+        #expect(decoded.automatic["image"] == [])
+        let env = ServerManager.serveEnvironmentAdditions(bearer: "test-key", ambient: ["YOUZI_AUTOMATIC_MODEL_POOL": "untrusted"], automaticModelPolicy: json)
+        #expect(env["YOUZI_AUTOMATIC_MODEL_POOL"] == json)
+        #expect(ServerManager.serveEnvironmentAdditions(bearer: "test-key", ambient: ["YOUZI_AUTOMATIC_MODEL_POOL": "untrusted"])["YOUZI_AUTOMATIC_MODEL_POOL"] == nil)
+    }
+
+    @Test("App launch never resurrects manual history or legacy defaults outside the automatic pool")
+    func startupPoolOnly() throws {
+        let suite = "YouziResidentServiceTests." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let manual = ModelEntry(alias: "manual", hfRepo: "local/manual", sizeOnDisk: nil, cached: true, kind: .chat)
+        let automatic = ModelEntry(alias: "automatic", hfRepo: "local/automatic", sizeOnDisk: nil, cached: true, kind: .chat)
+        let entries = [manual, automatic]
+        defaults.set("manual", forKey: SessionModelRestore.chatAliasStorageKey)
+        defaults.set("manual", forKey: YouziResidentServicePreference.Slot.chat.legacyDefaultKey)
+        defaults.set(true, forKey: YouziResidentServicePreference.enabledKey)
+        #expect(YouziResidentServicePreference.startupChatAlias(entries: entries, in: defaults) == nil)
+        YouziResidentServicePreference.setAliases(["automatic"], for: .chat, in: defaults)
+        #expect(YouziResidentServicePreference.startupChatAlias(entries: entries, in: defaults) == "automatic")
+        defaults.set(false, forKey: YouziResidentServicePreference.enabledKey)
+        #expect(YouziResidentServicePreference.startupChatAlias(entries: entries, in: defaults) == nil)
+        #expect(YouziResidentServicePreference.automaticAlias(for: .chat, entries: entries, snapshot: nil, in: defaults) == "automatic")
+        defaults.set(true, forKey: YouziResidentServicePreference.enabledKey)
+        #expect(YouziResidentServicePreference.startupChatAlias(entries: [manual], in: defaults) == nil)
+        #expect(defaults.string(forKey: SessionModelRestore.chatAliasStorageKey) == "manual")
+    }
+
     @Test("Only cached models with a supported capability are offered")
     func filtering() {
         let tts = ModelEntry(alias: "tts", hfRepo: "local/tts", sizeOnDisk: nil, cached: true, kind: .audio, audioCapability: .speech)
@@ -108,20 +149,52 @@ struct YouziUnifiedModelChoiceTests {
         #expect(defaults.string(forKey: slot.key) == "old")
     }
 
-    @Test("Defaults do not enable startup and must match a downloaded capability")
-    func independentDefault() throws {
+    @Test("Legacy default is retained for rollback but never competes with the automatic pool")
+    func legacyDefaultDoesNotRoute() throws {
         let name = "YouziModelDefault." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
-        let entry = ModelEntry(alias: "image", hfRepo: nil, sizeOnDisk: nil, cached: true, kind: .image, imageCapability: .generation)
+        let manual = ModelEntry(alias: "manual", hfRepo: nil, sizeOnDisk: nil, cached: true, kind: .image, imageCapability: .generation)
+        let automatic = ModelEntry(alias: "automatic", hfRepo: nil, sizeOnDisk: nil, cached: true, kind: .image, imageCapability: .generation)
         let slot = YouziResidentServicePreference.Slot.image
-        defaults.set(entry.alias, forKey: slot.defaultKey)
-        #expect(YouziResidentServicePreference.defaultAlias(for: slot, entries: [entry], in: defaults) == "image")
-        #expect(YouziResidentServicePreference.selected(in: defaults).isEmpty)
+        defaults.set(manual.alias, forKey: slot.legacyDefaultKey)
+        #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: [manual], in: defaults) == nil)
         #expect(!YouziResidentServicePreference.enabled(in: defaults))
-        #expect(YouziResidentServicePreference.defaultAlias(for: slot, entries: [], in: defaults) == nil)
-        YouziResidentServicePreference.setAliases(["another"], for: slot, in: defaults)
-        #expect(defaults.string(forKey: slot.defaultKey) == "image")
+        YouziResidentServicePreference.setAliases([automatic.alias], for: slot, in: defaults)
+        #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: [manual, automatic], in: defaults) == automatic.alias)
+        #expect(defaults.string(forKey: slot.legacyDefaultKey) == manual.alias)
+        #expect(YouziResidentServicePreference.loadingPolicy(for: manual.alias, slot: slot, in: defaults) == .onDemand)
+    }
+
+    @Test("Automatic routing reuses ready pool members, never unrelated ready models")
+    func automaticPriority() throws {
+        let name = "YouziModelPool." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let entries = ["first", "second", "manual"].map {
+            ModelEntry(alias: $0, hfRepo: "local/" + $0, sizeOnDisk: nil, cached: true, kind: .image, imageCapability: .generation)
+        }
+        let slot = YouziResidentServicePreference.Slot.image
+        YouziResidentServicePreference.setAliases(["missing", "first", "second"], for: slot, in: defaults)
+        func snapshot(_ names: [String]) -> ModelResidencySnapshot {
+            ModelResidencySnapshot(memoryLimitBytes: 0, memoryUsedBytes: 0, memoryAvailableBytes: nil,
+                idleTTLSeconds: 0, loadsTotal: 0, evictionsTotal: 0, models: names.map {
+                    ResidentModelStatus(id: $0, modelPath: "local/" + $0, aliases: [$0], modality: "image-gen",
+                        state: "resident", pinned: true, primary: false, activeRequests: 0, estimatedBytes: 1, measuredBytes: nil, idleSeconds: 0)
+                })
+        }
+        #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: entries.reversed(), in: defaults) == "first")
+        #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: entries, snapshot: snapshot(["manual", "second"]), in: defaults) == "second")
+        #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: entries, snapshot: snapshot(["manual"]), in: defaults) == "first")
+        #expect(YouziResidentServicePreference.resolveAlias(requested: "manual", for: slot, entries: entries, snapshot: snapshot(["first"]), in: defaults) == "manual")
+        #expect(YouziResidentServicePreference.resolveAlias(requested: "missing", for: slot, entries: entries, in: defaults) == nil)
+        #expect(YouziResidentServicePreference.resolveAlias(requested: "", for: slot, entries: entries, in: defaults) == nil)
+        YouziResidentServicePreference.promote("second", for: slot, in: defaults)
+        #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: entries, snapshot: snapshot(["first", "second"]), in: defaults) == "second")
+        YouziResidentServicePreference.promote("manual", for: slot, in: defaults)
+        #expect(!YouziResidentServicePreference.aliases(for: slot, in: defaults).contains("manual"))
+        YouziResidentServicePreference.setAliases([], for: slot, in: defaults)
+        #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: entries, snapshot: snapshot(["first"]), in: defaults) == nil)
     }
 
     @Test("Chat and video offer multiple startup entries, audio is honest about its single slot")
@@ -257,7 +330,7 @@ struct YouziModelSelectionVisualTests {
             ModelEntry(alias: "Qwen3.5-\(index)-Long-Model-Name-4bit", hfRepo: nil,
                 sizeOnDisk: "8.2 GB", cached: true, kind: .chat)
         }
-        defaults.set(entries[0].alias, forKey: YouziResidentServicePreference.Slot.chat.defaultKey)
+        defaults.set(entries[0].alias, forKey: YouziResidentServicePreference.Slot.chat.legacyDefaultKey)
         YouziResidentServicePreference.setAliases(Array(entries.prefix(2)).map(\.alias), for: .chat, in: defaults)
         let output = FileManager.default.temporaryDirectory.appendingPathComponent("youzi-model-selection-qa")
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)

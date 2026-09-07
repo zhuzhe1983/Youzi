@@ -6,6 +6,7 @@ import SwiftUI
 /// this shell only changes information architecture and language.
 struct YouziSimpleShell: View {
     @Environment(YouziExperienceModeConfig.self) private var experienceMode
+    @Environment(ServerManager.self) private var server
     @Environment(ChatViewModel.self) private var chat
     @Environment(YouziSharingCenter.self) private var sharing
     @Environment(YouziProductModel.self) private var productModel
@@ -669,9 +670,7 @@ struct YouziSimpleShell: View {
 
     private func startNewTask() {
         chat.newConversation()
-        if let preferred = YouziResidentServicePreference.defaultAlias(for: .chat, entries: catalogEntries) {
-            assistantAlias = preferred
-        }
+        assistantAlias = server.automaticModelAlias(for: .chat, entries: catalogEntries) ?? ""
         selectedTaskID = nil
         selectedProjectID = nil
         selection = .newTask

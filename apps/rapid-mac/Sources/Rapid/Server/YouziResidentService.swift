@@ -1,6 +1,9 @@
 import Foundation
 
-/// Explicit opt-in resident set. Downloading a model never adds it implicitly.
+/// Single source of truth for startup AND unspecified-model routing.
+/// Downloaded models are either automatic (ordered preferred pool) or on-demand.
+/// A scenario may explicitly request any compatible model; that never changes
+/// this pool or authorizes loading/downloading it.
 enum YouziResidentServicePreference {
     static let enabledKey = "youzi.models.residentService.enabled.v1"
     static func enabled(in defaults: UserDefaults = .standard) -> Bool {
@@ -20,7 +23,7 @@ enum YouziResidentServicePreference {
             }
         }
         var selectionKey: String { "youzi.models.startup.\(rawValue).v2" }
-        var defaultKey: String { "youzi.models.default.\(rawValue).v1" }
+        var legacyDefaultKey: String { "youzi.models.default.\(rawValue).v1" }
         // The audio runtime still owns one engine per lane. Never promise
         // multi-residency by silently replacing the previous selection.
         var allowsMultiple: Bool { kind != .audio }
@@ -63,10 +66,72 @@ enum YouziResidentServicePreference {
         defaults.set(slot.allowsMultiple ? unique : Array(unique.prefix(1)), forKey: slot.selectionKey)
     }
 
-    static func defaultAlias(for slot: Slot, entries: [ModelEntry], in defaults: UserDefaults = .standard) -> String? {
-        guard let alias = defaults.string(forKey: slot.defaultKey),
-              entries.contains(where: { $0.alias == alias && slot.accepts($0) }) else { return nil }
-        return alias
+    enum LoadingPolicy: String, CaseIterable {
+        case automatic, onDemand
+    }
+
+    static func loadingPolicy(for alias: String, slot: Slot, in defaults: UserDefaults = .standard) -> LoadingPolicy {
+        aliases(for: slot, in: defaults).contains(alias) ? .automatic : .onDemand
+    }
+
+    /// Only compatible, downloaded members of the explicit pool are candidates.
+    /// Prefer a ready member to avoid a second allocation; ties use saved order,
+    /// never catalog order. The global switch pauses startup, not pool membership.
+    static func automaticAlias(
+        for slot: Slot, entries: [ModelEntry], snapshot: ModelResidencySnapshot? = nil,
+        in defaults: UserDefaults = .standard
+    ) -> String? {
+        let candidates = aliases(for: slot, in: defaults).compactMap { alias in
+            entries.first { $0.alias == alias && slot.accepts($0) }
+        }
+        if let snapshot, let ready = candidates.first(where: { YouziScenarioModels.isReady($0, in: snapshot) }) {
+            return ready.alias
+        }
+        return candidates.first?.alias
+    }
+
+    /// Explicit requests (including scenario recommendations) are exact and
+    /// never fall back to another model. Nil means no matching usable selection,
+    /// not permission to download or start arbitrary catalog entries.
+    static func resolveAlias(
+        requested: String?, for slot: Slot, entries: [ModelEntry],
+        snapshot: ModelResidencySnapshot? = nil, in defaults: UserDefaults = .standard
+    ) -> String? {
+        if let requested {
+            return entries.first { $0.alias == requested && slot.accepts($0) }?.alias
+        }
+        return automaticAlias(for: slot, entries: entries, snapshot: snapshot, in: defaults)
+    }
+
+    /// Reorder the same pool instead of maintaining a second default-model key.
+    static func promote(_ alias: String, for slot: Slot, in defaults: UserDefaults = .standard) {
+        let current = aliases(for: slot, in: defaults)
+        guard current.contains(alias) else { return }
+        setAliases([alias] + current.filter { $0 != alias }, for: slot, in: defaults)
+    }
+
+    /// Settings and the sidecar consume exactly the same ordered aliases.
+    static func automaticPool(in defaults: UserDefaults = .standard) -> [String: [String]] {
+        Dictionary(uniqueKeysWithValues: Slot.allCases.map { ($0.rawValue, aliases(for: $0, in: defaults)) })
+    }
+
+    static func encodedPolicy(in defaults: UserDefaults = .standard) -> String? {
+        guard let data = try? JSONEncoder().encode(ModelLoadingPolicyClient.Policy(automatic: automaticPool(in: defaults))) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Launch may only choose the user's automatic pool. Session history and
+    /// scenario recommendations are not authorization to make a model resident.
+    static func startupChatAlias(entries: [ModelEntry], in defaults: UserDefaults = .standard) -> String? {
+        guard enabled(in: defaults) else { return nil }
+        return automaticAlias(for: .chat, entries: entries, snapshot: nil, in: defaults)
+    }
+
+    static func setLoadingPolicy(_ policy: LoadingPolicy, for alias: String, slot: Slot, in defaults: UserDefaults = .standard) {
+        let current = aliases(for: slot, in: defaults)
+        let next = policy == .onDemand ? current.filter { $0 != alias }
+            : slot.allowsMultiple ? current + [alias] : [alias]
+        setAliases(next, for: slot, in: defaults)
     }
 
     static func selected(in defaults: UserDefaults = .standard) -> [(Slot, String)] {

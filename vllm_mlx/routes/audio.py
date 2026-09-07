@@ -435,6 +435,9 @@ def _resolve_stt_model(model: str) -> str:
                 }
             },
         )
+    from ..runtime.model_loading_policy import resolve_request_model
+
+    model = resolve_request_model(model, "transcription", require_explicit_ready=False)
     if model == "default":
         return STT_MODEL_ALIASES[DEFAULT_STT_ALIAS]
     if model in STT_MODEL_ALIASES:
@@ -1416,6 +1419,9 @@ async def _run_stt_request(
     # ``Exception`` caught by the catch-all below. Move the alias check
     # up front so unknown ``model`` form fields fail fast with a 404
     # "model_not_found_error" and never trigger a model load (F-165).
+    from ..runtime.model_loading_policy import resolve_request_model
+
+    model = resolve_request_model(model, "transcription")
     model_name = _resolve_stt_model(model)
 
     # Forced-alignment routing (Qwen3-ForcedAligner). Requests that carry
@@ -1463,6 +1469,8 @@ async def _run_stt_request(
         # changes while ``run_audio_mlx`` sends load/inference to the server's
         # model-owning worker; no route-level executor topology is involved.
         async with _get_stt_lane_lock():
+            # A queued request must not reload weights retired while it waited.
+            resolve_request_model(model_name, "transcription")
             if _stt_engine is None or _stt_engine.model_name != model_name:
                 # Symmetric with the alignment path: one STT model resident.
                 await _evict_other_lane("asr")
@@ -2355,7 +2363,11 @@ async def create_transcription(
         ):
             response_format = "verbose_json"
     else:
-        model = model_merged if model_provided else DEFAULT_STT_ALIAS
+        from ..runtime.model_loading_policy import resolve_request_model
+
+        model = resolve_request_model(model_merged if model_provided else None, "transcription")
+        if model is None:
+            model = DEFAULT_STT_ALIAS
 
     # R6-H2: reject unknown ``response_format`` values up front with a
     # 400 envelope so a typo (``"jsno"``) or unsupported value
@@ -2487,13 +2499,17 @@ async def create_translation(
     model = (
         model_form
         if model_form is not None
-        else (model_query if model_query is not None else "whisper-large-v3")
+        else model_query
     )
     response_format = (
         response_format_form
         if response_format_form is not None
         else (response_format_query if response_format_query is not None else "json")
     )
+
+    from ..runtime.model_loading_policy import resolve_request_model
+
+    model = resolve_request_model(model, "transcription") or DEFAULT_STT_ALIAS
 
     # R6-H2: validate ``response_format`` BEFORE the model-eligibility
     # check so a typo / unsupported value fails cheaply with the same
@@ -2659,6 +2675,9 @@ def _resolve_tts_model(model: str | None) -> str:
     case verbatim — the case-insensitive lookup only fires for the
     short alias table, never for passthrough.
     """
+    from ..runtime.model_loading_policy import resolve_request_model
+
+    model = resolve_request_model(model, "speech", require_explicit_ready=False)
     if not model or model == "default":
         served = _served_tts_default()
         if served is not None:
@@ -3090,8 +3109,10 @@ async def _stream_speech_pcm(model_name, input_text, gen_kwargs, interval):
     import numpy as np
 
     from ..runtime.audio_worker import audio_worker
+    from ..runtime.model_loading_policy import resolve_request_model
 
     async with _get_tts_lane_lock():
+        resolve_request_model(model_name, "speech")
         await run_to_completion(_ensure_tts_loaded_blocking, model_name)
         engine = _tts_engine
         if engine is None:
@@ -3169,7 +3190,9 @@ async def create_speech(request: AudioSpeechRequest = Body(...)):
     # below uses — so an EXPLICIT ``"model": "kokoro"`` on a non-Kokoro server
     # is still honoured, while the omitted case flows through
     # ``_resolve_tts_model(None)`` to :func:`_served_tts_default`.
-    model = request.model if "model" in request.model_fields_set else None
+    from ..runtime.model_loading_policy import resolve_request_model
+
+    model = resolve_request_model(request.model if "model" in request.model_fields_set else None, "speech")
     input_text = request.input
     voice = request.voice
     speed = request.speed
@@ -3473,6 +3496,7 @@ async def create_speech(request: AudioSpeechRequest = Body(...)):
                 raise
         try:
             async with _get_tts_lane_lock():
+                resolve_request_model(model_name, "speech")
                 audio_bytes, output_rate, output_channels = await run_to_completion(
                     _generate_speech_blocking,
                     model_name,
@@ -3901,6 +3925,9 @@ async def list_voices(model: str | None = None):
     # ``?model=default`` selects the served model here exactly as it does on
     # /v1/audio/speech, rather than being handed to ``_allowed_voices_for``
     # verbatim.
+    from ..runtime.model_loading_policy import resolve_request_model
+
+    model = resolve_request_model(model, "speech", require_explicit_ready=False)
     if not model or model == "default":
         model = _served_tts_default() or DEFAULT_TTS_ALIAS
     return {"voices": _allowed_voices_for(model)}

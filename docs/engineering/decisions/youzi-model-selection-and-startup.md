@@ -1,96 +1,129 @@
-# Unified model selection and startup
+# Youzi model loading policy and scenario selection
+
+Updated: 2026-09-07. Supersedes the separate **Default / Auto-load** design.
+Owner: integration; native settings and sidecar routing must ship together.
 
 ## Product contract
 
-Three independent concepts share one compact model list, not three competing
-sets of preferences:
+A model has independent download, loading-policy and runtime states:
 
-- **Default** (star): preferred downloaded model for a new chat or a workspace
-  without a valid explicit selection. It does not load a model or authorize a tool.
-- **Auto-load** (checkbox): membership of the next chat-service startup list.
-  The global restore toggle controls automatic execution. Editing saves the
-  choice immediately, without starting or unloading anything.
-- **Ready** (status): observed backend state, never inferred from either choice.
-  Video readiness may be lazy service registration, not permanent GPU residency.
+1. **Not downloaded**: offered by Model Files, never selected for auto-load.
+2. **Downloaded / automatic**: belongs to a scene's ordered preferred pool.
+3. **Downloaded / on-demand**: not in that pool; can be explicitly selected.
+4. **Ready / busy / stopped / failed**: observed runtime state, not a preference.
 
-The Service tab is the cross-scenario overview. Chat, Audio, Image and Video
-reuse the same component filtered to their scenario; each retains its own
-inference parameters. Audio distinguishes transcription and speech. Only
-compatible downloaded models can be selected. Missing saved selections remain
-visible and explicitly clearable, rather than silently lost.
+“Default” and “recommended” describe a scenario's selection, not a second model
+classification, residency list, or permission to load another checkpoint. The
+preferred pool is the basis for future recommendations/performance work. Merely
+recommending a model must not enroll, download or load it.
 
-“Load startup list now” runs the entire saved list after the chat service is
-ready, even when automatic restore is disabled. App-launch loading additionally
-requires the existing chat auto-start switch. It is not a separate daemon mode.
+For an unspecified model, use compatible downloaded pool members, ready ones
+first, then saved priority. An explicit model is exact: no fallback to another
+model when it is missing, incompatible, cold or misspelled. An empty pool is a
+real empty selection, not permission to resurrect a legacy default.
 
-## Settings inventory / ownership
+## Settings and launch
 
-| Surface | Responsibility |
-| --- | --- |
-| Model Service | Port, authentication, API service, cross-scenario default/startup overview |
-| Model Files | Storage, download, import and deletion; no competing default choices |
-| Chat / Audio / Image / Video | Shared default/startup list + scenario-specific generation parameters |
-| Chat scenario quick picker | Temporary selection/loading; check = ready, star = default; does not mutate startup/default choices |
-| Audio voice audition | Selects the audition/current speech workspace model; explicitly not the global default |
-| Dictation | Retains its existing explicit dictation-model override; not overwritten by speech/transcription defaults |
-| Tray / status menu | Observed model/service state, not startup intent |
-| Native local model tools | Discovery exposes `default_for`; prompts prefer defaults absent an explicit request; existing consent gates remain |
+Service presents all scenes; Chat / Audio / Image / Video reuse the same list
+filtered to their scene. Audio has separate transcription and speech lanes.
+Each downloaded row exposes **Automatic / On demand**. Automatic members show
+priority; promoting one reorders the same list rather than creating a default.
+The quick picker shows a bolt for membership and a check for actual readiness.
+Missing saved entries remain visible and explicitly removable.
 
-Existing valid workspace selections are not overwritten when defaults change.
-Defaults do not change the public API's omitted-model behavior. Generation
-parameters (voice, size, MTP, context) remain separate from model identity.
+The global automatic-load switch pauses startup without erasing membership.
+App-launch startup additionally requires chat auto-start and a compatible,
+downloaded automatic chat model. Session history and bundled recommendations
+cannot authorize loading an on-demand model at launch. History is retained for
+explicit session restoration and onboarding, not used as an auto-load fallback.
 
-## Runtime and compatibility
+“Load preferred pool now” explicitly restores the saved list on a running chat
+service even while automatic startup is paused. Loads are sequential and preserve
+siblings on capable runtimes. Capacity refusals are visible per model, never a
+reason to silently stop chat. Changing policy itself does not load or unload.
 
-Startup lists allow multiple chat, image and video models. Speech and
-transcription each still own one engine cache: the UI and backend reject a
-second occupied same-lane model rather than claiming unsupported multi-audio
-residency. Process-scoped speculative decoding cannot be silently dropped when
-admitting a secondary LLM; that model must start as primary or opt out of MTP.
+Existing valid workspace/task model selections remain explicit overrides. A
+media workspace may show an initial catalog recommendation when no pool member
+is available; generating with that visible selection is an explicit scenario
+request, not an omitted-model fallback. It does not enroll the model. New chat
+without a usable pool requires selection instead of redirecting to initialization.
+Voice/size/context/MTP defaults remain separate generation parameters.
 
-Residency responses advertise `supports_preserve_loaded`. Desktop startup and
-quick-picker loads require this capability and send strict Boolean
-`preserve_loaded: true`. Existing clients omit it and retain prior behavior.
-Preserving loads:
+## Native tools and API
 
-- bypass implicit same-kind image/video replacement;
-- pin startup selections and omit `replace_group`;
-- fail configured-capacity admission rather than evict siblings;
-- roll back only the incoming model if measured memory overruns admission;
-- reject replacement/reload flags combined with preservation;
-- guard audio lane occupancy inside the backend's existing lane lock;
-- check actual ready status after load, not only HTTP success.
+Native image/speech tools accept an omitted model and use the pool. A cold
+selected model requires the existing interactive approval before loading. Denial
+is remembered for the turn; malformed arguments do not prompt. Tools never
+silently download models. Discovery exposes `loading_policy`, `automatic_for`,
+and `preferred_for`; `default_for` remains a compatibility alias derived from
+`preferred_for`, not another persisted default.
 
-Desktop workspace co-loads also request preservation on a capable runtime when
-not explicitly replacing a group. No legacy stop/restart fallback is allowed
-for startup-list loading. Explicit replacement flows remain explicit.
+The supervised sidecar receives `YOUZI_AUTOMATIC_MODEL_POOL` containing
+`{"automatic":{"chat":["alias"],"speech":[],...}}`. Ambient environment cannot
+replace the desktop-owned value. An invalid supplied value fails closed. No
+value at all preserves standalone CLI behavior; this is distinct from an empty
+policy. Native settings persist immediately. Model Settings **Save** also sends
+an authenticated `PUT /v1/service/model-policy`, validates the echoed value, and
+checks that the service session and preferences did not change during the await.
+A rejected/stale update is reported as failed, not saved successfully. A stopped
+service is not started; its next spawn receives the saved policy.
 
-## Preferences and rollback
+Chat Completions, legacy Completions, Responses, Anthropic Messages/count_tokens,
+image/video generation, TTS and transcription use the same pool. Existing protocol schemas remain intact (chat callers use their
+required `model` field; `"default"` is the existing automatic sentinel). Explicit
+empty chat/Responses model fields remain invalid. Responses and Anthropic JSON/SSE report
+the selected model rather than the process's boot primary; token counting uses the
+same selected tokenizer. Standalone CLI keeps its existing compatibility aliases.
 
-`youzi.models.startup.<slot>.v2` stores deduplicated alias arrays. Missing v2
-falls back to legacy `youzi.models.residentService.<slot>.v1`; explicit empty v2
-wins. Legacy values are retained for rollback. Defaults live separately under
-`youzi.models.default.<slot>.v1`. Slots: chat, transcription, speech, image,
-video. The prior global enable key remains unchanged.
+HTTP inference cannot display GUI consent. Under desktop policy, an unavailable
+preferred model produces HTTP 409 / `automatic_model_not_ready`; an explicit cold
+or wrong-scene model produces 409 / `model_not_ready`. Load it first with native
+approval or the authenticated load endpoint. Routing does not itself load weights.
+Do not convert these errors into a download or arbitrary model fallback. Voice
+metadata permits explicit cold-model queries, but an omitted voice-list model
+follows the ready preferred speech pool. Busy audio remains eligible; queued
+speech/ASR checks readiness again inside the lane lock before inference so it
+cannot reload a model retired while waiting.
 
-Rolling back the client/runtime restores legacy single-selection behavior;
-v2 choices remain in preferences for forward recovery. Do not delete user
-preferences, model caches, tasks, or files during installation/rollback.
+Policy updates always require management authentication, including when loopback
+inference is anonymous. They do not rotate keys, restart service, mutate the
+registry or grant model-loading permission. Alignment/music are not new pool
+scenes and retain their separate existing explicit routing. Standalone CLI
+servers without desktop policy retain their legacy routing/default behavior.
 
-## Verification
+## Residency limits and migration
 
-Run with `RAPID_DESKTOP_NO_PORT_SWEEP=1` on macOS:
+Multiple chat/image/video services are supported subject to capacity. STT and TTS
+still each have one runtime lane. Selecting a new automatic audio model changes
+intent only; a preserving load will refuse to replace an occupied same-lane
+model. It does not claim unsupported multiple-TTS or multiple-STT residency.
+Video readiness may mean lazy service registration, not permanently allocated
+GPU weights. Simultaneous readiness is not unlimited concurrent GPU throughput.
 
-- Swift preference/migration, transport/capability, residency, scenario picker,
-  session restore, settings routing/accessibility and local tools suites.
-- Swift launch-media, audio, image and video suites.
-- Python `test_youzi_startup_models`, `test_youzi_audio_preload`,
-  `test_youzi_video_residency`, `test_residency_load_field_names`,
-  `test_resident_models`.
-- Opt-in `YOUZI_MODEL_SELECTION_VISUAL_QA=1` / Swift
-  `YouziModelSelectionVisualTests`: synthetic shared-list renders using isolated
-  preferences, not personal model/settings data.
+`youzi.models.startup.<scene>.v2` remains the ordered alias array. Absent v2 falls
+back to legacy `youzi.models.residentService.<scene>.v1`; explicitly empty v2 wins.
+`youzi.models.default.<scene>.v1` is retained only for rollback and no longer read
+for routing. The global enable key remains unchanged. No automatic migration
+adds independent defaults/history/recommendations to the pool. Existing users
+with only a legacy default must explicitly choose automatic membership or select
+a model for the current scenario.
 
-Hardware multi-model inference and interactive installed-client acceptance are
-separate checks; passing mocks/rendering is not proof of those. Native video
-chat tools are a separate pending task, not included in this settings change.
+Roll out a full native + sidecar bundle together. Back up/restore the complete
+app; do not patch signed installed files in place. No preferences, keychains,
+chat/task data, permissions or model caches should be reset. Older clients may
+read retained legacy values again, but v2 remains for forward recovery.
+
+## Verification and remaining boundaries
+
+Use `RAPID_DESKTOP_NO_PORT_SWEEP=1` for every native build/test/probe/launch.
+Regression coverage includes ordered/empty pools, exact requests, paused launch,
+legacy defaults ignored, approval denial, ready reuse, live authenticated Save,
+spawn ownership, audio queue races, standalone compatibility and Responses model
+metadata. Visual QA is synthetic, uses isolated preferences, and requires actual
+inspection of the rendered Chinese/English images.
+
+Routing mocks, offline audio callback tests and rendered UI are not physical
+full-duplex or multi-model inference acceptance. Native video chat tools remain a
+separate pending integration; existing video workspace/API support is not proof
+of video tool use in chat. Full-duplex AEC requires attended speaker/microphone
+validation; ASR is still utterance/window-based, not fully incremental recognition.

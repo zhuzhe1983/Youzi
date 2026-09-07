@@ -25,6 +25,7 @@ from typing import Any
 # the import real and cheap is correct for the runtime and the type checker
 # at once.
 from ..engine.base import BaseEngine
+from ..runtime.model_loading_policy import initial_pool
 
 
 @dataclass
@@ -220,6 +221,8 @@ class ServerConfig:
 
     # --- Multi-model ---
     model_registry: Any = None
+    # None preserves standalone CLI compatibility; {} explicitly disables fallback.
+    automatic_model_pool: dict[str, list[str]] | None = field(default_factory=initial_pool)
 
     # --- KV cache dtype (R15 #300) ---
     # Stashed by the CLI right after :func:`resolve_kv_cache_dtype` so

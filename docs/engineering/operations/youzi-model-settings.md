@@ -18,7 +18,27 @@ Legacy model-management links open Files, performance links open Chat, and
 experimental-feature links open Video. `SettingsRouter.route(toModelTab:open:)`
 stages explicit tab navigation before opening the window.
 
-## Defaults contract
+## Model loading policy (2026-09-07)
+
+Use one ordered **Automatic / On demand** list, not separate Default/Auto-load
+settings. Service shows all scenes; each modality tab uses the same component.
+Ready pool members are reused before cold ones, then saved priority decides.
+Explicit scenario choices are exact and do not change membership. Download and
+runtime state remain separate; unavailable saved entries are explicitly clearable.
+Automatic loading can be paused without clearing the pool. App-launch startup
+requires an automatic chat member as well as both startup switches; neither a
+legacy default nor session history authorizes loading a manual model.
+
+Preferences persist immediately. **Save** also acknowledges the policy on the
+running API via authenticated `PUT /v1/service/model-policy`; no model or service
+is restarted. Stopped services receive it at their next spawn. HTTP inference
+with no ready pool member fails with 409 instead of downloading/loading another
+model. Native tools use the existing approval UI for cold loads. Metadata-only
+voice discovery can resolve an explicit cold alias without loading it.
+See [selection and startup](../decisions/youzi-model-selection-and-startup.md)
+for migration, ordering, API compatibility and audio/video limits.
+
+## Generation-parameter defaults contract
 
 - `ModelGenerationDefaults` reads persisted values at request time.
   `ModelGenerationSettings` exposes the same store to observable workspaces.
@@ -54,8 +74,8 @@ This change does **not** expose an unauthenticated external API or disable the
 private bearer on model-management endpoints. Optional public App Keys and LAN
 binding still require a separate inference/admin authorization design. Local-only
 optional inference authentication is described below. It also does not implement the
-previously requested LLM multimodal tool dispatcher; future internal callers can
-use the shared client defaults rather than hardcoding dimensions or speakers.
+entire LLM multimodal tool dispatcher: native image/speech tools use the shared
+pool and generation defaults; native video chat tools remain separate work.
 
 Model context capacity is shown from the live profile when known. Maximum output
 is an existing sampling limit, not a fabricated context-window setting.
@@ -65,7 +85,7 @@ is an existing sampling limit, not a fabricated context-window setting.
 ```sh
 RAPID_DESKTOP_NO_PORT_SWEEP=1 swift test --package-path apps/rapid-mac --filter \
   'ModelGenerationDefaultsTests|Image.*Tests|Audio.*Tests|Video.*Tests|Settings.*Tests|PortAllocatorTests|AccessibilityIdentifierInventoryTests'
-swift build --package-path apps/rapid-mac -c release
+RAPID_DESKTOP_NO_PORT_SWEEP=1 swift build --package-path apps/rapid-mac -c release
 git diff --check
 ```
 
@@ -132,12 +152,13 @@ and a nonresident voice alias. Normal `CancellationError` ends quietly.
   key, copy, and explicit random replacement. Startup controls are separate.
   There are no duplicate credential cards, curl examples or automatic-rotation
   picker. Existing installations migrate once to Keychain-backed manual rotation.
-- Changing authentication or generating a replacement **does not restart** a
-  model or mutate the live session key. Settings indicates pending changes;
-  copying always returns the currently active key. Restart the service when idle.
+- Saving the required-key/anonymous-inference policy applies it live through the
+  authenticated service endpoint without restarting models. Generating a new key
+  is separate: it does not mutate the active session key until the next service
+  start. Copying always returns the currently active key.
 - Authentication defaults to required. Explicitly confirming the toggle off
-  adds `YOUZI_ALLOW_ANONYMOUS_INFERENCE=1` to the next supervised child. Ambient
-  environment variables cannot opt the desktop into this mode.
+  applies to the live service on Save and adds `YOUZI_ALLOW_ANONYMOUS_INFERENCE=1`
+  to the next supervised child. Ambient environment cannot opt the desktop in.
 - Anonymous exceptions require an actual loopback peer and loopback/localhost
   Host, no Origin or credential headers, and no cross-site Fetch Metadata.
   Forwarded headers are not trusted. An invalid supplied key still fails.
@@ -183,17 +204,17 @@ real-IP resolution; do not whitelist this range or disable SSRF checks.
 
 ### Local runtime delivery and health checks
 
-This local bundle uses a sourceless Python 3.12 override plus bundled fallback.
-Editing repository `.py` files alone does not update them. Before refresh, back
-up the full application and the affected runtime modules. Compare the baseline
-compiled code to installed bytecode; only replace matching reviewed modules
-(`middleware/auth`, `routes/images`, `routes/video`) using the runtime Python's
-`py_compile` with explicit legacy `.pyc` destinations. Preserve the mflux lazy
-image-import patch. Re-seal and verify the complete bundle before launch.
+The sidecar contains sourceless Python modules. Editing repository `.py` files
+or installing only the Swift executable does not update the running API. Build
+native + sidecar from the same reviewed commit, preserve package `__init__.py`,
+and run candidate-only import/route checks from outside the repository. Verify
+`codesign --verify --deep --strict`, resource sealing and framework paths before
+installation. Do not modify a signed installed bundle in place.
 
-Rollback: quit the exact client normally, restore the complete previous bundle
-and the three override modules from the same backup, then verify its signature
-and reopen. Keep backups outside the repository; never include keys.
+Back up the complete app (and an active override if present), quit only its exact
+process normally, and replace the full bundle. Rollback restores that full backup
+and verifies its signature. Never reset preferences, keychain, tasks, files,
+permissions or model caches. See the delivery runbook for health/rollback details.
 
 Health checkpoints: app remains responsive after launch; `/health` responds;
 unauthenticated `/v1/models` gives 401 in required mode; a valid active key lists

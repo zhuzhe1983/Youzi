@@ -11,6 +11,11 @@ struct YouziLocalModelToolsTests {
         let missing = ModelEntry(alias: "missing", hfRepo: "local/missing", sizeOnDisk: nil, cached: false, kind: .image, imageCapability: .generation)
         var context = YouziLocalModelTools.Context(taskID: UUID(), projectID: nil)
         var ready: Set<String> = []
+        var additionalModels: [ModelEntry] = []
+        var generatedWith: [String] = []
+        let suite = "YouziModelToolPolicy." + UUID().uuidString
+        lazy var preferences = UserDefaults(suiteName: suite)!
+        deinit { UserDefaults.standard.removePersistentDomain(forName: suite) }
         var loads = 0
         var generations = 0
         var capturedSize: String?
@@ -20,11 +25,11 @@ struct YouziLocalModelToolsTests {
         let png = Data([137, 80, 78, 71, 13, 10, 26, 10, 0])
         let wav = Data("RIFF0000WAVE0000".utf8)
         lazy var tools = YouziLocalModelTools(dependencies: .init(
-            catalog: { [self] in [image, speech, missing] },
+            catalog: { [self] in [image, speech, missing] + additionalModels },
             snapshot: { [self] in snapshot },
             load: { [self] entry in loads += 1; if loadFails { return false }; ready.insert(entry.alias); return true },
-            image: { [self] _, _, size in generations += 1; capturedSize = size; return png },
-            speech: { [self] _, _, voice in generations += 1; capturedVoice = voice; return SynthesizedAudio(data: wav, contentType: "audio/wav") },
+            image: { [self] _, entry, size in generatedWith.append(entry.alias); generations += 1; capturedSize = size; return png },
+            speech: { [self] _, entry, voice in generatedWith.append(entry.alias); generations += 1; capturedVoice = voice; return SynthesizedAudio(data: wav, contentType: "audio/wav") },
             context: { [self] in context },
             save: { [self] data, name, _, kind, context in
                 let id = UUID()
@@ -35,11 +40,11 @@ struct YouziLocalModelToolsTests {
                 guard let (asset, owner) = saved[id], owner.taskID == context.taskID else { throw YouziLocalModelTools.Failure.file_unavailable }
                 return asset
             }
-        ))
+        ), preferences: preferences)
         var snapshot: ModelResidencySnapshot {
             ModelResidencySnapshot(memoryLimitBytes: 100, memoryUsedBytes: 30, memoryAvailableBytes: 70,
                 idleTTLSeconds: 0, loadsTotal: loads, evictionsTotal: 0,
-                models: ready.contains(image.alias) ? [Self.resident(image.alias, path: image.hfRepo!)] : [],
+                models: ([image] + additionalModels).filter { ready.contains($0.alias) }.map { Self.resident($0.alias, path: $0.hfRepo ?? $0.alias) },
                 audioLanes: ready.contains(speech.alias) ? [.init(lane: "tts", model: speech.hfRepo, state: "busy")] : [])
         }
         static func resident(_ alias: String, path: String, state: String = "resident") -> ResidentModelStatus {
@@ -76,14 +81,89 @@ struct YouziLocalModelToolsTests {
         #expect(!result.content.lowercased().contains("bearer"))
     }
 
-    @Test("Missing and stopped models never implicitly download or start")
+    @Test("Missing models never download; on-demand generation asks before loading")
     func missingAndStopped() async throws {
         let f = Fixture()
         let missing = try await f.call("youzi_generate_image", ["model": "missing", "prompt": "moon"])
         #expect(missing.content.contains("model_not_downloaded"))
-        let stopped = try await f.call("youzi_generate_image", ["model": f.image.alias, "prompt": "moon"])
-        #expect(stopped.content.contains("model_not_ready"))
+        let task = Task { try await f.call("youzi_generate_image", ["model": f.image.alias, "prompt": "moon"]) }
+        let request = try await pending(f.tools.approval)
+        #expect(f.loads == 0 && f.generations == 0)
+        f.tools.approval.resolve(id: request.id, allow: true)
+        #expect(try await !task.value.isError)
+        #expect(f.loads == 1 && f.generations == 1)
+        #expect(YouziResidentServicePreference.selected(in: f.preferences).isEmpty)
+    }
+
+    @Test("Omitted models use the automatic pool; explicit requests never fall back")
+    func automaticRouting() async throws {
+        let f = Fixture()
+        f.ready = [f.image.alias, f.speech.alias]
+        let absent = try await f.call("youzi_generate_image", ["prompt": "moon"])
+        #expect(absent.content.contains("automatic_model_unavailable"))
+        #expect(f.loads == 0 && f.generations == 0)
+        YouziResidentServicePreference.setAliases([f.image.alias], for: .image, in: f.preferences)
+        YouziResidentServicePreference.setAliases([f.speech.alias], for: .speech, in: f.preferences)
+        let image = try await f.call("youzi_generate_image", ["prompt": "moon"])
+        let speech = try await f.call("youzi_synthesize_speech", ["text": "moon"])
+        #expect(!image.isError && !speech.isError)
+        #expect(f.loads == 0 && f.generations == 2 && f.tools.approval.pending == nil)
+        let unknown = try await f.call("youzi_generate_image", ["model": "missing", "prompt": "moon"])
+        #expect(unknown.content.contains("model_not_downloaded"))
+        let wrongScene = try await f.call("youzi_generate_image", ["model": f.speech.alias, "prompt": "moon"])
+        #expect(wrongScene.content.contains("capability_not_supported"))
+        let blank = try await f.call("youzi_generate_image", ["model": "", "prompt": "moon"])
+        #expect(blank.content.contains("invalid_arguments"))
+        #expect(f.generations == 2)
+        let discovery = try json(try await f.call("youzi_models"))
+        let rows = try #require(discovery["models"] as? [[String: Any]])
+        let row = try #require(rows.first { $0["model"] as? String == f.image.alias })
+        #expect(row["loading_policy"] as? String == "automatic")
+        #expect(row["automatic_for"] as? [String] == ["image"])
+        #expect(row["preferred_for"] as? [String] == ["image"])
+        #expect(row["default_for"] as? [String] == row["preferred_for"] as? [String])
+    }
+
+    @Test("Ready preferred models avoid allocations; explicit on-demand models remain exact")
+    func reuseVersusExplicit() async throws {
+        let f = Fixture()
+        let resident = ModelEntry(alias: "already-loaded", hfRepo: "local/loaded", sizeOnDisk: "2 GiB", cached: true, kind: .image, imageCapability: .generation)
+        f.additionalModels = [resident]
+        f.ready = [resident.alias]
+        YouziResidentServicePreference.setAliases([f.image.alias, resident.alias], for: .image, in: f.preferences)
+        #expect(try await !f.call("youzi_generate_image", ["prompt": "moon"]).isError)
+        #expect(f.generatedWith == [resident.alias] && f.loads == 0)
+        // Remove the stopped model from the pool. An explicit request can still
+        // use it, but only after approval, without replacing the pool member.
+        YouziResidentServicePreference.setAliases([resident.alias], for: .image, in: f.preferences)
+        let task = Task { try await f.call("youzi_generate_image", ["model": f.image.alias, "prompt": "moon"]) }
+        let request = try await pending(f.tools.approval)
+        #expect(request.alias == f.image.alias)
+        f.tools.approval.resolve(id: request.id, allow: true)
+        #expect(try await !task.value.isError)
+        #expect(f.generatedWith == [resident.alias, f.image.alias])
+        #expect(f.loads == 1 && f.ready.contains(resident.alias))
+        #expect(YouziResidentServicePreference.aliases(for: .image, in: f.preferences) == [resident.alias])
+    }
+
+    @Test("Declining on-demand generation cannot cause fallback or repeated approval")
+    func onDemandDenial() async throws {
+        let f = Fixture()
+        let args: [String: Any] = ["model": f.image.alias, "prompt": "moon"]
+        let task = Task { try await f.call("youzi_generate_image", args) }
+        let request = try await pending(f.tools.approval)
+        f.tools.approval.resolve(id: request.id, allow: false)
+        #expect(try await task.value.failureKind == .userDeclined)
+        #expect(try await f.call("youzi_generate_image", args).failureKind == .userDeclined)
         #expect(f.loads == 0 && f.generations == 0 && f.tools.approval.pending == nil)
+    }
+
+    @Test("Invalid generation arguments never ask for startup")
+    func invalidBeforeStartup() async throws {
+        let f = Fixture()
+        let invalid = try await f.call("youzi_generate_image", ["model": f.image.alias, "prompt": "moon", "approved": true])
+        #expect(invalid.content.contains("invalid_arguments"))
+        #expect(f.loads == 0 && f.tools.approval.pending == nil)
     }
 
     @Test("Human approval is required and cannot be supplied as a tool argument")

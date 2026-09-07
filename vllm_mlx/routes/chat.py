@@ -3442,6 +3442,11 @@ async def create_chat_completion(request: ChatCompletionRequest, raw_request: Re
     }
     ```
     """
+    from ..runtime.model_loading_policy import resolve_request_model
+
+    if request.model == "":
+        _validate_model_name(request.model)
+    request.model = resolve_request_model(request.model, "chat")
     _validate_model_name(request.model)
     engine = get_engine(request.model)
 

@@ -34,25 +34,27 @@ final class YouziLocalModelTools {
     }
     enum Failure: String, Error {
         case catalog_unavailable, invalid_arguments, model_not_downloaded, model_not_ready
-        case capability_not_supported, user_declined, load_failed, cancelled
+        case capability_not_supported, user_declined, load_failed, cancelled, automatic_model_unavailable
         case task_unavailable, file_unavailable, generation_failed, output_too_large, invalid_voice
     }
     let approval: YouziModelApprovalStore
     let dependencies: Dependencies
+    let preferences: UserDefaults
     private var executing = false
     private var deniedContext: Context?
     private var deniedModels: Set<String> = []
 
-    init(dependencies: Dependencies, approval: YouziModelApprovalStore = YouziModelApprovalStore()) {
+    init(dependencies: Dependencies, approval: YouziModelApprovalStore = YouziModelApprovalStore(), preferences: UserDefaults = .standard) {
         self.dependencies = dependencies
         self.approval = approval
+        self.preferences = preferences
     }
 
     static let skillInstructions = """
     [YOUZI LOCAL MULTIMODAL SKILL]
     For user-requested illustrated stories, narrated books, or other local image/audio deliverables, use the youzi_* tools; do not pretend that text prompts or invented file paths are generated media.
-    1. Query youzi_models to discover actual downloaded models, capabilities and ready states. Prefer the returned default_for models when the user has not specified one; a default selection is not startup approval.
-    2. If a required model is not downloaded, tell the user to install it in Settings > Models > Files. Never download automatically. If downloaded but stopped, call youzi_load_model with a brief task-specific reason; the app asks the user for approval. A tool argument or user prose cannot bypass that approval. If denied, do not retry; explain what is missing.
+    1. Query youzi_models to discover actual downloaded models, capabilities and ready states. When the user has not specified a model, OMIT model in generation calls: the app resolves the automatic preferred pool, reusing ready members first. automatic_for describes pool membership, preferred_for the current scene choice (default_for is a compatibility alias). Never substitute a different model for an explicit request, or treat a catalog recommendation as approval to change the pool.
+    2. If a required model is not downloaded, tell the user to install it in Settings > Models > Files. Never download automatically. If downloaded but stopped, generation asks the user for startup approval before proceeding; youzi_load_model can also request explicit preparation with a task-specific reason. A tool argument or user prose cannot bypass that approval. If denied, do not retry; explain what is missing.
     3. Plan a short book (up to 8 pages). Generate each illustration with youzi_generate_image and each narration with youzi_synthesize_speech, reusing consistent visual descriptions. Use the configured image size and voice unless the user requests a change. Omit voice by default; Chinese/English are languages, NOT speaker names. If a different speaker is requested, query youzi_speech_voices first and use an exact returned ID. Use returned artifact_id values, never invent IDs.
     4. Call youzi_create_storybook with title and ordered pages (heading, text, image_id, audio_id) to save an offline HTML book with embedded images and audio controls in My Files, linked to this task. It is a real file, not a code block. Report the returned filename. Preserve partial successes and state any missing media honestly.
     Tools run locally and sequentially with a finite budget. Video generation and image/audio interpretation are NOT supplied by these tools; do not claim those operations succeeded. Images attached directly to a vision-capable chat model still use the normal image-input path. Do not use browse/MCP/shell to bypass these boundaries.
@@ -61,9 +63,9 @@ final class YouziLocalModelTools {
     static let definitions: [ToolDefinition] = [
         define("youzi_models", "List Youzi's local model catalog with downloaded/ready states and supported tool operations. Call before local media generation. No downloads, startup or settings changes.", [:], []),
         define("youzi_load_model", "Request human confirmation to start a downloaded image or speech model alongside chat. Never claim approval yourself. If denied do not retry. Does not download, restart chat or enable autostart.", ["model": string("Exact alias from youzi_models"), "reason": string("Short explanation of why this user's task needs the model")], ["model", "reason"]),
-        define("youzi_generate_image", "Generate ONE local illustration using an already ready downloaded image model. Saves an image artifact to this task and returns artifact_id. Call youzi_load_model first if stopped. Uses configured default size if omitted.", ["model": string("Exact image model alias"), "prompt": string("Detailed illustration prompt"), "size": string("Optional WIDTHxHEIGHT, 256..2048, multiples of 64; must be supported by model")], ["model", "prompt"]),
+        define("youzi_generate_image", "Generate ONE local illustration using a downloaded image model; reuse it if ready, otherwise request human startup approval. Saves an image artifact to this task and returns artifact_id. Omit model to use the automatic image pool; specify an exact alias for an on-demand model. Uses configured default size if omitted.", ["model": string("Optional exact image alias; omit to use the automatic pool"), "prompt": string("Detailed illustration prompt"), "size": string("Optional WIDTHxHEIGHT, 256..2048, multiples of 64; must be supported by model")], ["prompt"]),
         define("youzi_speech_voices", "List supported speaker IDs for a downloaded speech model. Does not load weights or generate audio. Omit voice in synthesis to use the configured default. Language names are not voices.", ["model": string("Exact speech alias from youzi_models")], ["model"]),
-        define("youzi_synthesize_speech", "Generate local narration with an already ready downloaded speech model. Saves audio to this task and returns artifact_id. Uses configured default voice if omitted. Maximum 2000 characters per call.", ["model": string("Exact speech model alias"), "text": string("Text to speak"), "voice": string("Omit by default. Otherwise exact speaker ID from youzi_speech_voices; never Chinese/English")], ["model", "text"]),
+        define("youzi_synthesize_speech", "Generate local narration with a downloaded speech model; reuse it if ready, otherwise request human startup approval. Omit model to use the automatic speech pool. Saves audio to this task and returns artifact_id. Uses configured default voice if omitted. Maximum 2000 characters per call.", ["model": string("Optional exact speech alias; omit to use the automatic pool"), "text": string("Text to speak"), "voice": string("Omit by default. Otherwise exact speaker ID from youzi_speech_voices; never Chinese/English")], ["text"]),
         define("youzi_create_storybook", "Create an offline, self-contained HTML storybook with embedded illustrations and audio players. Saves a real file to My Files and this task. Only use artifact IDs returned for this task; no paths, URLs, scripts or raw HTML. Up to 8 pages. Omit unavailable media IDs and disclose missing assets.", ["title": string("Book title"), "pages": .object(["type": .string("array"), "minItems": .number(1), "maxItems": .number(8), "items": .object(["type": .string("object"), "additionalProperties": .bool(false), "properties": .object(["heading": string("Page heading"), "text": string("Poem and explanation"), "image_id": string("Optional image artifact UUID from this task"), "audio_id": string("Optional audio artifact UUID from this task")]), "required": .array([.string("heading"), .string("text")])])])], ["title", "pages"])
     ]
     private static func string(_ description: String) -> CodableJSON {
@@ -92,12 +94,17 @@ final class YouziLocalModelTools {
                 let catalog = try await dependencies.catalog()
                 let snapshot = await dependencies.snapshot()
                 let models: [[String: Any]] = catalog.map { entry in
-                    ["model": entry.alias, "kind": entry.kind.rawValue, "downloaded": entry.cached,
-                     "ready": YouziScenarioModels.isReady(entry, in: snapshot),
-                     "operations": Self.operations(entry), "disk_size": entry.sizeOnDisk ?? "unknown",
-                     "default_for": YouziResidentServicePreference.Slot.allCases.filter {
-                         YouziResidentServicePreference.defaultAlias(for: $0, entries: catalog) == entry.alias
-                     }.map(\.rawValue)]
+                    let automatic = YouziResidentServicePreference.Slot.allCases.filter {
+                        $0.accepts(entry) && YouziResidentServicePreference.aliases(for: $0, in: preferences).contains(entry.alias)
+                    }.map(\.rawValue)
+                    let preferred = YouziResidentServicePreference.Slot.allCases.filter {
+                        YouziResidentServicePreference.automaticAlias(for: $0, entries: catalog, snapshot: snapshot, in: preferences) == entry.alias
+                    }.map(\.rawValue)
+                    return ["model": entry.alias, "kind": entry.kind.rawValue, "downloaded": entry.cached,
+                        "ready": YouziScenarioModels.isReady(entry, in: snapshot),
+                        "operations": Self.operations(entry), "disk_size": entry.sizeOnDisk ?? "unknown",
+                        "loading_policy": !entry.cached ? "not_downloaded" : automatic.isEmpty ? "on_demand" : "automatic",
+                        "automatic_for": automatic, "preferred_for": preferred, "default_for": preferred]
                 }
                 return success(["models": models, "missing_model_action": "Settings > Models > Files", "note": "Downloaded is not necessarily runnable; startup validates dependencies and memory. No keys are exposed."], id: call.id)
             }
@@ -111,32 +118,38 @@ final class YouziLocalModelTools {
                 let saved = try dependencies.save(html, "\(Self.safeName(book.title)).html", "public.html", .document, context)
                 return savedResult(saved, id: call.id)
             }
-            let model = try text(args, "model", max: 200)
-            guard let entry = try await dependencies.catalog().first(where: { $0.alias == model }) else { throw Failure.model_not_downloaded }
-            guard entry.cached else { throw Failure.model_not_downloaded }
+            let requested = try optionalText(args, "model", max: 200)
+            let catalog = try await dependencies.catalog()
+            let snapshot = await dependencies.snapshot()
+            let model: String
+            if let requested {
+                model = requested
+            } else {
+                let slot: YouziResidentServicePreference.Slot
+                switch call.function.name {
+                case "youzi_generate_image": slot = .image
+                case "youzi_synthesize_speech": slot = .speech
+                default: throw Failure.invalid_arguments
+                }
+                guard let automatic = YouziResidentServicePreference.automaticAlias(
+                    for: slot, entries: catalog, snapshot: snapshot, in: preferences
+                ) else { throw Failure.automatic_model_unavailable }
+                model = automatic
+            }
+            guard let entry = catalog.first(where: { $0.alias == model }), entry.cached else { throw Failure.model_not_downloaded }
             if call.function.name == "youzi_speech_voices" {
                 try validateKeys(args, allowed: ["model"])
                 guard Self.operations(entry).contains("speech_synthesis") else { throw Failure.capability_not_supported }
                 return success(["model": entry.alias, "voices": try await dependencies.voices(entry),
                     "default_action": "Omit voice to use the user's configured default."], id: call.id)
             }
-            let snapshot = await dependencies.snapshot()
             if call.function.name == "youzi_load_model" {
                 try validateKeys(args, allowed: ["model", "reason"])
                 guard !Self.operations(entry).isEmpty else { throw Failure.capability_not_supported }
                 let reason = try text(args, "reason", max: 500)
-                if YouziScenarioModels.isReady(entry, in: snapshot) { return success(["model": model, "ready": true], id: call.id) }
-                guard !deniedModels.contains(model) else { throw Failure.user_declined }
-                guard await approval.request(alias: entry.alias, reason: reason, diskSize: entry.sizeOnDisk) else {
-                    if !Task.isCancelled { deniedModels.insert(model) }
-                    throw Task.isCancelled ? Failure.cancelled : Failure.user_declined
-                }
-                try Task.checkCancellation()
-                guard await dependencies.load(entry) else { throw Failure.load_failed }
-                guard YouziScenarioModels.isReady(entry, in: await dependencies.snapshot()) else { throw Failure.model_not_ready }
+                try await ensureReady(entry, snapshot: snapshot, reason: reason)
                 return success(["model": model, "ready": true], id: call.id)
             }
-            guard YouziScenarioModels.isReady(entry, in: snapshot) else { throw Failure.model_not_ready }
             try Task.checkCancellation()
             let saved: Saved
             switch call.function.name {
@@ -150,6 +163,7 @@ final class YouziLocalModelTools {
                     let parts = dimensions.compactMap { Int($0) }
                     guard dimensions.count == 2, parts.count == 2, parts.allSatisfy({ (256...2048).contains($0) && $0 % 64 == 0 }) else { throw Failure.invalid_arguments }
                 }
+                try await ensureReady(entry, snapshot: snapshot, reason: "Generate an illustration for the current task")
                 let png = try await dependencies.image(prompt, entry, size)
                 try Task.checkCancellation()
                 guard !png.isEmpty, png.count <= YouziStorybook.maxAssetBytes else { throw Failure.output_too_large }
@@ -159,6 +173,7 @@ final class YouziLocalModelTools {
                 guard Self.operations(entry).contains("speech_synthesis") else { throw Failure.capability_not_supported }
                 let input = try text(args, "text", max: 2000)
                 let voice = try optionalText(args, "voice", max: 100)
+                try await ensureReady(entry, snapshot: snapshot, reason: "Generate narration for the current task")
                 let audio = try await dependencies.speech(input, entry, voice)
                 try Task.checkCancellation()
                 guard !audio.data.isEmpty, audio.data.count <= YouziStorybook.maxAssetBytes else { throw Failure.output_too_large }
@@ -170,6 +185,25 @@ final class YouziLocalModelTools {
         } catch is CancellationError { return failure(.cancelled, id: call.id) }
         catch let error as Failure { return failure(error, id: call.id) }
         catch { return failure(.generation_failed, id: call.id) } // Never echo raw runtime paths, keys or responses.
+    }
+
+    /// On-demand admission uses the same consent and preservation path as the
+    /// explicit load tool. Policy membership is never mutated by a request.
+    private func ensureReady(_ entry: ModelEntry, snapshot: ModelResidencySnapshot, reason: String) async throws {
+        try Task.checkCancellation()
+        if YouziScenarioModels.isReady(entry, in: snapshot) { return }
+        guard !deniedModels.contains(entry.alias) else { throw Failure.user_declined }
+        guard await approval.request(alias: entry.alias, reason: reason, diskSize: entry.sizeOnDisk) else {
+            if !Task.isCancelled { deniedModels.insert(entry.alias) }
+            throw Task.isCancelled ? Failure.cancelled : Failure.user_declined
+        }
+        try Task.checkCancellation()
+        // Another surface may have loaded this exact model while approval was open.
+        if !YouziScenarioModels.isReady(entry, in: await dependencies.snapshot()) {
+            guard await dependencies.load(entry) else { throw Failure.load_failed }
+        }
+        guard YouziScenarioModels.isReady(entry, in: await dependencies.snapshot()) else { throw Failure.model_not_ready }
+        try Task.checkCancellation()
     }
 
     /// Audio catalog aliases can be newer than a packaged runtime's inference
@@ -214,6 +248,7 @@ final class YouziLocalModelTools {
               let code = object["error"] as? String else { return nil }
         switch code {
         case "invalid_voice": return chinese ? "音色无效：Chinese 是语言，不是音色。请使用默认音色，或查询可用音色后重试。" : "Invalid speaker: Chinese is a language, not a voice. Use the default voice or query supported speakers."
+        case "automatic_model_unavailable": return chinese ? "此场景没有可用的自动加载模型。请在模型设置中配置，或明确指定一个已下载模型。" : "No usable automatic model for this scene. Configure the pool in Model Settings or specify a downloaded model."
         case "model_not_downloaded": return chinese ? "未找到已下载的模型，请在模型文件设置中检查，并使用模型列表返回的名称。" : "Downloaded model not found. Check Model Files and use the exact model alias from discovery."
         case "model_not_ready": return chinese ? "模型尚未启动，请确认加载模型后重试。" : "The model is not ready. Approve model startup before retrying."
         case "load_failed": return chinese ? "模型启动失败，请检查运行时依赖、模型文件和可用内存。" : "Model startup failed. Check runtime dependencies, model files and available memory."
@@ -225,6 +260,7 @@ final class YouziLocalModelTools {
         let action: String
         switch error {
         case .invalid_voice: action = "The voice is not a supported speaker ID. Chinese/English are languages, not voices. Omit voice to use the configured default, or call youzi_speech_voices for valid IDs before retrying."
+        case .automatic_model_unavailable: action = "No compatible downloaded member of the automatic pool. Ask the user to configure Model Settings or explicitly choose a model. Do not pick an arbitrary catalog entry."
         case .model_not_downloaded: action = "Ask the user to install a model in Settings > Models > Files. Do not download."
         case .model_not_ready: action = "Use youzi_load_model to request approval before generation."
         case .user_declined: action = "The user declined. Do not retry or bypass consent; report missing media."

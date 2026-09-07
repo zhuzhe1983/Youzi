@@ -1,54 +1,59 @@
 # Youzi resident model services
 
-Status: development implementation, validated locally on 2026-09-06. This is not
-an assertion that a public release already contains the feature.
+Status: preferred-pool policy updated on 2026-09-07. This is not a claim that
+all changes are in a public release. See [the policy decision](../decisions/youzi-model-selection-and-startup.md).
 
 ## User workflow
 
-Open **Settings → Models → Model service → Resident model services**.
+Open **Settings → Models → Service → Model loading policy**, or the corresponding
+Chat / Audio / Image / Video tab.
 
-1. Download the models and their runtime assets under Model Files first.
-2. Enable **Restore resident models when chat starts**.
-3. Choose one transcription, one speech, and one image-generation model. Only
-   cached models with the required catalog capability are offered. A saved model
-   that disappears remains visible as unavailable; no automatic download occurs.
-4. Start the chat model, then choose **Load resident set**. On subsequent chat
-   service starts the selected media set is restored automatically. Enable the
-   existing chat auto-start option for restoration when opening the app.
-5. Check the per-model ready/loading/busy/failure status. These are backed by
-   residency data, not merely the presence of audio routes.
+1. Download models/runtime assets in Model Files.
+2. Set downloaded models to **Automatic** or **On demand**. Automatic models form
+   one ordered preferred pool per scene; there is no independent Default list.
+3. Enable automatic loading with chat startup. Opening the app also requires chat
+   auto-start and an automatic chat model; a previously used manual model will
+   not be loaded just because it is in session history.
+4. On a running service, **Load preferred pool now** explicitly restores the pool,
+   including while startup loading is paused. This never downloads files.
+5. **Save** applies the preferred pool to the live API without restarting models.
+   Failure is shown; saved local intent is retained for retry/next service start.
+6. Inspect readiness and allocation separately. The quick-picker check is ready,
+   the bolt is automatic membership. Changing membership does not load/unload.
 
-Preferences persist immediately, like the surrounding startup settings. Changing
-selections while a restore is running applies to a subsequent restore; it does
-not cancel a GPU allocation already in progress. Disabling restoration or clearing
-one selector does not unload an already running model. Model Files still owns
-installation and deletion, and the existing service stop action stops the whole
-process.
+Unspecified calls reuse ready compatible pool members, in saved priority order.
+Explicit calls target the exact model; native tools request approval before a
+cold load. API callers must first load cold models through an authenticated
+management endpoint; HTTP inference itself never grants that permission.
 
-Chat uses the current selected primary model; this is not a second independent
-chat-model configuration. Dynamic video residency is not supported. This first
-version is one selected STT lane, one selected TTS lane and an image model beside
-the primary chat model, not unlimited same-lane checkpoints or all downloaded
-models. Explicit inference/selection of a different audio model still replaces
-that same audio lane; it does not replace chat or the other media lanes. API
-callers should specify the desired model ID rather than assuming that the legacy
-`default` alias follows the desktop resident selector.
+Multiple chat/image/video selections are supported subject to resource admission.
+STT and TTS each still have one lane. Replacing their automatic selection changes
+intent, not the active engine; a preserving load refuses an occupied same lane.
+Video may be lazily registered, so ready is not proof of permanent GPU residency.
+The service Stop action still stops the whole process. Selection changes during
+an in-flight restore take effect for a later restore, not by cancelling an
+allocation already in progress.
 
 ## API and lifecycle
 
 - One service address and existing API-key policy, shared by all models.
+- `PUT /v1/service/model-policy`, body `{"automatic":{"chat":["alias"]}}`:
+  authenticated, policy-only replacement. Other scenes omitted from the object
+  are empty. No registry mutation, load, unload, download or key rotation.
+  It remains protected when inference is anonymous. The supervised child also
+  receives the saved JSON in `YOUZI_AUTOMATIC_MODEL_POOL` at spawn.
 - `POST /v1/audio/models/load`, body `{"model":"<audio alias or HF ID>"}`:
   authenticated management endpoint, preloads the exact caches/Metal worker used
   by speech/transcription. It does not synthesize a test sentence or transcribe
   dummy audio. HTTP 200 reports a materialized audio-worker lane.
-- `POST /v1/models/load` remains the chat/image control plane. Resident image
+- `POST /v1/models/load` remains the chat/image/video control plane. Resident image
   selection requests `pin: true`, including when the image was already loaded.
   The primary chat model is protected by its existing primary/pin policy.
 - `/v1/models` retains its OpenAI list envelope and existing capability extensions.
   Actual resident/busy audio caches contribute canonical IDs and registered
   aliases; loading, failed and merely registered lanes are excluded.
 - Inference continues through `/v1/responses`, `/v1/chat/completions`,
-  `/v1/audio/speech`, `/v1/audio/transcriptions` and `/v1/images/generations`,
+  `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/images/generations` and `/v1/videos`,
   routing by `model`.
 - Allowing anonymous inference does **not** make load/unload management anonymous.
   The desktop uses its existing internal credential. No new public key store or
@@ -64,8 +69,7 @@ callers should specify the desired model ID rather than assuming that the legacy
 ## Resource and readiness boundaries
 
 Simultaneous residency does not promise unrestricted parallel GPU execution.
-Inference retains the existing worker/locking rules. Only selected images are
-pinned by this setting; ordinary unpinned secondary models retain the runtime's
+Inference retains the existing worker/locking rules. Automatic generic model loads request preservation/pinning; ordinary unpinned secondary models retain the runtime's
 existing LRU behavior.
 
 Audio preload requires cached `.safetensors` or Whisper `.npz` weights. Admission
@@ -86,14 +90,19 @@ The shared audio worker does not expose trustworthy per-model memory bytes.
 Desktop displays `VOICE · —` with an explanation rather than inventing a 1-byte
 allocation; audio residency still contributes to the multi-modal status badge.
 
-## Verification
+## Historical multi-model verification (2026-09-06)
+
+The following evidence predates the preferred-pool routing change. Rerun it with
+explicit aliases or a configured pool for current acceptance; it is not a new
+measurement of this policy revision.
+
 
 Never sweep the user's live inference port during tests:
 
 ```sh
 RAPID_DESKTOP_NO_PORT_SWEEP=1 swift test --package-path apps/rapid-mac \
   --filter 'YouziMediaCoLoadTests|YouziResidentServiceTests|ModelResidencyTests|LaunchMediaResidencyTests'
-swift build --package-path apps/rapid-mac -c release
+RAPID_DESKTOP_NO_PORT_SWEEP=1 swift build --package-path apps/rapid-mac -c release
 python -m pytest -q tests/test_youzi_audio_preload.py \
   tests/test_youzi_loaded_models.py tests/test_audio.py \
   tests/test_audio_output_format.py tests/test_audio_model_worker.py \
@@ -144,7 +153,7 @@ aliases. Non-streaming Responses returned `READY_OK`; streaming Responses emitte
 the generated sentence as `柚子多模型服务已经就绪`.
 
 For rollout/rollback, follow [the local delivery runbook](youzi-delivery.md):
-back up the complete app and active override, verify both runtime locations, and
-re-sign the full candidate. Source changes or a Swift-only build do not update
+back up the complete app and active override, build and verify a complete
+candidate, then replace the whole bundle. Source changes or a Swift-only build do not update
 the installed sourceless runtime. Public packaging, publishing and app restart
 are separate delivery actions and must not be inferred from these test results.

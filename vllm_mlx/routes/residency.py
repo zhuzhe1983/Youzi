@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 from ..config import get_config
 from ..kv_cache_dtype import KVCacheQuantizationUnsupportedError
@@ -15,6 +15,7 @@ from ..middleware.exception_handlers import (
     register_request_path,
 )
 from ..model_aliases import resolve_profile
+from ..runtime.model_loading_policy import Scene, validate_pools
 from ..runtime.resident_models import (
     ResidentModelBusyError,
     ResidentModelCapacityError,
@@ -49,6 +50,27 @@ async def update_service_auth(settings: ServiceAuthRequest, request: Request):
 
 register_request_model(ServiceAuthRequest)
 register_request_path("/v1/service/auth", ServiceAuthRequest)
+
+
+class ModelLoadingPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    automatic: dict[Scene, list[str]]
+
+    @field_validator("automatic")
+    @classmethod
+    def validate_pool(cls, pools):
+        return validate_pools(pools)
+
+
+@router.put("/v1/service/model-policy")
+async def update_model_policy(policy: ModelLoadingPolicy):
+    """Authenticated policy-only update: no load, unload, download or key changes."""
+    get_config().automatic_model_pool = {key: list(values) for key, values in policy.automatic.items()}
+    return policy.model_dump()
+
+
+register_request_model(ModelLoadingPolicy)
+register_request_path("/v1/service/model-policy", ModelLoadingPolicy)
 
 
 class ModelPerformanceRequest(BaseModel):

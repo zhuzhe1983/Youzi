@@ -108,10 +108,10 @@ struct YouziScenarioModelPicker: View {
             HStack(spacing: 8) {
                 Text(entry.alias).font(RapidFont.secondary).lineLimit(1).truncationMode(.middle)
                 if YouziResidentServicePreference.Slot.allCases.contains(where: {
-                    YouziResidentServicePreference.defaultAlias(for: $0, entries: entries) == entry.alias
+                    YouziResidentServicePreference.aliases(for: $0).contains(entry.alias)
                 }) {
-                    Image(systemName: "star.fill").font(RapidFont.caption).foregroundStyle(.orange)
-                        .accessibilityLabel(i18n.text(zh: "默认模型", en: "Default model"))
+                    Image(systemName: "bolt.fill").font(RapidFont.caption).foregroundStyle(.orange)
+                        .accessibilityLabel(i18n.text(zh: "自动加载优选模型", en: "Automatic preferred model"))
                 }
                 Spacer(minLength: 4)
                 Text(memoryLabel(entry)).font(RapidFont.caption).foregroundStyle(.secondary)

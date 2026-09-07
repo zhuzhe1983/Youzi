@@ -181,7 +181,9 @@ def _supports_editing(img_engine) -> bool:
 def _image_engine(model_name: str = ""):
     """Resolve an image engine exactly by request model, with single-model fallback."""
     from ..config import get_config
+    from ..runtime.model_loading_policy import resolve_request_model
 
+    model_name = resolve_request_model(model_name, "image")
     cfg = get_config()
     registry = getattr(cfg, "model_registry", None)
     img_engine = None

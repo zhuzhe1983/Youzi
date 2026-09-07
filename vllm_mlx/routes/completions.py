@@ -79,6 +79,11 @@ def _engine_supports_completion_logprobs(engine) -> bool:
 )
 async def create_completion(request: CompletionRequest, raw_request: Request):
     """Create a text completion."""
+    from ..runtime.model_loading_policy import resolve_request_model
+
+    if request.model == "":
+        _validate_model_name(request.model)
+    request.model = resolve_request_model(request.model, "chat")
     _validate_model_name(request.model)
     if request.suffix:
         raise HTTPException(

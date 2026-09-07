@@ -25,6 +25,11 @@ from ..api.models import (
     ChatCompletionResponse,
 )
 from ..api.protocol_mapping import cancellation_error, is_cancellation_finish_reason
+from ..runtime.model_loading_policy import (
+    policy_enabled,
+    reported_model_name,
+    resolve_request_model,
+)
 from ..api.tool_calling import (
     convert_tools_for_template,
     extract_json_schema_for_guided,
@@ -621,7 +626,10 @@ async def create_anthropic_message(
     # the attacker-supplied ``input_value`` out of the response body.
     anthropic_request = AnthropicRequest(**body)
 
-    if not (anthropic_request.model or "").startswith(("claude-", "gpt-")):
+    if anthropic_request.model == "":
+        _validate_model_name(anthropic_request.model)
+    anthropic_request.model = resolve_request_model(anthropic_request.model, "chat")
+    if policy_enabled() or not (anthropic_request.model or "").startswith(("claude-", "gpt-")):
         _validate_model_name(anthropic_request.model)
     engine = get_engine(anthropic_request.model)
 
@@ -1125,7 +1133,7 @@ async def create_anthropic_message(
         )
 
         openai_response = ChatCompletionResponse(
-            model=cfg.model_name or openai_request.model,
+            model=reported_model_name(openai_request.model, cfg.model_name),
             choices=[
                 ChatCompletionChoice(
                     message=AssistantMessage(
@@ -1158,7 +1166,7 @@ async def create_anthropic_message(
         # served alongside a thinking default.
         anthropic_response = openai_to_anthropic(
             openai_response,
-            cfg.model_name or anthropic_request.model,
+            reported_model_name(anthropic_request.model, cfg.model_name),
             reasoning_enabled=_resolve_reasoning_enabled(anthropic_request.model),
             # H-03: forward the engine-surfaced matched stop string so
             # the response carries ``stop_reason="stop_sequence"`` +
@@ -1285,8 +1293,8 @@ async def count_anthropic_tokens(request: Request):
     # engine's tokenizer would still produce a count and a cost
     # estimator would treat it as authoritative (codex bundled review
     # on the F-167 fix, follow-up to F-160).
+    requested_model = body.get("model")
     if "model" in body:
-        requested_model = body["model"]
         if requested_model is not None and not isinstance(requested_model, str):
             raise HTTPException(
                 status_code=400,
@@ -1314,11 +1322,19 @@ async def count_anthropic_tokens(request: Request):
         if (
             isinstance(requested_model, str)
             and requested_model
+            and not policy_enabled()
             and not requested_model.startswith(("claude-", "gpt-"))
         ):
             _validate_model_name(requested_model)
 
-    engine = get_engine()
+    if policy_enabled():
+        # Count with the same selected model/tokenizer as /v1/messages.
+        # Never let the boot primary stand in for a different pool member.
+        requested_model = resolve_request_model(requested_model, "chat")
+        _validate_model_name(requested_model)
+        engine = get_engine(requested_model)
+    else:
+        engine = get_engine()
 
     # F12: count_tokens must apply the SAME chat template + tools
     # rendering that ``/v1/messages`` applies before tokenizing,
@@ -1351,6 +1367,8 @@ async def count_anthropic_tokens(request: Request):
     # single-adapter-source-of-truth contract without tightening the
     # public count_tokens contract beyond what's already shipped.
     _body_for_parse = dict(body)
+    if policy_enabled():
+        _body_for_parse["model"] = requested_model
     if "max_tokens" not in _body_for_parse:
         _body_for_parse["max_tokens"] = 1
     # Both ``"model" not in body`` (missing) and ``"model": None``
@@ -1886,7 +1904,7 @@ async def _stream_anthropic_messages(
             "id": msg_id,
             "type": "message",
             "role": "assistant",
-            "model": cfg.model_name or anthropic_request.model,
+            "model": reported_model_name(anthropic_request.model, cfg.model_name),
             "content": [],
             "stop_reason": None,
             "stop_sequence": None,

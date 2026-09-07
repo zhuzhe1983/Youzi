@@ -28,6 +28,7 @@ struct YouziSimpleTaskView: View {
     /// Professional Mode temporarily replaces this presentation.
     @SceneStorage("YouziSimple.NewTask.draft.v1") private var draft = ""
     @State private var showsLiveVoice = false
+    @State private var showsModelSelectionHelp = false
     // The voice sheet retains its preparation closure across multiple sends.
     // Keep a newly created task ID in shared State rather than a captured nil
     // taskID, which would otherwise create a second task on the next utterance.
@@ -69,6 +70,11 @@ struct YouziSimpleTaskView: View {
             chat: chat, server: server, alias: assistantAlias,
             prepareTurn: prepareTaskRequest, isPresented: $showsLiveVoice
         ))
+        .alert(i18n.text(zh: "请选择聊天模型", en: "Choose a chat model"), isPresented: $showsModelSelectionHelp) {
+            Button(i18n.text(zh: "知道了", en: "OK"), role: .cancel) {}
+        } message: {
+            Text(i18n.text(zh: "请从输入框旁的模型菜单选择一个已下载模型，或在模型设置中配置自动加载清单。你的输入已保留。", en: "Choose a downloaded model beside the composer, or configure the automatic pool in Model Settings. Your draft is preserved."))
+        }
         .onAppear {
             loadTaskContext()
             resolveAssistantAliasIfNeeded()
@@ -538,7 +544,7 @@ struct YouziSimpleTaskView: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(!canSubmit)
-                        .help(assistantAlias.isEmpty ? i18n.text(zh: "完成本地设置", en: "Complete local setup") : i18n.text(zh: "开始任务", en: "Start task"))
+                        .help(assistantAlias.isEmpty ? i18n.text(zh: "选择聊天模型", en: "Choose a chat model") : i18n.text(zh: "开始任务", en: "Start task"))
                         .accessibilityLabel(i18n.text(zh: "开始任务", en: "Start task"))
                         .accessibilityIdentifier("YouziSimple.NewTask.SendOrStop")
                     }
@@ -589,32 +595,9 @@ struct YouziSimpleTaskView: View {
            downloadedChatModels.contains(where: { $0.alias == assistantAlias }) {
             return
         }
-        if let preferred = YouziResidentServicePreference.defaultAlias(for: .chat, entries: downloadedChatModels) {
-            assistantAlias = preferred
-            return
-        }
-        if let serving = server.servingAlias, !serving.isEmpty,
-           downloadedChatModels.contains(where: { $0.alias == serving }) {
-            assistantAlias = serving
-            return
-        }
-        if let cached = downloadedChatModels.first?.alias {
-            assistantAlias = cached
-            return
-        }
-        if let lastServed = ServerManager.lastServedAlias(),
-           downloadedChatModels.contains(where: { $0.alias == lastServed }) {
-            assistantAlias = lastServed
-            return
-        }
-        if let firstChat = downloadedChatModels.first?.alias {
-            assistantAlias = firstChat
-            return
-        }
-        if let firstAny = catalogEntries.first(where: { $0.kind == .chat })?.alias {
-            assistantAlias = firstAny
-            return
-        }
+        // An empty selection is not permission to pick any downloaded model.
+        // Use the preferred pool or leave the choice to the user.
+        assistantAlias = server.automaticModelAlias(for: .chat, entries: downloadedChatModels) ?? ""
     }
 
     private enum FileImportTarget: Equatable {
@@ -781,7 +764,7 @@ struct YouziSimpleTaskView: View {
     }
 
     private var runtimeStatus: String {
-        if assistantAlias.isEmpty { return i18n.text(zh: "需要完成本地设置", en: "Local setup needed") }
+        if assistantAlias.isEmpty { return i18n.text(zh: "请选择聊天模型", en: "Choose a chat model") }
         return switch server.state {
         case .starting: i18n.text(zh: "正在本地准备…", en: "Preparing locally…")
         case .ready: i18n.text(zh: "已在本机就绪", en: "Ready locally")
@@ -804,7 +787,7 @@ struct YouziSimpleTaskView: View {
         guard !request.isEmpty, !chat.isStreaming else { return }
         resolveAssistantAliasIfNeeded()
         guard !assistantAlias.isEmpty else {
-            onPrepareAssistant()
+            showsModelSelectionHelp = true
             return
         }
         guard let attachments = prepareTaskRequest(request) else { return }
