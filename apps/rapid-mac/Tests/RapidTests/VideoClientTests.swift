@@ -12,6 +12,38 @@ struct VideoClientTests {
         return VideoClient(session: URLSession(configuration: configuration))
     }
 
+    @Test("Conversation cancellation is queued-only and authenticated")
+    func pendingOnlyCancellation() async throws {
+        let client = makeClient()
+        VideoStubProtocol.response = (200, Data("{}".utf8))
+        try await client.cancelPending(id: "video_own", port: 8123, bearer: "test-only")
+        let request = try #require(VideoStubProtocol.requests.first)
+        #expect(request.httpMethod == "DELETE")
+        #expect(request.url?.path == "/v1/videos/video_own")
+        #expect(request.url?.query == "pending_only=true")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-only")
+    }
+
+    @Test("Tool transport refuses redirection without starting a network request")
+    func toolTransportPolicy() async throws {
+        let session = VideoClient.toolSession
+        #expect(session.configuration.urlCache == nil)
+        #expect(!session.configuration.httpShouldSetCookies)
+        #expect(session.configuration.timeoutIntervalForRequest == 15)
+        #expect(session.configuration.timeoutIntervalForResource == 60)
+        let delegate = try #require(session.delegate as? any URLSessionTaskDelegate)
+        let callback = try #require(delegate.urlSession(_:task:willPerformHTTPRedirection:newRequest:completionHandler:))
+        let source = URL(string: "http://127.0.0.1:8123/v1/videos")!
+        let task = session.dataTask(with: source) // Never resumed; no server/device/model touched.
+        defer { task.cancel() }
+        let response = try #require(HTTPURLResponse(url: source, statusCode: 302, httpVersion: nil, headerFields: nil))
+        let destination = URLRequest(url: URL(string: "https://example.com/not-contacted")!)
+        let forwarded = await withCheckedContinuation { (continuation: CheckedContinuation<URLRequest?, Never>) in
+            callback(session, task, response, destination) { continuation.resume(returning: $0) }
+        }
+        #expect(forwarded == nil)
+    }
+
     @Test("Capabilities authenticate and produce conservative controls")
     func capabilities() async throws {
         let client = makeClient()
@@ -49,6 +81,41 @@ struct VideoClientTests {
         #expect(components.fragment == nil)
         #expect(!(components.percentEncodedQuery?.contains("+") ?? false))
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+    }
+
+    @Test("Tool job retrieval authenticates and rejects mismatched IDs")
+    func toolRetrieve() async throws {
+        let client = makeClient()
+        VideoStubProtocol.response = (200, Data(Self.jobJSON.utf8))
+        let id = "video_0123456789abcdef0123456789abcdef"
+        #expect(try await client.retrieve(id: id, port: 8123, bearer: "secret").id == id)
+        #expect(VideoStubProtocol.requests.last?.url?.path == "/v1/videos/\(id)")
+        #expect(VideoStubProtocol.requests.last?.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+        await #expect(throws: VideoClientError.invalidResponse) { try await client.retrieve(id: "video_other", port: 8123, bearer: "secret") }
+        let count = VideoStubProtocol.requests.count
+        await #expect(throws: VideoClientError.invalidJobID) { try await client.retrieve(id: "../models", port: 8123, bearer: "secret") }
+        #expect(VideoStubProtocol.requests.count == count)
+    }
+
+    @Test("Tool content is bounded even without Content-Length, with no stale preview reuse")
+    func toolContent() async throws {
+        var client = makeClient()
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cache) }
+        client.cacheDirectory = cache
+        let id = "video_own"
+        try Data("stale-session".utf8).write(to: cache.appendingPathComponent(try VideoClient.cacheFileName(for: id)))
+        VideoStubProtocol.headers = ["Content-Type": "video/mp4"]
+        VideoStubProtocol.response = (200, Data("new-video".utf8))
+        #expect(try await client.videoData(id: id, maximumBytes: 20, port: 8123, bearer: "secret") == Data("new-video".utf8))
+        #expect(VideoStubProtocol.requests.count == 1)
+        #expect(VideoStubProtocol.requests[0].url?.path == "/v1/videos/video_own/content")
+        await #expect(throws: VideoClientError.outputTooLarge) { try await client.videoData(id: id, maximumBytes: 3, port: 8123, bearer: nil) }
+        VideoStubProtocol.headers = ["Content-Type": "text/html"]
+        await #expect(throws: VideoClientError.invalidResponse) { try await client.videoData(id: id, maximumBytes: 20, port: 8123, bearer: nil) }
+        VideoStubProtocol.headers = ["Content-Type": "video/mp4", "Content-Length": "100"]
+        await #expect(throws: VideoClientError.outputTooLarge) { try await client.videoData(id: id, maximumBytes: 20, port: 8123, bearer: nil) }
     }
 
     @Test("Duration presets include the shortest server-supported duration")
@@ -500,12 +567,14 @@ struct VideoClientTests {
 private final class VideoStubProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var requests: [URLRequest] = []
     nonisolated(unsafe) static var bodies: [Data] = []
+    nonisolated(unsafe) static var headers: [String: String] = ["Content-Type": "application/json"]
     nonisolated(unsafe) static var response: (Int, Data) = (200, Data())
 
     static func reset() {
         requests = []
         bodies = []
         response = (200, Data())
+        headers = ["Content-Type": "application/json"]
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -518,7 +587,7 @@ private final class VideoStubProtocol: URLProtocol, @unchecked Sendable {
             url: request.url!,
             statusCode: Self.response.0,
             httpVersion: "HTTP/1.1",
-            headerFields: ["Content-Type": "application/json"]
+            headerFields: Self.headers
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Self.response.1)

@@ -834,7 +834,8 @@ async def test_video_jobs_stay_queued_until_worker_is_free(
 
 
 @pytest.mark.asyncio
-async def test_delete_cancels_a_queued_job(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("pending_only", [False, True])
+async def test_delete_cancels_a_queued_job(monkeypatch: pytest.MonkeyPatch, pending_only) -> None:
     started = threading.Event()
     release = threading.Event()
     calls = 0
@@ -868,7 +869,7 @@ async def test_delete_cancels_a_queued_job(monkeypatch: pytest.MonkeyPatch) -> N
         input_reference=None,
     )
     assert (await video.retrieve_video(queued["id"]))["status"] == "queued"
-    deleted = await video.delete_video(queued["id"])
+    deleted = await video.delete_video(queued["id"], pending_only=pending_only)
     assert deleted["deleted"] is True
     release.set()
     for _ in range(200):
@@ -1015,3 +1016,54 @@ async def test_shutdown_is_bounded_and_stops_video_admission(
     assert video._jobs[created["id"]].generation_finished is True
     video.start_video_jobs()
     await video.delete_video(created["id"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested", ["ltx-2.3-mlx-q4", "notapalindrome/ltx23-mlx-av-q4"])
+async def test_video_job_keeps_exact_request_identity(monkeypatch, tmp_path, requested):
+    """Native task ownership checks require POST and GET to retain model identity."""
+    class FakeEngine:
+        model_name = "notapalindrome/ltx23-mlx-av-q4"
+
+        def generate(self, *, output_path, **kwargs):
+            output_path.write_bytes(b"test-mp4")
+
+    monkeypatch.setattr(video, "_video_engine", lambda model_name="": FakeEngine())
+    monkeypatch.setattr(video, "_jobs_root", tmp_path)
+    created = await video.create_video(
+        prompt="moon", model=requested, seconds="1", size="512x512",
+        seed=42, input_reference=None,
+    )
+    assert created["model"] == requested
+    for _ in range(200):
+        current = await video.retrieve_video(created["id"])
+        if current["status"] in ("completed", "failed"):
+            break
+        await asyncio.sleep(0.01)
+    assert current["status"] == "completed"
+    assert current["model"] == requested
+    assert current["id"] == created["id"]
+    await video.delete_video(created["id"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["completed", "failed", "in_progress"])
+async def test_pending_only_cancellation_preserves_nonqueued_job(monkeypatch, tmp_path, status):
+    # Simulate a client whose last observation was queued, but the server has
+    # already moved on by the time its cancellation arrives.
+    job = video._VideoJob(
+        id="video_" + "c" * 32, model="ltx-2.3-mlx-q4", prompt="moon",
+        seconds="1", size="512x512", status=status,
+    )
+    directory = tmp_path / job.id
+    directory.mkdir()
+    output = directory / "video.mp4"
+    output.write_bytes(b"preserve-result")
+    monkeypatch.setattr(video, "_jobs_root", tmp_path)
+    monkeypatch.setitem(video._jobs, job.id, job)
+    with pytest.raises(HTTPException) as exc:
+        await video.delete_video(job.id, pending_only=True)
+    assert exc.value.status_code == 409
+    assert video._jobs[job.id] is job
+    assert job.status == status
+    assert output.read_bytes() == b"preserve-result"

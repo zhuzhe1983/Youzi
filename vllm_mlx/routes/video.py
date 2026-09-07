@@ -1272,7 +1272,10 @@ async def create_video(
 
         job = _VideoJob(
             id=job_id,
-            model=model if (is_cogvideox or is_wan or is_ltx25) else "ltx-2.3-mlx-q4",
+            # Retain the resolved request identity, including an explicit HF ID.
+            # Job clients must be able to verify they got the requested engine,
+            # not a silently substituted default alias.
+            model=model,
             prompt=prompt,
             seconds=str(seconds_int),
             size=f"{width}x{height}",
@@ -1409,9 +1412,16 @@ async def list_videos(limit: int = Query(20, ge=1, le=100)):
 
 
 @router.delete("/v1/videos/{video_id}", dependencies=[Depends(verify_api_key)])
-async def delete_video(video_id: str):
+async def delete_video(video_id: str, pending_only: bool = False):
     with _jobs_lock:
         job = _jobs.get(video_id)
+        # A conversational Stop can race with completion after its last poll.
+        # Check under the same state lock as generation transitions so cleanup
+        # never turns into deletion of a completed/failed result.
+        if pending_only and job is not None and job.status != "queued":
+            raise HTTPException(
+                status_code=409, detail="video job is no longer queued"
+            )
         if job is not None and job.status == "in_progress":
             raise HTTPException(
                 status_code=409, detail="video generation is in progress"

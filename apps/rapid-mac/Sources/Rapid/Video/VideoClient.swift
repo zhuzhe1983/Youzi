@@ -411,6 +411,7 @@ enum VideoClientError: Error, LocalizedError, Equatable {
     case http(status: Int, message: String?)
     case cacheRemoval
     case invalidJobID
+    case outputTooLarge
     case invalidResponse
     case transport(String)
 
@@ -422,6 +423,8 @@ enum VideoClientError: Error, LocalizedError, Equatable {
             return message ?? "Video request failed (HTTP \(status))."
         case .cacheRemoval:
             return "Rapid couldn't remove the cached video. Check file access and try again."
+        case .outputTooLarge:
+            return "The video exceeds the local artifact size limit."
         case .invalidJobID:
             return "The video server returned an invalid job identifier."
         case .invalidResponse:
@@ -715,5 +718,64 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
 
     private func cacheURL(for id: String) throws -> URL {
         cacheDirectory.appendingPathComponent(try Self.cacheFileName(for: id))
+    }
+}
+
+extension VideoClient: YouziVideoToolClient {
+    /// Separate transport for conversational tools: no redirects, credentials
+    /// cannot leave loopback, no shared cookies/cache, finite network timeouts.
+    static let toolSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 60
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration, delegate: VideoToolNoRedirects(), delegateQueue: nil)
+    }()
+
+    func retrieve(id: String, port: Int, bearer: String?) async throws -> VideoJob {
+        _ = try Self.cacheFileName(for: id)
+        let job: VideoJob = try await decode(request(path: "v1/videos/\(id)", port: port, bearer: bearer))
+        guard job.id == id else { throw VideoClientError.invalidResponse }
+        return job
+    }
+
+    /// Atomic server-side queued-only cancellation. A just-completed result
+    /// must not be deleted because the caller's last poll still said queued.
+    func cancelPending(id: String, port: Int, bearer: String?) async throws {
+        _ = try Self.cacheFileName(for: id)
+        var request = request(path: "v1/videos/\(id)", port: port, bearer: bearer)
+        request.url?.append(queryItems: [URLQueryItem(name: "pending_only", value: "true")])
+        request.httpMethod = "DELETE"
+        _ = try await send(request)
+    }
+
+    /// No preview cache: a prior session's same-ID bytes must never satisfy a
+    /// conversation. Bound even chunked responses, before adding them to Data.
+    func videoData(id: String, maximumBytes: Int, port: Int, bearer: String?) async throws -> Data {
+        _ = try Self.cacheFileName(for: id)
+        guard maximumBytes > 0 else { throw VideoClientError.outputTooLarge }
+        let request = request(path: "v1/videos/\(id)/content", port: port, bearer: bearer)
+        let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
+        try Self.validate(response: response, data: nil)
+        guard response.url == request.url, response.mimeType == "video/mp4" else { throw VideoClientError.invalidResponse }
+        guard response.expectedContentLength <= maximumBytes else { throw VideoClientError.outputTooLarge }
+        var data = Data()
+        for try await byte in bytes {
+            if data.count % 16_384 == 0 { try Task.checkCancellation() }
+            guard data.count < maximumBytes else { throw VideoClientError.outputTooLarge }
+            data.append(byte)
+        }
+        return data
+    }
+}
+
+private final class VideoToolNoRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

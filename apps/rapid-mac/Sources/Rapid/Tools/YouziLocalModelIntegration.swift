@@ -74,6 +74,20 @@ extension YouziLocalModelTools {
                                  mime: artifact.kind == .image ? "image/png" : "audio/wav", data: data)
                 }
             },
+            video: { [weak server] input, entry in
+                let runner = YouziLocalVideoTool(client: VideoClient(session: VideoClient.toolSession), session: { [weak server] in
+                    guard let server, server.servingAlias != nil, let bearer = server.activeBearer else { return nil }
+                    return .init(epoch: server.activeSessionGeneration, port: server.activePort, bearer: bearer)
+                })
+                return try await runner.generate(input, entry: entry)
+            },
+            videoCapabilities: { [weak server] entry in
+                let runner = YouziLocalVideoTool(client: VideoClient(session: VideoClient.toolSession), session: { [weak server] in
+                    guard let server, server.servingAlias != nil, let bearer = server.activeBearer else { return nil }
+                    return .init(epoch: server.activeSessionGeneration, port: server.activePort, bearer: bearer)
+                })
+                return try await runner.describe(entry)
+            },
             voices: { [weak server] entry in
                 guard let server else { throw Failure.model_not_ready }
                 return try await AudioClient().voices(model: speechModelID(entry),

@@ -72,8 +72,9 @@ interactive smoke without changing pool membership.
   consent. No microphone capture permitted by this task. The callback crash fix
   is inherited; physical AEC/double-talk success is not established by mock tests.
 - ASR is utterance-window HTTP, not fully incremental ASR. LLM/TTS stream.
-- Native chat tools still lack video generation and audio/image interpretation;
-  do not claim the historical video multimodal chat request is complete.
+- Follow-up branch `youzi/chat-video-tool` implements native video generation;
+  see `.agents/handoffs/youzi-chat-video-tool.md` for verification/delivery state.
+  Real inference acceptance and audio/image interpretation tools remain open.
 - Audio runtime still has one STT and one TTS lane. UI does not promise multiple
   concurrent models in one audio lane; chat/image/video residency follows actual
   runtime capacity. Recommendations do not mutate pool membership.

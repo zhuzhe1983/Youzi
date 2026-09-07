@@ -7,6 +7,7 @@ import Testing
 struct YouziLocalModelToolsTests {
     @MainActor final class Fixture {
         let image = ModelEntry(alias: "local-image", hfRepo: "local/image", sizeOnDisk: "4 GiB", cached: true, kind: .image, imageCapability: .generation)
+        let video = ModelEntry(alias: "local-video", hfRepo: "local/video", sizeOnDisk: "8 GiB", cached: true, kind: .video, videoCapabilities: [.textToVideo, .imageToVideo])
         let speech = ModelEntry(alias: "local-voice", hfRepo: "local/voice", sizeOnDisk: "1 GiB", cached: true, kind: .audio, audioCapability: .speech)
         let missing = ModelEntry(alias: "missing", hfRepo: "local/missing", sizeOnDisk: nil, cached: false, kind: .image, imageCapability: .generation)
         var context = YouziLocalModelTools.Context(taskID: UUID(), projectID: nil)
@@ -20,6 +21,9 @@ struct YouziLocalModelToolsTests {
         var generations = 0
         var capturedSize: String?
         var capturedVoice: String?
+        var inspectedVideoModels: [String] = []
+        var capturedVideo: YouziLocalVideoTool.Input?
+        var videoHook: (() -> Void)?
         var saved: [UUID: (YouziLocalModelTools.Asset, YouziLocalModelTools.Context)] = [:]
         var loadFails = false
         let png = Data([137, 80, 78, 71, 13, 10, 26, 10, 0])
@@ -39,6 +43,21 @@ struct YouziLocalModelToolsTests {
             read: { [self] id, context in
                 guard let (asset, owner) = saved[id], owner.taskID == context.taskID else { throw YouziLocalModelTools.Failure.file_unavailable }
                 return asset
+            },
+            video: { [self] input, entry in
+                capturedVideo = input; generatedWith.append(entry.alias); generations += 1; videoHook?()
+                return Data([0, 0, 0, 20]) + Data("ftypisom0000".utf8)
+            },
+            videoCapabilities: { [self] entry in
+                inspectedVideoModels.append(entry.alias)
+                let json = """
+                {"model":"\(entry.alias)","family":"ltx-2.3","modes":["text-to-video"],"limits":{
+                "size":{"type":"fixed","values":["512x512"]},
+                "seconds":{"minimum":1,"maximum":4,"default":4},"fps":{"minimum":24,"maximum":24,"default":24,"fixed":true},
+                "frames":{"minimum":9,"maximum":121,"step":8,"offset":1},
+                "workload":{"metric":"pixel_frames","maximum":100000000,"dimension_rounding":"ceil_to_64"}}}
+                """
+                return try JSONDecoder().decode(VideoCapabilities.self, from: Data(json.utf8)).validated()
             }
         ), preferences: preferences)
         var snapshot: ModelResidencySnapshot {
@@ -260,6 +279,101 @@ struct YouziLocalModelToolsTests {
         #expect(f.saved.values.allSatisfy { $0.1.taskID == f.context.taskID })
     }
 
+    @Test("Native video function dispatch saves an MP4 to the originating task, not the newly selected task")
+    func videoWorkflow() async throws {
+        let f = Fixture(); f.additionalModels = [f.video]; f.ready = [f.video.alias]
+        let owner = f.context
+        f.videoHook = { f.context = .init(taskID: UUID(), projectID: nil) }
+        YouziResidentServicePreference.setAliases([f.video.alias], for: .video, in: f.preferences)
+        let registry = BuiltinToolRegistry(); registry.localModels = f.tools
+        let executor = NativeToolCallExecutor(registry: registry)
+        let call = ToolCall(id: "video-call", name: "youzi_generate_video", arguments: #"{"prompt":"A moonlit lake"}"#)
+        let result = await executor.execute(call, advertised: registry.definitions)
+        #expect(!result.isError && result.toolCallID == call.id)
+        #expect(f.loads == 0 && f.generatedWith == [f.video.alias])
+        #expect(f.capturedVideo?.size == nil && f.capturedVideo?.seconds == nil)
+        let saved = try #require(f.saved.values.first)
+        #expect(saved.0.kind == .video && saved.0.name.hasSuffix(".mp4"))
+        #expect(saved.1 == owner && saved.1.taskID != f.context.taskID)
+        #expect(try json(result)["artifact_id"] as? String == saved.0.id.uuidString)
+    }
+
+    @Test("Native capabilities dispatch exposes exact supported presets without loading")
+    func videoCapabilitiesDispatch() async throws {
+        let f = Fixture(); f.additionalModels = [f.video]; f.ready = [f.video.alias]
+        YouziResidentServicePreference.setAliases([f.video.alias], for: .video, in: f.preferences)
+        let registry = BuiltinToolRegistry(); registry.localModels = f.tools
+        let executor = NativeToolCallExecutor(registry: registry)
+        let call = ToolCall(id: "video-capabilities", name: "youzi_video_capabilities", arguments: "{}")
+        let result = await executor.execute(call, advertised: registry.definitions)
+        #expect(!result.isError && result.toolCallID == call.id)
+        let value = try json(result)
+        #expect(value["model"] as? String == f.video.alias)
+        let presets = try #require(value["presets"] as? [[String: Any]])
+        #expect(presets.first?["size"] as? String == "512x512")
+        #expect(presets.first?["seconds"] as? [Int] == [1, 2, 4])
+        #expect(f.inspectedVideoModels == [f.video.alias])
+        #expect(f.loads == 0 && f.generations == 0 && f.saved.isEmpty && f.tools.approval.pending == nil)
+    }
+
+    @Test("Video uses only the automatic pool or an explicitly approved on-demand model")
+    func videoPoolAndApproval() async throws {
+        let f = Fixture(); f.additionalModels = [f.video]
+        #expect(try await f.call("youzi_generate_video", ["prompt": "moon"]).content.contains("automatic_model_unavailable"))
+        let operation = Task { try await f.call("youzi_generate_video", ["model": f.video.alias, "prompt": "moon"]) }
+        let request = try await pending(f.tools.approval)
+        #expect(request.alias == f.video.alias && f.generations == 0)
+        f.tools.approval.resolve(id: request.id, allow: true)
+        #expect(try await !operation.value.isError && f.loads == 1)
+        #expect(YouziResidentServicePreference.aliases(for: .video, in: f.preferences).isEmpty)
+        #expect(f.saved.values.first?.0.kind == .video)
+    }
+
+    @Test("Video capabilities are read-only and invalid/spoofed calls never trigger loading")
+    func videoInvalidArguments() async throws {
+        let f = Fixture(); f.additionalModels = [f.video]
+        #expect(try await f.call("youzi_video_capabilities", ["model": f.video.alias]).content.contains("model_not_ready"))
+        let invalid: [[String: Any]] = [
+            ["approved": true], ["seconds": true], ["seconds": 1.5], ["seconds": 0],
+            ["reference_image_id": "/etc/passwd"], ["reference_image_id": UUID().uuidString],
+            ["size": "512x512\r\nx"], ["url": "https://example.com/reference.png"]
+        ]
+        for extra in invalid {
+            let args = ["model": f.video.alias, "prompt": "moon"].merging(extra) { _, new in new }
+            #expect(try await f.call("youzi_generate_video", args).isError)
+        }
+        #expect(f.loads == 0 && f.generations == 0 && f.tools.approval.pending == nil)
+    }
+
+    @Test("Video startup denial is not retried; cancelled output is never saved")
+    func videoDenialAndCancellation() async throws {
+        let f = Fixture(); f.additionalModels = [f.video]
+        let args: [String: Any] = ["model": f.video.alias, "prompt": "moon"]
+        let first = Task { try await f.call("youzi_generate_video", args) }
+        let request = try await pending(f.tools.approval)
+        f.tools.approval.resolve(id: request.id, allow: false)
+        #expect(try await first.value.failureKind == .userDeclined)
+        #expect(try await f.call("youzi_generate_video", args).failureKind == .userDeclined)
+        #expect(f.loads == 0 && f.generations == 0 && f.tools.approval.pending == nil)
+        f.context = .init(taskID: UUID(), projectID: nil); f.ready = [f.video.alias]
+        f.videoHook = { withUnsafeCurrentTask { $0?.cancel() } }
+        let cancelled = Task { try await f.call("youzi_generate_video", args) }
+        #expect(try await cancelled.value.content.contains("cancelled"))
+        #expect(f.saved.isEmpty)
+    }
+
+    @Test("Video references cannot read artifacts from a different task")
+    func videoReferenceScope() async throws {
+        let f = Fixture(); f.additionalModels = [f.video]; f.ready = [f.image.alias, f.video.alias]
+        let image = try await f.call("youzi_generate_image", ["model": f.image.alias, "prompt": "moon"])
+        let id = try #require(try json(image)["artifact_id"] as? String)
+        #expect(try await !f.call("youzi_generate_video", ["model": f.video.alias, "prompt": "moon", "reference_image_id": id]).isError)
+        #expect(f.capturedVideo?.reference?.id.uuidString == id)
+        f.context = .init(taskID: UUID(), projectID: nil)
+        #expect(try await f.call("youzi_generate_video", ["model": f.video.alias, "prompt": "moon", "reference_image_id": id]).isError)
+        #expect(f.generations == 2 && f.loads == 0)
+    }
+
     @Test("Model text cannot inject scripts or remote resources into the published book")
     func safeHTML() throws {
         let book = YouziStorybook.Document(title: "<script>alert(1)</script>", pages: [
@@ -329,7 +443,9 @@ struct YouziLocalModelToolsTests {
         let definitions = YouziLocalModelTools.definitions
         let encoded = try JSONEncoder().encode(definitions)
         #expect(try JSONDecoder().decode([ToolDefinition].self, from: encoded) == definitions)
-        #expect(definitions.count == 6)
+        #expect(definitions.count == 8)
+        #expect(definitions.contains { $0.function.name == "youzi_generate_video" })
+        #expect(definitions.contains { $0.function.name == "youzi_video_capabilities" })
         #expect(ChatViewModel.toolExecutionBudget(enabled: definitions) == 24)
         #expect(ChatViewModel.toolExecutionBudget(enabled: [WebSearchTool.definition]) == 3)
         let messages = ChatViewModel.addingInstructionLayers(to: [ChatMessage(role: .user, content: "book")], ambientPreamble: nil,

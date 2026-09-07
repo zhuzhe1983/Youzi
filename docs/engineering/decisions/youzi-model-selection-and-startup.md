@@ -123,10 +123,12 @@ metadata. Visual QA is synthetic, uses isolated preferences, and requires actual
 inspection of the rendered Chinese/English images.
 
 Routing mocks, offline audio callback tests and rendered UI are not physical
-full-duplex or multi-model inference acceptance. Native video chat tools remain a
-separate pending integration; existing video workspace/API support is not proof
-of video tool use in chat. Full-duplex AEC requires attended speaker/microphone
-validation; ASR is still utterance/window-based, not fully incremental recognition.
+full-duplex or multi-model inference acceptance. Native video chat generation is
+implemented in the follow-up [conversation video tools](youzi-conversation-video-tools.md),
+with bounded owned-job polling and captured-task MP4 persistence. Synthetic tool
+tests are not proof of real LLM tool selection or video generation/playback.
+Full-duplex AEC requires attended speaker/microphone validation; ASR is still
+utterance/window-based, not fully incremental recognition.
 
 ### Video workspace capability boundary
 
