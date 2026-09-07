@@ -64,29 +64,20 @@ final class YouziLiveAudioEngine {
             let capture = try YouziCaptureConverter(format: format, continuation: continuation)
             resources.engine.attach(resources.player)
             resources.engine.connect(resources.player, to: resources.engine.mainMixerNode, format: YouziPCMCodec.playbackFormat)
-            input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(format.sampleRate * 0.1), format: format) { buffer, _ in
-                capture.consume(buffer)
-            }
+            input.installTap(
+                onBus: 0, bufferSize: AVAudioFrameCount(format.sampleRate * 0.1), format: format,
+                block: YouziLiveAudioCallbacks.inputTap(capture)
+            )
             resources.tapInstalled = true
             session = resources
+            let deviceChanged = makeDeviceChangeHandler()
             resources.observer = NotificationCenter.default.addObserver(
-                forName: .AVAudioEngineConfigurationChange, object: resources.engine, queue: nil
-            ) { [weak self] _ in
-                // SDK forbids destroying the engine on the notification's
-                // internal queue. Always leave that queue before teardown.
-                Task { @MainActor [weak self] in
-                    guard let self, self.epoch == startingEpoch else { return }
-                    self.fail(YouziLiveAudioError.deviceChanged.localizedDescription)
-                }
-            }
+                forName: .AVAudioEngineConfigurationChange, object: resources.engine, queue: nil,
+                using: YouziLiveAudioCallbacks.configurationChange(deviceChanged)
+            )
             // The engine notification covers format changes. HAL default-device
             // listeners also catch route switches that keep the same format.
-            try resources.observeDefaultDevices { [weak self] in
-                Task { @MainActor [weak self] in
-                    guard let self, self.epoch == startingEpoch else { return }
-                    self.fail(YouziLiveAudioError.deviceChanged.localizedDescription)
-                }
-            }
+            try resources.observeDefaultDevices(onChange: deviceChanged)
             resources.engine.prepare()
             try Task.checkCancellation()
             try resources.engine.start()
@@ -120,10 +111,8 @@ final class YouziLiveAudioEngine {
         guard sampleRate == YouziPCMCodec.sampleRate else { throw YouziLiveAudioError.invalidPCM }
         if data.isEmpty { return }
         let samples = try YouziPCMCodec.decode(data)
-        let ticket = try playback.reserve(frames: samples.count)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: YouziPCMCodec.playbackFormat, frameCapacity: AVAudioFrameCount(samples.count)),
               let channel = buffer.floatChannelData?[0] else {
-            _ = playback.complete(ticket)
             throw YouziLiveAudioError.invalidPCM
         }
         buffer.frameLength = AVAudioFrameCount(samples.count)
@@ -132,13 +121,29 @@ final class YouziLiveAudioEngine {
         }
         // dataPlayedBack accounts for downstream/device latency. The default
         // completion is merely dataConsumed and can fire before audible output.
-        session.player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, self.playback.complete(ticket) else { return }
-                self.onPlaybackDrained?()
-            }
-        }
+        session.player.scheduleBuffer(
+            buffer, completionCallbackType: .dataPlayedBack,
+            completionHandler: try reservePlaybackCompletion(frames: samples.count)
+        )
         if !session.player.isPlaying { session.player.play() }
+    }
+
+    /// The same reservation/callback path is exercised without opening devices
+    /// in regression tests. UI state stays on MainActor; the SDK entry does not.
+    func reservePlaybackCompletion(frames: Int) throws -> YouziLiveAudioCallbacks.PlaybackCompletion {
+        let ticket = try playback.reserve(frames: frames)
+        return YouziLiveAudioCallbacks.playbackCompletion { [weak self] in
+            guard let self, self.playback.complete(ticket) else { return }
+            self.onPlaybackDrained?()
+        }
+    }
+
+    func makeDeviceChangeHandler() -> @Sendable () -> Void {
+        let observedEpoch = epoch
+        return YouziLiveAudioCallbacks.deliverOnMainActor { [weak self] in
+            guard let self, self.epoch == observedEpoch else { return }
+            self.fail(YouziLiveAudioError.deviceChanged.localizedDescription)
+        }
     }
 
     func interruptPlayback() {

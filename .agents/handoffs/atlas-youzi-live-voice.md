@@ -5,6 +5,36 @@ Implementation branch: `atlas/youzi-live-voice-assessment`, based on
 `atlas/youzi-live-voice-delivery`, integrating voicefc49ece5 and tray8be52684. Atlas integration on the local Mac;
 `.agents/roles/` is absent. Main is not changed by this task.
 
+## Incident / current owner (supersedes the earlier delivery confidence)
+
+On 2026-09-07 the installed `candidate-8be52684` crashed when real microphone
+capture began: the AVFAudio tap's Objective-C block inherited MainActor isolation
+and trapped on `RealtimeMessenger.mServiceQueue`. The earlier mock/HTTP passes
+were real but **insufficient to qualify device startup**. Do not reinstall that
+candidate as a verified voice build or describe AEC/full duplex as accepted.
+
+Atlas/local Mac is repairing it on `atlas/youzi-live-voice-callback-fix`, based on
+pushed delivery commit `6c81486e`. Explicit nonisolated Sendable callback factories
+cover tap entry, playback completion and device-change delivery, preserving
+MainActor UI/ledger access, weak owners, bounded PCM and stop epochs. No APIs,
+models, settings, keychain, main branch or release metadata are being changed.
+
+The real offline AVFAudio negative control reproduces the reported tap SIGTRAP;
+the fixed bridge passes. Direct background Swift invocation alone did not
+reproduce it. Playback completion is additionally exercised with software queue
+and real offline ObjC callback tests, but **offline has no hardware presentation**:
+its fixture uses dataConsumed; production retains dataPlayedBack. Full focused
+Release regression passed: 73 tests in 10 suites (including 8 new callback tests).
+Both optimized and unoptimized standalone real-ObjC probes reproduce legacy
+SIGTRAP and pass the fixed callback. Native Release build passed. These tests
+open no microphone/speaker and do not qualify acoustic AEC. Complete replacement
+client packaging/installation is still pending and will be recorded separately.
+
+Receiving Pixel/Atlas: [full-duplex assessment](../../docs/engineering/decisions/youzi-full-duplex-assessment.md)
+records the current RMS-only insertion gate, native AEC/HAL VAD route, separate
+half-duplex tail gap, device/near-end/double-talk acceptance matrix and unmeasured
+latency targets. This is a follow-up proposal, not shipped AEC/VAD changes.
+
 ## Implementation
 - Optional Qwen streaming PCM on the existing authenticated speech endpoint;
   owner-thread model iteration/cleanup, bounded transport and safe disconnect.

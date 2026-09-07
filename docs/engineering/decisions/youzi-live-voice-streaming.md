@@ -114,3 +114,25 @@ not merely skip them after sentence flush. Text replacement, removal, reopening
 or revoked speakability invalidates queued/in-flight PCM and hands off to text
 without cancelling the correcting chat. Repeated unchanged completed snapshots
 must remain idempotent. Regression tests cover both completed and partial cases.
+
+## 2026-09-07 callback crash correction
+
+The delivered candidate trapped at the input tap's Objective-C callback entry
+on `RealtimeMessenger.mServiceQueue`. `@MainActor` isolation inherited by an
+unannotated AVFAudio block must not reach that queue; a MainActor Task *inside*
+the block does not repair its entry isolation. The playback completion had the
+same unsafe construction pattern.
+
+`YouziLiveAudioCallbacks` now constructs explicitly nonisolated, Sendable SDK
+entrypoints. The capture converter still consumes/copies borrowed PCM on its
+serial tap, sending only bounded owned arrays. Playback/device events always
+hop to MainActor before touching UI/ledger state or shutting down the engine;
+stop/restart epochs and weak ownership remain enforced.
+
+Earlier protocol-mock and HTTP gates did not cover this bridge and did not
+qualify the installed microphone path. Even directly calling the legacy Swift
+closure from a background queue failed to reproduce it. A real **offline
+AVFAudio tap through the Objective-C thunk** did reproduce the exact queue /
+executor-assert signature. Keep this boundary in regression tests, in addition
+to queue/ownership/overflow checks. Offline rendering never qualifies acoustic
+AEC; see [the full-duplex assessment](youzi-full-duplex-assessment.md).

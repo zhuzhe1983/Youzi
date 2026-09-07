@@ -147,3 +147,30 @@ that installation actually succeeded. The warning was dismissed through its
 session-only UI action; no tracking preferences were cleared. Harbor should
 separately teach this heuristic about candidate/build identity. This is not a
 streaming inference failure or evidence that the old app is still running.
+
+
+## Mandatory native callback regression (2026-09-07 incident)
+
+Before accepting another live-voice client, run the actual AVFAudio Objective-C
+callback bridge, not only the injectable controller or native HTTP fixtures:
+
+```sh
+RAPID_DESKTOP_NO_PORT_SWEEP=1 bash apps/rapid-mac/scripts/verify-live-audio-callbacks.sh
+RAPID_DESKTOP_NO_PORT_SWEEP=1 swift test --package-path apps/rapid-mac -c release \
+  --filter 'YouziLive|LiveVoice|YouziTray|MenuBarStatus|YouziModelOccupancy'
+```
+
+The standalone script compiles the production engine/callback files with Swift6
+and optimization. Optional `--negative-controls` deliberately crashes a **child
+probe**, expecting SIGTRAP from the pre-fix tap pattern; it may create a system
+diagnostic report. It then requires the fixed path to exit0. No microphone,
+speaker, model service, credentials or application preferences are used.
+
+The new callback suite covers the real tap/ObjC bridge across three offline
+engine lifecycles; direct non-main callback execution; borrowed PCM copying;
+overflow/shutdown; playback queue bounds/duplicates/stale epochs; notification
+posting queues; and released owners. Offline player completion uses dataConsumed
+only to exercise the block ABI; the product still waits for dataPlayedBack.
+Do not mistake either offline rendering or generated HTTP audio for a physical
+speaker/AEC qualification. The earlier installed candidate crashed despite those
+HTTP/controller gates passing. See the full-duplex assessment for attended gates.
