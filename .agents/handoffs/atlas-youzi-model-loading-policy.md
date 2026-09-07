@@ -79,3 +79,47 @@ interactive smoke without changing pool membership.
   runtime capacity. Recommendations do not mutate pool membership.
 - Public release/main integration needs human review/authorization after local
   acceptance. No performance/latency improvement is claimed without measurement.
+
+## Local delivery completed (2026-09-07 20:18 CST)
+
+- Source commit `8e3b51d8`, pushed to the task branch. Full native+sidecar builder
+  ran on a clean source tree, with `BUNDLE_MODEL=0` (no bundled weight download),
+  no `SKIP_SIDECAR`, and `RAPID_DESKTOP_NO_PORT_SWEEP=1`.
+- Installed **0.14.4 (174), candidate-8e3b51d8** at the existing Applications path.
+  Executable SHA-256:
+  `1cb5c4137c7ec0fbea0cfb39b26bf515768236c7879feec4fa8d3aee68a81a91`.
+- Old app backup: `~/Library/Application Support/Youzi/Client Backups/0.14.4-before-model-policy-20260907-201817/`.
+  Both verified copied backup and original installed bundle retained. No runtime
+  override modified: the existing 0.13.3 override is older than the 0.14.4 bundle.
+- Strict deep codesign passed for candidate, backup, staged replacement and
+  installed app. Required Sparkle executable-relative rpath is present.
+- Isolated `/tmp` smoke used bundled Python `-P -B`, candidate-only PYTHONPATH,
+  no user site packages: 10 package/route imports from the bundle, 5 text endpoint
+  routing boundaries, exact-model rejection and authenticated live policy update
+  passed. No weights loaded by this probe. Package `__init__.py` is intentionally
+  retained; other exercised sidecar modules imported sourceless `.pyc`.
+- Installed CLI version is 0.14.4. Offline `models --cached --json` parsed **41
+  cache inventory entries**; this is inventory, not 41 loaded model services.
+- Before replacement: existing chat service `/health` and `/health/ready` returned
+  200; authenticated status reported zero running/waiting requests, all observed
+  resident/audio lanes idle. Original app and supervised child quit normally.
+- New client PID was 77546 at verification (never reuse without rechecking).
+  Survived more than 3 minutes; no new Rapid crash reports after replacement.
+  Confirmed launch environment disables port sweeping. Preferences still have an
+  empty chat pool and disabled automatic startup; **no new inference service was
+  started**, as intended. Do not describe this as an HTTP-ready inference server.
+
+### Acceptance blocked by attended environment, not claimed as passed
+
+The Mac reports `CGSSessionScreenIsLocked=1`. Native UI control has no visible
+window; a separate accessibility query is denied. No unlock/permission bypass
+was attempted. Post-install real GUI settings Save, explicit model startup and
+real inference still require the user to unlock. Earlier rendered SwiftUI and
+bundled mock-route passes are not substitutes for those interactions. Physical
+full-duplex/AEC and native video-chat-tool gaps above remain open.
+
+Next: after unlock, inspect model settings; have the user choose the desired
+chat pool (or explicitly reuse the previously running chat model without changing
+membership). Exercise Save against the running service and confirm default vs
+exact Responses behavior. Perform attended voice acceptance only after explicit
+microphone consent. Pixel owns visual acceptance; integration owns tool/API gaps.
