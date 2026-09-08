@@ -72,3 +72,33 @@ tokens. Cached prompt tokens and output lengths differed. See the performance
 note for exact payload conditions, numbers and reproduction artifact location.
 No source or user setting was changed. The earlier13-second first-text delay's
 cause remains unproven; the layout stall remains a separate confirmed symptom.
+
+
+## Local candidate opened — September 8, 2026
+
+The user requested the latest **local build**, not a GitHub release. The installed
+`/Applications` bundle was still `candidate-8b11044e`; the transcript-stall changes
+had previously only been compiled/tested. A fresh complete candidate was built
+from `f12430cd` with `RAPID_CANDIDATE_IDENTITY=candidate-f12430cd` and
+`FORCE_SIDECAR_REBUILD=1`, then opened directly from this worktree's
+`apps/rapid-mac/build/Rapid-MLX Desktop.app`. The newer latency-report commit
+`3da34caf` has no `apps/rapid-mac` or `vllm_mlx` product diff against this source.
+
+Verified before launch: strict deep codesign, packaged resources, bundled CLI
+startup, fixed real AVFAudio offline callback bridge, and the Release selection
+(74 discovered / 71 passed / 3 opt-in skipped, 10 suites). No negative-control
+crash or microphone/speaker test was run in this delivery.
+
+Native UI opened the simple-mode new-task page and exposes `LiveVoice.Open`.
+The owned service executable resolves inside the new bundle, whose VERSION is
+0.14.4, rather than the older runtime-override. `/healthz` returned healthy,
+ready and chat-model-loaded; live OpenAPI now includes `AudioSpeechRequest.stream`.
+The same app/service remained present at a subsequent readiness check. Schema and
+readiness are not physical playback or installed-GUI streaming acceptance.
+
+The old installed app was **not overwritten**, no model files/preferences were
+edited, and no microphone, live-voice Start, volume or permission action was taken.
+Launch explicitly used `open --env RAPID_DESKTOP_NO_PORT_SWEEP=1`. Temporary logs
+and process/health evidence: `/tmp/youzi-client-local-f12430cd-20260908/`.
+Remaining action: user-attended voice playback/Stop responsiveness on this exact
+candidate. Keep sentence-prefetch and acoustic AEC acceptance limits above.

@@ -238,3 +238,20 @@ external process deadline and **already-serving chat/STT/TTS models only**. The
 first two latency fields use the same `chat.send` origin; completion remains
 relative to test-session start. Simulated capture and drain do not qualify actual
 microphone/speaker, permission handling or acoustic echo cancellation.
+
+
+### Latest local test launch — September 8, 2026
+
+`candidate-f12430cd` (0.14.4/build174) was freshly packaged with its paired
+0.14.4 sidecar and opened from the `youzi/live-voice-stall` worktree's
+`apps/rapid-mac/build/Rapid-MLX Desktop.app`. `/Applications` remains the older
+`candidate-8b11044e`; do not confuse that installed path with the active test app.
+No installation replacement, main merge or release was performed.
+
+Repeat the high-signal checks before another launch: strict deep codesign and
+resource verification; bundled CLI import/startup; explicit no-port-sweep launch;
+owned native/backend executable paths; `/healthz` healthy/ready/model-loaded;
+and the live speech schema containing `stream`. All passed for this launch.
+The native window rendered with the voice entry available; Start/microphone were
+left untouched. This validates launch/readiness, not acoustic or full-duplex
+acceptance. Build/test evidence and remaining work are in the task handoff.
