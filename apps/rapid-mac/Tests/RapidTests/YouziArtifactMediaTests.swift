@@ -412,4 +412,92 @@ struct YouziArtifactMediaTests {
         #expect(playerView.player == nil)
     }
 
+    @Test("Isolated chat artifact visual QA", .enabled(if: ProcessInfo.processInfo.environment["YOUZI_CHAT_ARTIFACT_VISUAL_QA"] == "1"))
+    @MainActor func visualChatArtifacts() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = root.appendingPathComponent("image.png")
+        let video = root.appendingPathComponent("video.mov")
+        let audio = root.appendingPathComponent("narration.wav")
+        let html = root.appendingPathComponent("storybook.html")
+        try writePNG(to: image)
+        try await writeVideo(to: video)
+        do {
+            let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 24000, channels: 1))
+            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 24000))
+            buffer.frameLength = 24000
+            buffer.floatChannelData?[0].initialize(repeating: 0, count: 24000)
+            try AVAudioFile(forWriting: audio, settings: format.settings).write(from: buffer)
+        }
+        try Data("<!doctype html><html lang=\"en\"><title>Fixture</title><p>Synthetic storybook</p></html>".utf8).write(to: html)
+        let store = YouziDomainStore(fileURL: root.appendingPathComponent("domain.json"))
+        let access = YouziWorkspaceAccessCoordinator(managedRoot: root.appendingPathComponent("workspaces"))
+        let files = YouziManagedFileStore(root: root.appendingPathComponent("files"), workspaceAccess: access)
+        let product = YouziProductModel(store: store, workspaceAccess: access, fileStore: files)
+        let draft = try #require(product.createTaskDraft(title: "Synthetic chat QA", request: "Create local media"))
+        let conversationID = UUID()
+        _ = try #require(product.beginTaskExecution(taskID: draft.id, conversationID: conversationID))
+        let suite = "youzi-chat-visual-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let i18n = YouziI18nConfig(defaults: defaults)
+        i18n.language = .zhHans
+        let host = NSHostingView(rootView: AnyView(EmptyView()))
+        let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: 620, height: 740),
+            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = "Youzi Chat QA — synthetic fixtures"
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFrontRegardless()
+        defer { window.close() }
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("youzi-chat-artifact-visual-qa")
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let fixtures: [(String, YouziArtifactKind, URL)] = [
+            ("youzi_generate_image", .image, image), ("youzi_synthesize_speech", .audio, audio),
+            ("youzi_generate_video", .video, video), ("youzi_create_storybook", .document, html)
+        ]
+        for (tool, kind, url) in fixtures {
+            let artifact = try #require(product.createArtifact(data: Data(contentsOf: url), named: url.lastPathComponent,
+                kind: kind, taskID: draft.id))
+            let call = ToolCall(id: "image-call", name: tool, arguments: "{}")
+            // Persist/restore the receipt just like reopening a historical chat.
+            let result = try JSONDecoder().decode(ChatMessage.self, from:
+                JSONEncoder().encode(YouziChatArtifactTests().receipt(artifact)))
+            #expect(YouziChatArtifactReceipt.resolve(call: call, result: result, taskID: draft.id,
+                artifact: product.artifact(id:))?.id == artifact.id)
+            for pending in [true, false] {
+                host.rootView = AnyView(
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text(i18n.text(zh: "请帮我生成多媒体内容", en: "Please create local media")).font(.title3)
+                            ToolCallChip(call: call, result: pending ? nil : result)
+                            YouziChatArtifactCard(call: call, result: pending ? nil : result, conversationID: conversationID)
+                            Text(i18n.text(zh: "正在处理…", en: "Working…")).foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                        }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .background(RapidTheme.surfaceCanvas)
+                    .modifier(YouziChatMediaPresentation(conversationID: conversationID))
+                    .environment(product).environment(i18n).defaultAppStorage(defaults)
+                )
+                try await Task.sleep(for: .milliseconds(700))
+                host.layoutSubtreeIfNeeded()
+                let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try #require(bitmap.representation(using: .png, properties: [:])).write(to:
+                    output.appendingPathComponent("chat-\(kind.rawValue)-\(pending ? "pending" : "complete").png"))
+            }
+            i18n.language = .en
+            window.setContentSize(CGSize(width: 320, height: 740))
+            try await Task.sleep(for: .milliseconds(400))
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try #require(bitmap.representation(using: .png, properties: [:])).write(to:
+                output.appendingPathComponent("chat-\(kind.rawValue)-narrow-en.png"))
+            i18n.language = .zhHans
+            window.setContentSize(CGSize(width: 620, height: 740))
+        }
+    }
+
 }

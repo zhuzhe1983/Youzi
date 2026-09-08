@@ -2634,7 +2634,17 @@ async def _load_dynamic_resident_model(
         # Dynamic loads are explicit operator/app requests. Materialize the
         # lazy mflux weights before returning so "resident" and budget usage
         # have their literal meanings on the control-plane response.
-        await asyncio.to_thread(engine.ensure_resident, mode=image_mode)
+        from functools import partial
+
+        from .routes._async_utils import run_to_completion
+
+        try:
+            await run_to_completion(partial(engine.ensure_resident, mode=image_mode))
+        except BaseException:
+            # A canceled/failed preload must not orphan model weights or their
+            # owning worker outside the residency manager's accounting.
+            await engine.stop()
+            raise
     elif modality == "text-diffusion":
         from .runtime.diffusion_lane import DiffusionEngine
 

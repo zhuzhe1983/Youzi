@@ -25,6 +25,7 @@ struct YouziLocalModelToolsTests {
         var capturedVideo: YouziLocalVideoTool.Input?
         var videoHook: (() -> Void)?
         var saved: [UUID: (YouziLocalModelTools.Asset, YouziLocalModelTools.Context)] = [:]
+        var imageError: ImageClientError?
         var loadFails = false
         let png = Data([137, 80, 78, 71, 13, 10, 26, 10, 0])
         let wav = Data("RIFF0000WAVE0000".utf8)
@@ -32,7 +33,7 @@ struct YouziLocalModelToolsTests {
             catalog: { [self] in [image, speech, missing] + additionalModels },
             snapshot: { [self] in snapshot },
             load: { [self] entry in loads += 1; if loadFails { return false }; ready.insert(entry.alias); return true },
-            image: { [self] _, entry, size in generatedWith.append(entry.alias); generations += 1; capturedSize = size; return png },
+            image: { [self] _, entry, size in generatedWith.append(entry.alias); generations += 1; capturedSize = size; if let imageError { throw imageError }; return png },
             speech: { [self] _, entry, voice in generatedWith.append(entry.alias); generations += 1; capturedVoice = voice; return SynthesizedAudio(data: wav, contentType: "audio/wav") },
             context: { [self] in context },
             save: { [self] data, name, _, kind, context in
@@ -216,6 +217,24 @@ struct YouziLocalModelToolsTests {
         let second = try await pending(f.tools.approval)
         f.tools.approval.resolve(id: second.id, allow: true)
         #expect(try await !next.value.isError)
+    }
+
+    @Test("Image runtime failures remain actionable without leaking the server body")
+    func imageRuntimeDiagnostic() async throws {
+        let f = Fixture()
+        f.ready.insert(f.image.alias)
+        f.imageError = .http(status: 500, message: "There is no Stream(gpu, 5) in current thread. /private/secret sk-private")
+        let result = try await f.call("youzi_generate_image", ["model": f.image.alias, "prompt": "a red square"])
+        #expect(result.isError && result.content.contains("image_worker_failed"))
+        #expect(!result.content.contains("/private") && !result.content.contains("sk-private"))
+        #expect(f.saved.isEmpty && f.generations == 1)
+        for chinese in [true, false] {
+            let text = try #require(YouziLocalModelTools.failureMessage(content: result.content, chinese: chinese))
+            #expect(!text.contains("secret") && !text.contains("sk-private"))
+        }
+        #expect(YouziLocalModelTools.imageFailure(.emptyResponse) == .image_empty_output)
+        #expect(YouziLocalModelTools.imageFailure(.http(status: 400, message: "bad size")) == .image_generation_failed)
+        #expect(YouziLocalModelTools.imageFailure(.notReady) == .model_not_ready)
     }
 
     @Test("Cancelling approval releases the tool and never loads a model")

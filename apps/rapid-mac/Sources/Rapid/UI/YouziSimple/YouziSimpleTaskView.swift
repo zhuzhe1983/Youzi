@@ -65,6 +65,7 @@ struct YouziSimpleTaskView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(RapidTheme.surfaceCanvas)
+        .modifier(YouziChatMediaPresentation(conversationID: chat.activeConversationID))
         .accessibilityIdentifier("YouziSimple.Surface.newTask")
         .modifier(YouziLiveVoicePresentation(
             chat: chat, server: server, alias: assistantAlias,
@@ -286,6 +287,7 @@ struct YouziSimpleTaskView: View {
                     if let calls = message.toolCalls, !calls.isEmpty {
                         ForEach(calls) { call in
                             ToolCallChip(call: call, result: toolResults[call.id])
+                            YouziChatArtifactCard(call: call, result: toolResults[call.id], conversationID: chat.activeConversationID)
                             if let result = toolResults[call.id],
                                SimpleTranscriptPresentation.hasFakeIPFailure(result) {
                                 Text(i18n.text(zh: "域名返回代理 Fake-IP，当前安全策略阻止了访问。若使用可信本机代理，请在「安全中心」开启「兼容本机代理」后重试。", en: "DNS returned a proxy Fake-IP blocked by the current policy. For a trusted local proxy, enable Local Proxy Compatibility in Security and retry."))

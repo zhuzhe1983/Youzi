@@ -9,8 +9,11 @@ aliases; ``vllm_mlx/image/engine.py`` owns the backend pipeline and the
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import importlib.util
 import sys
+import threading
 
 from ..image.engine import (
     ImageGenerationCancelled,
@@ -70,6 +73,30 @@ class ImageEngine:
     def __init__(self, model_name: str) -> None:
         self.model_name = model_name
         self._engine = ImageGenerationEngine(model_name)
+        # A serialization lock is NOT thread affinity: asyncio.to_thread may
+        # choose a different thread for each request. MLX arrays/compiled graphs
+        # retain their creating stream. Keep load, render, encoding and release
+        # on one owner for the entire model lifetime. Do not borrow the primary
+        # chat/audio worker: a long denoise job would block token/audio streaming,
+        # and switching chat models could destroy the image model's owner.
+        self._worker_lock = threading.Lock()
+        self._worker: concurrent.futures.ThreadPoolExecutor | None = None
+        self._closed = False
+        self._stop_future: concurrent.futures.Future | None = None
+
+    def _execute(self, func, /, *args, **kwargs):
+        """Blocking adapter boundary; route cancellation drains this entire call."""
+        with self._worker_lock:
+            if self._closed:
+                raise ImageRuntimeError("Image model has been stopped. Load it again before generating.")
+            if self._worker is None:
+                self._worker = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="mlx-image"
+                )
+            future = self._worker.submit(func, *args, **kwargs)
+        # Never hold the submission lock during GPU work: cancel/progress and
+        # stop must stay responsive, while queued operations retain FIFO order.
+        return future.result()
 
     @property
     def is_resident(self) -> bool:
@@ -84,7 +111,7 @@ class ImageEngine:
         # edit-only checkpoints must not be forced through the generation
         # loader when an older client omits the newly optional mode field.
         for_edit = None if mode is None else mode == "editing"
-        self._engine._ensure_loaded(for_edit=for_edit)  # noqa: SLF001
+        self._execute(self._engine._ensure_loaded, for_edit=for_edit)  # noqa: SLF001
 
     def get_stats(self) -> dict:
         """Route-facing engine surface (mirrors ``BaseEngine.get_stats``).
@@ -146,7 +173,8 @@ class ImageEngine:
         image_paths: list[str] | None = None,
     ) -> bytes:
         """Generate one image; returns PNG bytes. Raises ``ImageRuntimeError``."""
-        return self._engine.generate(
+        return self._execute(
+            self._engine.generate,
             prompt=prompt,
             width=width,
             height=height,
@@ -161,6 +189,35 @@ class ImageEngine:
         """Image weights load lazily; startup must not trigger a multi-GB pull."""
 
     async def stop(self) -> None:
-        """Release the backing model reference (mflux holds no async resources)."""
-        self._engine._model = None  # noqa: SLF001 — internal drop for restart hygiene
+        """Drain accepted work, release weights on their owner, then retire it."""
+        with self._worker_lock:
+            self._closed = True
+            if self._worker is None:
+                return
+            if self._stop_future is None:
+                # The FIFO cleanup follows every already accepted render/load.
+                self._stop_future = self._worker.submit(self._release)
+                self._worker.shutdown(wait=False)
+            stopped = self._stop_future
+        # Keep residency cleanup alive under repeated caller cancellation. The
+        # concurrent Future is owned by the worker, not an asyncio task that a
+        # server-wide all_tasks() cancellation can prematurely mark complete.
+        waiting = asyncio.wrap_future(stopped)
+        try:
+            await asyncio.shield(waiting)
+        except asyncio.CancelledError:
+            while not waiting.done():
+                try:
+                    await asyncio.shield(waiting)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not waiting.cancelled():
+                waiting.exception()
+            raise
+
+    def _release(self) -> None:
+        self._engine._model = None  # noqa: SLF001 — owner-thread destruction
         self._engine._loaded_mode = None  # noqa: SLF001
+        self._engine._prompt_tokenizer = None  # noqa: SLF001

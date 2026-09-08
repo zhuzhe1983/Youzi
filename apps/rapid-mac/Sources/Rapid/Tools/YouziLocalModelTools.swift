@@ -38,6 +38,7 @@ final class YouziLocalModelTools {
         case catalog_unavailable, invalid_arguments, model_not_downloaded, model_not_ready
         case capability_not_supported, user_declined, load_failed, cancelled, automatic_model_unavailable
         case task_unavailable, file_unavailable, generation_failed, output_too_large, invalid_voice, video_timeout
+        case image_worker_failed, image_generation_failed, image_empty_output
     }
     let approval: YouziModelApprovalStore
     let dependencies: Dependencies
@@ -234,6 +235,9 @@ final class YouziLocalModelTools {
             return savedResult(saved, id: call.id)
         } catch is CancellationError { return failure(.cancelled, id: call.id) }
         catch let error as Failure { return failure(error, id: call.id) }
+        catch let error as ImageClientError {
+            return failure(Task.isCancelled ? .cancelled : Self.imageFailure(error), id: call.id)
+        }
         catch { return failure(.generation_failed, id: call.id) } // Never echo raw runtime paths, keys or responses.
     }
 
@@ -292,12 +296,28 @@ final class YouziLocalModelTools {
         return ToolCallResult(toolCallID: id, content: String(decoding: data, as: UTF8.self))
     }
 
+    /// Inspect typed image errors locally; never persist the raw server body.
+    static func imageFailure(_ error: ImageClientError) -> Failure {
+        switch error {
+        case .notReady: return .model_not_ready
+        case .emptyResponse: return .image_empty_output
+        case let .http(status, message) where status >= 500:
+            let detail = message?.lowercased() ?? ""
+            return detail.contains("there is no stream(") && detail.contains("in current thread")
+                ? .image_worker_failed : .image_generation_failed
+        default: return .image_generation_failed
+        }
+    }
+
     /// Only allowlisted codes become UI copy; raw server messages/paths/keys never do.
     static func failureMessage(content: String, chinese: Bool) -> String? {
         guard content.utf8.count <= 128_000,
               let object = try? JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any],
               let code = object["error"] as? String else { return nil }
         switch code {
+        case "image_worker_failed": return chinese ? "图片模型的 GPU 执行线程异常，未生成图片。这不是提示词问题；请更新客户端，并重新加载图片模型后再试。" : "The image model's GPU worker failed; no image was generated. This is not a prompt error. Update the client and reload the image model before retrying."
+        case "image_generation_failed": return chinese ? "图片生成服务未完成请求，未保存图片。请检查图片模型状态和服务日志，不要连续重复提交。" : "The image service could not finish; no image was saved. Check the image model and service logs instead of repeatedly resubmitting."
+        case "image_empty_output": return chinese ? "图片服务没有返回图片，未保存成果。请检查图片模型状态。" : "The image service returned no image; no artifact was saved. Check the image model's status."
         case "video_timeout": return chinese ? "视频等待超时，未保存成果。已尝试取消排队任务；已经开始的生成可能仍在视频工作区运行，请勿重复提交。" : "Video wait timed out; no artifact saved. Queued work was canceled when possible; running generation may continue in Videos. Do not resubmit automatically."
         case "invalid_voice": return chinese ? "音色无效：Chinese 是语言，不是音色。请使用默认音色，或查询可用音色后重试。" : "Invalid speaker: Chinese is a language, not a voice. Use the default voice or query supported speakers."
         case "automatic_model_unavailable": return chinese ? "此场景没有可用的自动加载模型。请在模型设置中配置，或明确指定一个已下载模型。" : "No usable automatic model for this scene. Configure the pool in Model Settings or specify a downloaded model."
@@ -311,6 +331,8 @@ final class YouziLocalModelTools {
     private func failure(_ error: Failure, id: String) -> ToolCallResult {
         let action: String
         switch error {
+        case .image_worker_failed: action = "Image GPU worker/thread failure, not invalid input. No image was saved. Ask the user to update the client and reload the image model. Do not restart chat, retry automatically or invent an artifact."
+        case .image_generation_failed, .image_empty_output: action = "No image was saved. Ask the user to check the image service and logs. Do not retry automatically or invent an artifact."
         case .video_timeout: action = "Waiting timed out. No artifact was saved. Queued work was canceled when possible; running GPU work may continue in Videos. Do not resubmit automatically."
         case .invalid_voice: action = "The voice is not a supported speaker ID. Chinese/English are languages, not voices. Omit voice to use the configured default, or call youzi_speech_voices for valid IDs before retrying."
         case .automatic_model_unavailable: action = "No compatible downloaded member of the automatic pool. Ask the user to configure Model Settings or explicitly choose a model. Do not pick an arbitrary catalog entry."

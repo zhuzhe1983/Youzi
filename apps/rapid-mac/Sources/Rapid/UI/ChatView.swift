@@ -352,6 +352,7 @@ struct ChatView: View {
         }
         .rapidAnimation(RapidMotion.standard, value: showsLifecycleBand)
         .background(RapidTheme.surfaceCanvas)
+        .modifier(YouziChatMediaPresentation(conversationID: viewModel.activeConversationID))
         // Drop a stale error banner once the server is provably ready.
         .modifier(YouziLiveVoicePresentation(
             chat: viewModel, server: server, alias: alias, isPresented: $showsLiveVoice
@@ -541,6 +542,7 @@ struct ChatView: View {
                         message: ChatView.transcriptPresentationMessage(message),
                         isStreaming: viewModel.isStreaming,
                         toolResults: toolResults,
+                        conversationID: viewModel.activeConversationID,
                         assistantHasContent: message.role == .assistant
                             ? !message.content.isEmpty
                             : nil,
@@ -1459,6 +1461,7 @@ private struct MessageRow: View {
     /// Tool-result rows keyed by the ``ToolCall.id`` they answer. Used to
     /// pair each dispatched call with its outcome inside this row.
     var toolResults: [String: ChatMessage] = [:]
+    var conversationID: UUID? = nil
     /// The authoritative body is deliberately not part of `message` while it
     /// streams. This one-bit projection changes only when content first lands.
     var assistantHasContent: Bool? = nil
@@ -1769,6 +1772,7 @@ private struct MessageRow: View {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(calls) { call in
                         ToolCallChip(call: call, result: toolResults[call.id])
+                        YouziChatArtifactCard(call: call, result: toolResults[call.id], conversationID: conversationID)
                     }
                 }
             }
