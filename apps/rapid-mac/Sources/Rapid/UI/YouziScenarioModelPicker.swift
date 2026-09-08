@@ -43,9 +43,6 @@ struct YouziScenarioModelPicker: View {
 
     private var panel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            YouziScenarioModelMemoryHeader(occupancy: occupancy, refreshing: loading) {
-                Task { await refresh() }
-            }
             YouziScenarioModelToolbar(selectedKind: $selectedKind, moreModelSettings: openModelSettings)
             if loading {
                 HStack { ProgressView().controlSize(.small); Text(i18n.text(zh: "正在读取已下载模型…", en: "Reading downloaded models…")) }
@@ -62,6 +59,9 @@ struct YouziScenarioModelPicker: View {
                     ForEach(choices) { entry in modelRow(entry) }
                 }
             }.frame(maxHeight: 240)
+            YouziScenarioModelMemoryFooter(occupancy: occupancy, refreshing: loading) {
+                Task { await refresh() }
+            }
         }
         .padding(16).frame(width: YouziScenarioModelToolbar.panelWidth(scale: fonts.scale))
         .task(id: ModelPickerBar.PickerCatalogKey(binaryPath: server.binaryPath, cacheGeneration: downloads.cacheGeneration, refreshEnabled: true)) { await refresh() }
@@ -138,8 +138,8 @@ struct YouziScenarioModelPicker: View {
     }
 }
 
-/// Memory and refresh share the top row; no empty title row above the bar.
-struct YouziScenarioModelMemoryHeader: View {
+/// Keep memory and refresh below the models, outside the scrolling list.
+struct YouziScenarioModelMemoryFooter: View {
     let occupancy: YouziModelOccupancy
     let refreshing: Bool
     var refresh: () -> Void
