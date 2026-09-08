@@ -112,6 +112,41 @@ struct YouziModelTableRenderTests {
         }
     }
 
+    @Test("Title-free memory header fits both languages without triggering refresh",
+          .enabled(if: ProcessInfo.processInfo.environment["YOUZI_MODEL_TABLE_RENDER"] == "1"))
+    func memoryHeader() async throws {
+        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["YOUZI_MODEL_TABLE_RENDER_DIR"] ?? "/tmp/youzi-model-table-render")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let occupancy = YouziModelOccupancy(chatBytes: 22 << 30, imageBytes: 0, voiceBytes: 0,
+            videoBytes: 0, remainingBytes: 80 << 30, totalBytes: 128 << 30, hostUsedRatio: 0.375, mode: .llm)
+        for language in [AppLanguage.zhHans, .en] {
+            let suite = "youzi-memory-header-render-" + UUID().uuidString
+            let defaults = try #require(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let i18n = YouziI18nConfig(defaults: defaults); i18n.language = language
+            let fonts = YouziFontSizeConfig(defaults: defaults)
+            var refreshCount = 0
+            let view = VStack(spacing: 12) {
+                YouziScenarioModelMemoryHeader(occupancy: occupancy, refreshing: false) { refreshCount += 1 }
+                YouziScenarioModelToolbar(selectedKind: .constant(.video), moreModelSettings: {})
+            }.environment(i18n).environment(fonts).environment(\.colorScheme, .dark)
+                .padding(16).background(RapidTheme.surfaceCanvas)
+            let host = NSHostingView(rootView: view)
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 110),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.contentView = host; window.orderBack(nil)
+            defer { window.orderOut(nil); window.contentView = nil; window.close() }
+            try await Task.sleep(for: .milliseconds(180))
+            host.layoutSubtreeIfNeeded(); host.displayIfNeeded()
+            #expect(host.fittingSize.width <= 441)
+            #expect(host.fittingSize.height <= 110, "No blank title row above memory bar")
+            #expect(refreshCount == 0)
+            try captureWindow(window, to: root.appendingPathComponent("memory-header-\(language.rawValue).png"))
+        }
+    }
+
     /// AppKit's bitmap cache omits some layer-backed menu controls. Optional
     /// compositor captures target only this fixture window; never request access.
     private func captureWindow(_ window: NSWindow, to url: URL) throws {

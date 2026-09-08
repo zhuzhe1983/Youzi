@@ -155,7 +155,7 @@ struct YouziModelOccupancyBar: View {
                     occupancyLegend(lane: .video, bytes: occupancy.videoBytes)
                 }
                 Spacer(minLength: 0)
-                Text(i18n.text(zh: "可用 ", en: "Free ") + formatGigabytes(occupancy.remainingBytes))
+                Text(Self.availableMemoryText(occupancy.remainingBytes, isChinese: i18n.isChinese))
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
             }
@@ -163,6 +163,11 @@ struct YouziModelOccupancyBar: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(i18n.text(zh: "模型内存占用", en: "Model memory usage"))
+    }
+
+    static func availableMemoryText(_ bytes: UInt64, isChinese: Bool) -> String {
+        let size = String(format: "%.1fG", Double(bytes) / Double(1 << 30))
+        return (isChinese ? "可用内存：" : "Available memory: ") + size
     }
 
     private func title(_ lane: YouziModelLane) -> String {

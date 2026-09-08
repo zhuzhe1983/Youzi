@@ -142,11 +142,23 @@ struct YouziModelTableTests {
         #expect(YouziNativeModelTable.width(.actions, scale: 1.32) >= 200)
     }
 
+    @Test("Available memory has an explicit localized label and compact G unit")
+    @MainActor func availableMemoryLabel() {
+        #expect(YouziModelOccupancyBar.availableMemoryText(80 << 30, isChinese: true) == "可用内存：80.0G")
+        #expect(YouziModelOccupancyBar.availableMemoryText(0, isChinese: true) == "可用内存：0.0G")
+        #expect(YouziModelOccupancyBar.availableMemoryText((1 << 30) / 2, isChinese: true) == "可用内存：0.5G")
+        #expect(YouziModelOccupancyBar.availableMemoryText(80 << 30, isChinese: false) == "Available memory: 80.0G")
+        #expect(formatGigabytes(80 << 30) == "80.0 GB", "Other model-size labels must not change")
+    }
+
     @Test("Scenario popover removes the paragraph and keeps settings in the scenario toolbar")
     func scenarioSource() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let source = try String(contentsOf: root.appendingPathComponent("Sources/Rapid/UI/YouziScenarioModelPicker.swift"), encoding: .utf8)
         #expect(!source.contains("勾选表示已就绪"))
+        #expect(!source.contains("场景模型选择"))
+        #expect(!source.contains("Scenario models"))
+        #expect(source.contains("YouziScenarioModelMemoryHeader(occupancy: occupancy, refreshing: loading)"))
         let toolbar = try #require(source.range(of: "HStack(spacing: 12) {"))
         let end = try #require(source.range(of: "YouziScenarioModelPicker.ScenarioToolbar"))
         #expect(source[toolbar.lowerBound..<end.upperBound].contains("moreModelSettings"))

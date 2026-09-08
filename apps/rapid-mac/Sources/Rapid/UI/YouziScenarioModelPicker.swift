@@ -43,16 +43,9 @@ struct YouziScenarioModelPicker: View {
 
     private var panel: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(i18n.text(zh: "场景模型选择", en: "Scenario models")).font(RapidFont.bodyEmphasis)
-                Spacer()
-                Button { Task { await refresh() } } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.plain).disabled(loading)
-                    .accessibilityLabel(i18n.text(zh: "刷新模型", en: "Refresh models"))
-                    .accessibilityIdentifier("YouziScenarioModelPicker.Button.389a1e56c3")
+            YouziScenarioModelMemoryHeader(occupancy: occupancy, refreshing: loading) {
+                Task { await refresh() }
             }
-            YouziModelOccupancyBar(occupancy: occupancy)
-                .accessibilityIdentifier("Youzi.ScenarioModels.Memory")
             YouziScenarioModelToolbar(selectedKind: $selectedKind, moreModelSettings: openModelSettings)
             if loading {
                 HStack { ProgressView().controlSize(.small); Text(i18n.text(zh: "正在读取已下载模型…", en: "Reading downloaded models…")) }
@@ -142,6 +135,25 @@ struct YouziScenarioModelPicker: View {
         media = result
         error = nil
         await server.refreshResidency()
+    }
+}
+
+/// Memory and refresh share the top row; no empty title row above the bar.
+struct YouziScenarioModelMemoryHeader: View {
+    let occupancy: YouziModelOccupancy
+    let refreshing: Bool
+    var refresh: () -> Void
+    @Environment(YouziI18nConfig.self) private var i18n
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            YouziModelOccupancyBar(occupancy: occupancy)
+                .accessibilityIdentifier("Youzi.ScenarioModels.Memory")
+            Button(action: refresh) { Image(systemName: "arrow.clockwise") }
+                .buttonStyle(.plain).disabled(refreshing)
+                .accessibilityLabel(i18n.text(zh: "刷新模型", en: "Refresh models"))
+                .accessibilityIdentifier("YouziScenarioModelPicker.Button.389a1e56c3")
+        }
     }
 }
 
