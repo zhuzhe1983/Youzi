@@ -23,6 +23,7 @@ struct YouziSimpleShell: View {
     @State private var showingTemplates = false
     @State private var fileActionError: String?
     @State private var isRecentTasksExpanded = false
+    @State private var isWorkspacesExpanded = false
     @State private var hoveredTaskID: UUID?
     @State private var renamingTask: YouziTask?
     @State private var renameText = ""
@@ -81,60 +82,68 @@ struct YouziSimpleShell: View {
 
     private var sidebar: some View {
         GeometryReader { proxy in
-            let totalH = proxy.size.height
-            let headerH = max(38, totalH * 0.05)
-            let footerH = max(44, totalH * 0.05)
-            // Separate the three content areas with breathing room, not rules.
-            let sectionGap = RapidTheme.Space.md
-            let dividerTotalH: CGFloat = 2
-            let remainingH = max(0, totalH - headerH - footerH - dividerTotalH - sectionGap * 2)
-            let sectionH = remainingH / 3.0
-
+            let metrics = YouziSidebarMetrics(height: proxy.size.height, scale: RapidFont.fontScale)
             VStack(alignment: .leading, spacing: 0) {
                 brand
-                    .frame(height: headerH)
+                    .frame(height: metrics.brandHeight)
                     .frame(maxWidth: .infinity, alignment: .leading)
-
                 Divider()
-
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: RapidTheme.Space.xxs) {
-                        ForEach(YouziSimpleDestination.allCases) { destination in
+                        ForEach(YouziSimpleDestination.primaryNavigation) { destination in
                             navigationRow(destination)
                         }
                     }
                     .padding(.horizontal, RapidTheme.Space.sm)
                     .padding(.vertical, RapidTheme.Space.xs)
                 }
-                .frame(height: sectionH)
+                .frame(height: metrics.sectionHeight)
+                .padding(.bottom, metrics.gap)
 
-                Spacer(minLength: 0)
-                    .frame(height: sectionGap)
-
-                ScrollView(.vertical, showsIndicators: false) {
-                    recentTaskSection
+                ScrollViewReader { scroll in
+                    ScrollView(.vertical) {
+                        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                            YouziSidebarSection(
+                                title: i18n.text(zh: "任务", en: "Tasks"),
+                                id: "YouziSimple.RecentTasks", metrics: metrics,
+                                expanded: $isRecentTasksExpanded,
+                                onMore: { selection = .tasks }, bottomSpacing: metrics.gap
+                            ) { recentTaskRows }
+                            .id("tasks")
+                            YouziSidebarSection(
+                                title: i18n.text(zh: "工作空间与项目", en: "Workspaces & Projects"),
+                                id: "YouziSimple.Workspaces", metrics: metrics,
+                                expanded: $isWorkspacesExpanded,
+                                onMore: { selection = .workspaces }
+                            ) {
+                                VStack(alignment: .leading, spacing: metrics.rowSpacing) {
+                                    workspaceTree
+                                    conversationFolderTree
+                                    if activeWorkspaces.isEmpty && unplacedProjects.isEmpty && chat.folders.isEmpty {
+                                        Text(i18n.text(zh: "还没有工作空间", en: "No workspaces yet"))
+                                            .font(RapidFont.caption)
+                                            .foregroundStyle(RapidTheme.textSecondary)
+                                            .padding(RapidTheme.Space.sm)
+                                    }
+                                }
+                            }
+                            .id("workspaces")
+                        }
                         .padding(.horizontal, RapidTheme.Space.sm)
-                        .padding(.vertical, RapidTheme.Space.xs)
-                }
-                .frame(height: sectionH)
-
-                Spacer(minLength: 0)
-                    .frame(height: sectionGap)
-
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: RapidTheme.Space.sm) {
-                        workspaceTree
-                        conversationFolderTree
                     }
-                    .padding(.horizontal, RapidTheme.Space.sm)
-                    .padding(.vertical, RapidTheme.Space.xs)
+                    .accessibilityIdentifier("YouziSimple.Sidebar.Collections")
+                    .onChange(of: isRecentTasksExpanded) { _, expanded in
+                        if !expanded { scroll.scrollTo("tasks", anchor: .top) }
+                    }
+                    .onChange(of: isWorkspacesExpanded) { _, expanded in
+                        if !expanded { scroll.scrollTo(isRecentTasksExpanded ? "workspaces" : "tasks", anchor: .top) }
+                    }
                 }
-                .frame(height: sectionH)
+                .frame(height: metrics.listsHeight)
 
                 Divider()
-
                 accountMenu
-                    .frame(height: footerH)
+                    .frame(height: metrics.footerHeight)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -153,47 +162,16 @@ struct YouziSimpleShell: View {
         .accessibilityLabel(i18n.text(zh: "柚子，简约模式", en: "Youzi, Simple Mode"))
     }
 
-    private var recentTaskSection: some View {
+    private var recentTaskRows: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
-            HStack {
-                sidebarLabel(i18n.text(zh: "任务", en: "Tasks"))
-                Spacer()
-                if !recentTasks.isEmpty {
-                    Text("\(recentTasks.count)")
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textTertiary)
-                        .padding(.trailing, RapidTheme.Space.sm)
-                }
-            }
             if recentTasks.isEmpty {
                 Text(i18n.text(zh: "任务会显示在这里。", en: "Tasks will appear here."))
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
-                    .padding(.horizontal, RapidTheme.Space.md)
-                    .padding(.vertical, RapidTheme.Space.sm)
+                    .padding(RapidTheme.Space.sm)
             } else {
-                let displayedTasks = isRecentTasksExpanded ? recentTasks : Array(recentTasks.prefix(5))
-                ForEach(displayedTasks) { task in
+                ForEach(recentTasks) { task in
                     taskRow(task, prefix: "YouziSimple.RecentTask")
-                }
-                if recentTasks.count > 5 {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isRecentTasksExpanded.toggle()
-                        }
-                    } label: {
-                        HStack(spacing: RapidTheme.Space.xs) {
-                            Text(isRecentTasksExpanded ? i18n.text(zh: "收起", en: "Collapse") : i18n.text(zh: "展开更多 (\(recentTasks.count - 5))", en: "Show more (\(recentTasks.count - 5))"))
-                                .font(RapidFont.caption)
-                            Image(systemName: isRecentTasksExpanded ? "chevron.up" : "chevron.down")
-                                .font(.system(size: 9))
-                        }
-                        .foregroundStyle(RapidTheme.textSecondary)
-                        .padding(.horizontal, RapidTheme.Space.md)
-                        .padding(.vertical, RapidTheme.Space.xxs)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("YouziSimple.RecentTasks.ExpandToggle")
                 }
             }
         }
@@ -203,14 +181,13 @@ struct YouziSimpleShell: View {
     private var workspaceTree: some View {
         if !activeWorkspaces.isEmpty || !unplacedProjects.isEmpty {
             VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
-                sidebarLabel(i18n.text(zh: "工作空间与项目", en: "Workspaces & Projects"))
                 ForEach(activeWorkspaces) { workspace in
                     DisclosureGroup {
                         let directTasks = productModel.tasks.filter {
                             $0.workspaceID == workspace.id && $0.projectID == nil
                                 && $0.status != .archived
                         }
-                        ForEach(directTasks.prefix(5)) { task in
+                        ForEach(directTasks) { task in
                             taskRow(task, prefix: "YouziSimple.WorkspaceTask")
                                 .padding(.leading, RapidTheme.Space.sm)
                         }
@@ -225,6 +202,7 @@ struct YouziSimpleShell: View {
                     }
                     .padding(.horizontal, RapidTheme.Space.sm)
                     .padding(.vertical, RapidTheme.Space.xs)
+                    .frame(minHeight: YouziSidebarMetrics(height: 0, scale: RapidFont.fontScale).rowHeight)
                     .accessibilityIdentifier(
                         "YouziSimple.Sidebar.Workspace.\(workspace.id.uuidString)"
                     )
@@ -252,6 +230,7 @@ struct YouziSimpleShell: View {
                             }
                             .buttonStyle(.plain)
                             .padding(.leading, RapidTheme.Space.sm)
+                            .frame(minHeight: YouziSidebarMetrics(height: 0, scale: RapidFont.fontScale).rowHeight)
                             .accessibilityIdentifier(
                                 "YouziSimple.Conversation.\(conversation.id.uuidString)"
                             )
@@ -263,6 +242,7 @@ struct YouziSimpleShell: View {
                     }
                     .padding(.horizontal, RapidTheme.Space.sm)
                     .padding(.vertical, RapidTheme.Space.xs)
+                    .frame(minHeight: YouziSidebarMetrics(height: 0, scale: RapidFont.fontScale).rowHeight)
                     .accessibilityIdentifier(
                         "YouziSimple.ConversationFolder.\(folder.id.uuidString)"
                     )
@@ -386,7 +366,7 @@ struct YouziSimpleShell: View {
             }
         }
         .padding(.horizontal, RapidTheme.Space.sm)
-        .frame(minHeight: 32)
+        .frame(minHeight: YouziSidebarMetrics(height: 0, scale: RapidFont.fontScale).rowHeight)
         .background(
             RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
                 .fill(isSelected ? RapidTheme.selectionFill : (isHovered ? RapidTheme.hoverFill : Color.clear))
@@ -448,7 +428,7 @@ struct YouziSimpleShell: View {
 
     private func projectRow(_ project: YouziProject) -> some View {
         DisclosureGroup {
-            ForEach(tasks(in: project).prefix(5)) { task in
+            ForEach(tasks(in: project)) { task in
                 taskRow(task, prefix: "YouziSimple.ProjectTask")
                     .padding(.leading, RapidTheme.Space.sm)
             }
@@ -465,6 +445,7 @@ struct YouziSimpleShell: View {
         }
         .padding(.horizontal, RapidTheme.Space.sm)
         .padding(.vertical, RapidTheme.Space.xs)
+        .frame(minHeight: YouziSidebarMetrics(height: 0, scale: RapidFont.fontScale).rowHeight)
         .accessibilityIdentifier("YouziSimple.Sidebar.Project.\(project.id.uuidString)")
     }
 
@@ -543,6 +524,10 @@ struct YouziSimpleShell: View {
                 onTaskPersisted: { selectedTaskID = $0 },
                 onNavigate: { selection = $0 }
             )
+        case .tasks:
+            YouziSimpleTasksPage(tasks: recentTasks) { task in
+                taskRow(task, prefix: "YouziSimple.Tasks.Task")
+            }
         case .workspaces:
             YouziSimpleWorkspacesPage(
                 workspaces: productModel.workspaces,

@@ -186,10 +186,8 @@ struct YouziSimpleTaskView: View {
     }
 
     private var welcome: some View {
-        ScrollView {
+        YouziCenteredWelcome {
             VStack(spacing: RapidTheme.Space.xl) {
-                Spacer(minLength: RapidTheme.Space.md)
-
                 YouziLogo(size: 80)
 
                 VStack(spacing: RapidTheme.Space.xs) {
@@ -206,11 +204,8 @@ struct YouziSimpleTaskView: View {
                 composer
                     .frame(maxWidth: 680)
 
-                Spacer(minLength: RapidTheme.Space.lg)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, RapidTheme.Space.xl)
-            .padding(.vertical, RapidTheme.Space.lg)
+            .accessibilityIdentifier("YouziSimple.Welcome.Content")
         }
     }
 

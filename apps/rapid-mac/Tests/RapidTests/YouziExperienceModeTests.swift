@@ -49,23 +49,25 @@ final class YouziExperienceModeTests {
         #expect(YouziExperienceModeConfig(defaults: defaults).mode == .simple)
     }
 
-    @Test("Simple navigation has five stable task-first destinations")
+    @Test("Simple navigation separates four shortcuts from collection routes")
     func destinationContract() {
         #expect(
             YouziSimpleDestination.allCases.map(\.title)
-                == ["新任务", "工作空间", "专家·技能·连接", "知我", "成果"]
+                == ["新任务", "任务", "工作空间", "专家·技能·连接", "知我", "成果"]
         )
         #expect(
             YouziSimpleDestination.allCases.map(\.accessibilityIdentifier)
                 == [
                     "YouziSimple.Navigation.newTask",
+                    "YouziSimple.Navigation.tasks",
                     "YouziSimple.Navigation.workspaces",
                     "YouziSimple.Navigation.helpers",
                     "YouziSimple.Navigation.knowMe",
                     "YouziSimple.Navigation.results",
                 ]
         )
-        #expect(Set(YouziSimpleDestination.allCases.map(\.systemImage)).count == 5)
+        #expect(Set(YouziSimpleDestination.allCases.map(\.systemImage)).count == 6)
+        #expect(YouziSimpleDestination.primaryNavigation == [.newTask, .helpers, .knowMe, .results])
     }
 
     @Test("Both experience modes expose stable accessibility identities")

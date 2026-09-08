@@ -10,10 +10,11 @@ struct YouziSimpleWorkbenchTests {
         let sidebar = try #require(source.components(separatedBy: "private var sidebar: some View {").last)
             .components(separatedBy: "private var brand: some View {")[0]
         #expect(sidebar.components(separatedBy: "Divider()").count - 1 == 2)
-        #expect(sidebar.components(separatedBy: ".frame(height: sectionGap)").count - 1 == 2)
-        #expect(sidebar.contains("let sectionGap = RapidTheme.Space.md"))
-        #expect(sidebar.contains("- sectionGap * 2"))
-        #expect(sidebar.components(separatedBy: ".frame(height: sectionH)").count - 1 == 3)
+        #expect(sidebar.contains(".padding(.bottom, metrics.gap)"))
+        #expect(sidebar.contains("bottomSpacing: metrics.gap"))
+        #expect(sidebar.contains("pinnedViews: [.sectionHeaders]"))
+        #expect(sidebar.contains(".frame(height: metrics.listsHeight)"))
+        #expect(sidebar.contains(".frame(height: metrics.footerHeight)"))
     }
 
     @Test("Bundled templates are versioned, unique, and editable-draft inputs")
@@ -133,10 +134,18 @@ struct YouziSimpleWorkbenchTests {
     @Test("Task submission links lifecycle before the shared chat runtime sends")
     func taskExecutionOrdering() throws {
         let task = try sourceFile("YouziSimpleTaskView.swift")
-        let begin = try #require(task.range(of: "productModel.beginTaskExecution("))
-        let send = try #require(task.range(of: "chat.send(request"))
-
-        #expect(begin.lowerBound < send.lowerBound)
+        // Preparation is shared with voice and declared after submit. Verify
+        // call order, not the unrelated source order of the two declarations.
+        let submitStart = try #require(task.range(of: "private func submit()"))
+        let prepareStart = try #require(task.range(of: "private func prepareTaskRequest("))
+        let submit = String(task[submitStart.lowerBound..<prepareStart.lowerBound])
+        let prepare = String(task[prepareStart.lowerBound...])
+        let call = try #require(submit.range(of: "guard let attachments = prepareTaskRequest(request) else { return }"))
+        let send = try #require(submit.range(of: "chat.send(request"))
+        #expect(call.lowerBound < send.lowerBound)
+        let begin = try #require(prepare.range(of: "guard productModel.beginTaskExecution("))
+        let ready = try #require(prepare.range(of: "return attachments"))
+        #expect(begin.lowerBound < ready.lowerBound)
         #expect(task.contains("productModel.assignWorkspace("))
         #expect(task.contains("productModel.moveTask("))
         #expect(task.contains("mode: .copy"))
