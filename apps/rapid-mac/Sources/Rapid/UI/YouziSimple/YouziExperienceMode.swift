@@ -22,6 +22,15 @@ enum YouziExperienceMode: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// Compact presentation labels for the shared account badge and picker.
+    /// Full names stay available for settings and accessibility descriptions.
+    func localizedShortDisplayName(isChinese: Bool) -> String {
+        switch self {
+        case .simple: isChinese ? "简约" : "Simple"
+        case .professional: isChinese ? "专业" : "Pro"
+        }
+    }
+
     var displayName: String {
         switch self {
         case .simple: "简约模式"

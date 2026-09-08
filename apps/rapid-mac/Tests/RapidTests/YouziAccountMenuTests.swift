@@ -15,23 +15,38 @@ struct YouziAccountMenuTests {
         )
     }
 
+    @Test("Badge and segments use short labels, accessibility retains full mode names")
+    func compactLabels() {
+        #expect(YouziExperienceMode.allCases.map { $0.localizedShortDisplayName(isChinese: true) } == ["简约", "专业"])
+        #expect(YouziExperienceMode.allCases.map { $0.localizedShortDisplayName(isChinese: false) } == ["Simple", "Pro"])
+        #expect(YouziExperienceMode.professional.localizedDisplayName(isChinese: false) == "Professional Mode")
+    }
+
     @Test("Account menu is the shared uncommon-action entry")
     @MainActor
     func sharedEntryContract() throws {
         let menu = try Self.source("Sources/Rapid/UI/YouziAccountMenu.swift")
+        let surface = try Self.source("Sources/Rapid/UI/YouziAccountMenuContent.swift")
         let content = try Self.source("Sources/Rapid/UI/ContentView.swift")
         let simple = try Self.source("Sources/Rapid/UI/YouziSimple/YouziSimpleShell.swift")
         let sidebar = try Self.source("Sources/Rapid/UI/SidebarView.swift")
 
-        #expect(YouziAccountMenu.helpURL.absoluteString == "https://github.com/zhuzhe1983/Youzi/issues")
-        #expect(menu.contains("zh: \"设置\"") || menu.contains("title: \"设置\""))
-        #expect(menu.contains("zh: \"外观\"") || menu.contains("Label(\"外观\""))
-        #expect(menu.contains("zh: \"系统状态\"") || menu.contains("Label(\"系统状态\""))
-        #expect(menu.contains("zh: \"检查更新\"") || menu.contains("title: \"检查更新\""))
-        #expect(menu.contains("zh: \"帮助与反馈\"") || menu.contains("title: \"帮助与反馈\""))
-        #expect(menu.contains("experienceMode.mode.other"))
+        for label in ["设置", "外观", "检查更新"] {
+            #expect(surface.contains(label))
+        }
+        #expect(menu.contains("系统状态"))
+        #expect(!surface.contains("帮助与反馈"))
+        #expect(!surface.contains("本机单机运行"))
+        #expect(!surface.contains("切换到"))
+        #expect(!menu.contains("Youzi.AccountMenu.Help"))
+        #expect(surface.contains("Youzi.AccountMenu.ModeBadge"))
+        #expect(surface.contains("Youzi.AccountMenu.ExperienceMode"))
+        #expect(surface.contains("selection: $mode"))
+        #expect(surface.contains(".pickerStyle(.segmented)"))
+        #expect(menu.contains("experienceMode.mode = next"))
+        #expect(!menu.contains("experienceMode.mode.other"))
         #expect(menu.contains("openWindow(id: \"settings\")"))
-        #expect(menu.contains("Youzi.AccountMenu.Settings"))
+        #expect(surface.contains("Youzi.AccountMenu.Settings"))
         #expect(menu.contains("Youzi.AccountMenu.SystemStatus"))
         #expect(!menu.contains("OpenSettingsAction"))
         #expect(!menu.contains("Logout"))
