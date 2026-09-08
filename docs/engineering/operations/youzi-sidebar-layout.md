@@ -62,3 +62,11 @@ flat bundle resources, and the bundled engine's `--version` before switching.
 Do not mutate any currently running app bundle or use port-sweeping termination.
 Quit the exact idle client normally, open the new worktree bundle, and retain the
 previous complete bundle as rollback. No model files or preferences need changing.
+
+### Candidate status
+
+`candidate-4772994a`: complete local Release + bundled engine build, deep strict
+signature and packaged-resource checks passed; bundled engine reports 0.14.4.
+The real desktop was locked during acceptance, so the previous running client
+was retained. This candidate is built but not launched; real click/scroll
+acceptance and a normal client restart remain pending user unlock.
