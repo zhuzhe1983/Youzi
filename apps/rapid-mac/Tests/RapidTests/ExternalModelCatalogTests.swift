@@ -333,7 +333,8 @@ struct ExternalModelCatalogTests {
             .appendingPathComponent("Sources/Rapid/UI/SettingsModelManagementPanel.swift"), encoding: .utf8)
 
         #expect(picker.contains("entry.cached && !entry.isExternal"))
-        #expect(settings.components(separatedBy: "if !entry.isExternal").count >= 3)
+        #expect(settings.contains("guard !entry.isExternal"))
+        #expect(settings.contains("?.canDelete == true"))
         #expect(settings.contains("Forgetting a linked model removes only Youzi's link"))
         #expect(settings.contains("The original folder and every source weight remain untouched"))
     }

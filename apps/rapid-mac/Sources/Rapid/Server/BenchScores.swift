@@ -55,6 +55,8 @@ struct BenchScores: Equatable, Sendable {
     let ifeval: Double?
     /// Decode tok/s; see the JSON row's `speed_source` for hardware.
     let speedTps: Double?
+    /// Preserve the recorded hardware/workload; table scores are not local predictions.
+    var speedSource: String? = nil
 
     /// Axes rendered in the tooltip, top → bottom. The order is the
     /// user-signed-off spec: General-&-Reasoning, Code, Tool,
@@ -213,6 +215,7 @@ enum BenchScoresCatalog {
         let tool: Double?
         let ifeval: Double?
         let speed_tps: Double?
+        let speed_source: String?
 
         struct Basis: Decodable {
             let mmlu_pro: Double?
@@ -228,7 +231,8 @@ enum BenchScoresCatalog {
                 code: code,
                 tool: tool,
                 ifeval: ifeval,
-                speedTps: speed_tps
+                speedTps: speed_tps,
+                speedSource: speed_source
             )
         }
     }

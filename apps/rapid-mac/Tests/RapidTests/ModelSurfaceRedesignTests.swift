@@ -455,53 +455,14 @@ struct ModelSurfaceRedesignTests {
         }
     }
 
-    /// The sweep above can only mean something if the two arrays really
-    /// are the labels the card renders — they are hand-maintained, and a
-    /// width derived from them would otherwise be self-certifying.
-    ///
-    /// So: grep the source. Every `Text("…")` inside the card's
-    /// ``actionButton`` and inside ``statusBadgeView``'s pill calls must
-    /// appear in one of the two arrays. Adding "Download again" to the
-    /// button without widening the column trips here rather than shipping
-    /// another ellipsis. Same pattern as
-    /// ``ToolUseCapabilitySourceGuardTests``.
-    @Test("recommended card: the measured label set matches the source")
+    @Test("Model-file table routes actions through native cells, not the old recommendation cards")
     func actionLabelArraysMatchTheSource() throws {
         let source = try Self.loadPanelSource()
-        let known = Set(
-            RecommendedCardLayout.actionButtonTitles
-                + RecommendedCardLayout.actionPillTitles
-        )
-
-        let buttonBody = try Self.body(
-            of: "private func actionButton(for entry: ModelEntry, badge: ModelCacheActions.StatusBadge) -> some View {",
-            in: source
-        )
-        for label in Self.textLiterals(in: buttonBody) {
-            #expect(
-                known.contains(label),
-                """
-                actionButton renders Text("\(label)") but RecommendedCardLayout \
-                does not measure it, so the card's action column width was \
-                derived without it. Add it to actionButtonTitles.
-                """
-            )
-        }
-
-        let badgeBody = try Self.body(
-            of: "private func statusBadgeView(_ badge: ModelCacheActions.StatusBadge) -> some View {",
-            in: source
-        )
-        // The pills the CARD can reach. ``statusBadgeView`` is shared with
-        // states the card never routes to it, so only these two are
-        // required to be measured.
-        for label in ["On disk", "In use"] {
-            #expect(
-                badgeBody.contains("\"\(label)\""),
-                "statusBadgeView no longer renders the \"\(label)\" pill the card's width was measured against"
-            )
-            #expect(known.contains(label))
-        }
+        #expect(source.contains("YouziModelTableView(rows: tableRows"))
+        #expect(!source.contains("private func actionButton("))
+        #expect(source.contains("?.canDelete == true"))
+        #expect(source.contains("?.canLoad == true"))
+        #expect(source.contains("?.canDownload == true"))
     }
 
     /// Panel source, located from ``#filePath`` so the test runs from any

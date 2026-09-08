@@ -7,6 +7,7 @@ struct YouziScenarioModelPicker: View {
     @Environment(ServerManager.self) private var server
     @Environment(DownloadManager.self) private var downloads
     @Environment(YouziI18nConfig.self) private var i18n
+    @Environment(YouziFontSizeConfig.self) private var fonts
     @Environment(SettingsRouter.self) private var router: SettingsRouter?
     @Environment(\.openWindow) private var openWindow
     @State private var presented = false
@@ -50,14 +51,9 @@ struct YouziScenarioModelPicker: View {
                     .accessibilityLabel(i18n.text(zh: "刷新模型", en: "Refresh models"))
                     .accessibilityIdentifier("YouziScenarioModelPicker.Button.389a1e56c3")
             }
-            Text(i18n.text(zh: "勾选表示已就绪，星标表示默认。点击仅用于本次选择或加载，不修改默认及启动清单。", en: "Checkmark: ready. Star: default. Selecting or loading here does not change defaults or startup choices."))
-                .font(RapidFont.caption).foregroundStyle(.secondary)
             YouziModelOccupancyBar(occupancy: occupancy)
                 .accessibilityIdentifier("Youzi.ScenarioModels.Memory")
-            Picker(i18n.text(zh: "场景", en: "Scenario"), selection: $selectedKind) {
-                ForEach(ModelKind.allCases) { kind in Text(title(kind)).tag(kind) }
-            }.pickerStyle(.segmented).labelsHidden()
-                .accessibilityIdentifier("YouziScenarioModelPicker.Picker.fa4bba6e5b")
+            YouziScenarioModelToolbar(selectedKind: $selectedKind, moreModelSettings: openModelSettings)
             if loading {
                 HStack { ProgressView().controlSize(.small); Text(i18n.text(zh: "正在读取已下载模型…", en: "Reading downloaded models…")) }
                     .font(RapidFont.caption)
@@ -73,21 +69,21 @@ struct YouziScenarioModelPicker: View {
                     ForEach(choices) { entry in modelRow(entry) }
                 }
             }.frame(maxHeight: 240)
-            Button(i18n.text(zh: "更多模型设置…", en: "More model settings…")) {
-                presented = false
-                let tab: ModelSettingsTab = switch selectedKind {
-                case .chat: .chat
-                case .audio: .audio
-                case .image: .image
-                case .video: .video
-                }
-                if let router { router.route(toModelTab: tab) { openWindow(id: "settings") } }
-                else { openWindow(id: "settings") }
-            }.buttonStyle(.plain).font(RapidFont.secondary).foregroundStyle(RapidTheme.brand)
-                .accessibilityIdentifier("YouziScenarioModelPicker.Button.d87486a311")
         }
-        .padding(16).frame(width: 440)
+        .padding(16).frame(width: YouziScenarioModelToolbar.panelWidth(scale: fonts.scale))
         .task(id: ModelPickerBar.PickerCatalogKey(binaryPath: server.binaryPath, cacheGeneration: downloads.cacheGeneration, refreshEnabled: true)) { await refresh() }
+    }
+
+    private func openModelSettings() {
+        presented = false
+        let tab: ModelSettingsTab = switch selectedKind {
+        case .chat: .chat
+        case .audio: .audio
+        case .image: .image
+        case .video: .video
+        }
+        if let router { router.route(toModelTab: tab) { openWindow(id: "settings") } }
+        else { openWindow(id: "settings") }
     }
 
     private func modelRow(_ entry: ModelEntry) -> some View {
@@ -132,15 +128,6 @@ struct YouziScenarioModelPicker: View {
         return entry.sizeOnDisk.map { i18n.text(zh: "磁盘 ", en: "Disk ") + $0 } ?? "—"
     }
 
-    private func title(_ kind: ModelKind) -> String {
-        switch kind {
-        case .chat: i18n.text(zh: "聊天", en: "Chat")
-        case .image: i18n.text(zh: "图片", en: "Image")
-        case .audio: i18n.text(zh: "语音", en: "Audio")
-        case .video: i18n.text(zh: "视频", en: "Video")
-        }
-    }
-
     private func refresh() async {
         loading = true
         defer { loading = false }
@@ -155,5 +142,42 @@ struct YouziScenarioModelPicker: View {
         media = result
         error = nil
         await server.refreshResidency()
+    }
+}
+
+/// Keep the settings entry beside the scenario tabs, including at large text sizes.
+/// Stateless presentation also permits rendering without starting a model service.
+struct YouziScenarioModelToolbar: View {
+    @Binding var selectedKind: ModelKind
+    var moreModelSettings: () -> Void
+    @Environment(YouziI18nConfig.self) private var i18n
+    @Environment(YouziFontSizeConfig.self) private var fonts
+
+    static func panelWidth(scale: CGFloat) -> CGFloat { 440 * max(1, scale) }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Picker(i18n.text(zh: "场景", en: "Scenario"), selection: $selectedKind) {
+                ForEach(ModelKind.allCases) { kind in
+                    Text(title(kind)).tag(kind)
+                }
+            }.pickerStyle(.segmented).labelsHidden().fixedSize()
+                .accessibilityIdentifier("YouziScenarioModelPicker.Picker.fa4bba6e5b")
+            Spacer(minLength: 0)
+            Button(i18n.text(zh: "更多模型设置…", en: "More model settings…"), action: moreModelSettings)
+                .buttonStyle(.plain).font(fonts.font(12.5)).foregroundStyle(RapidTheme.brand)
+                .lineLimit(1).fixedSize()
+                .accessibilityIdentifier("YouziScenarioModelPicker.Button.d87486a311")
+        }
+        .accessibilityIdentifier("YouziScenarioModelPicker.ScenarioToolbar")
+    }
+
+    private func title(_ kind: ModelKind) -> String {
+        switch kind {
+        case .chat: i18n.text(zh: "聊天", en: "Chat")
+        case .image: i18n.text(zh: "图片", en: "Image")
+        case .audio: i18n.text(zh: "语音", en: "Audio")
+        case .video: i18n.text(zh: "视频", en: "Video")
+        }
     }
 }

@@ -268,17 +268,13 @@ struct SettingsVisualFoundationTests {
         }
     }
 
-    @Test("Destructive Settings actions use the destructive hierarchy")
+    @Test("Destructive model table actions are marked destructive and protected")
     func destructiveActionsAreStyled() throws {
+        let table = try strippedSource("Sources/Rapid/UI/YouziModelTableView.swift")
+        #expect(table.contains("Button(role:.destructive)"))
+        #expect(table.contains("disabled(!row.canDelete)"))
         let panel = try strippedSource("Sources/Rapid/UI/SettingsModelManagementPanel.swift")
-        #expect(
-            panel.contains("buttonStyle(.rapidDestructiveCompact)"),
-            "The recommended card's Delete must read as destructive."
-        )
-        #expect(
-            panel.contains("tint:RapidTheme.statusError"),
-            "The table's delete glyphs must carry the error tint."
-        )
+        #expect(panel.contains("role:.destructive"))
     }
 
     // MARK: - One set of tokens

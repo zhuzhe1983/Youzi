@@ -1,37 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// Settings → Model Management — the single surface for everything
-/// about your models: the file-manager-style cache inspector (issue
-/// #210) plus the model-behaviour preferences.
-///
-/// Why it owns all of it: user feedback (2026-06-16) called out that
-/// the picker dropdown is overloaded — it conflates "switch active
-/// alias" with "manage the on-disk cache", and casual users miss the
-/// right-click affordances. This dedicated sidebar tab took over cache
-/// state; the picker stays a switcher and this panel is the inspector.
-/// A separate, older "Models" tab used to duplicate the download/delete
-/// list and carry two behaviour toggles; it was folded in here so users
-/// no longer face two competing model surfaces.
-///
-/// Layout (top to bottom):
-///   * ``Models folder`` + ``Preferences`` cards — where models live,
-///     and the picker-visibility / auto-start toggles.
-///   * Search box + ``All / Cached / Not cached`` segmented
-///     filter + sort menu — so a user with 60
-///     aliases doesn't scroll to find the one they want.
-///   * One row per alias — alias name + family/quant chip + size
-///     line, a status badge in the middle, and a single action
-///     button on the right that morphs across
-///     ``Download / Cancel / Delete``.
-///   * "Total: X GB across N models" footer that aggregates the
-///     cached subset. Hidden when nothing is cached.
-///
-/// Every shared primitive lives in ``ModelCacheActions``: the
-/// confirmation copy, the status-badge derivation, the
-/// filter/sort/aggregate helpers, and the delete-and-format
-/// dispatch. The view is intentionally thin so all the truth
-/// tables are unit-testable without a SwiftUI host.
+/// Model Files: folders and storage above a native, sortable table shared by
+/// chat/audio/image/video. The table owns presentation filters; downloads,
+/// co-loading and confirmed file deletion retain their existing service paths.
 struct SettingsModelManagementPanel: View {
     @Environment(ServerManager.self) private var server
     @Environment(DownloadManager.self) private var downloads
@@ -47,12 +19,10 @@ struct SettingsModelManagementPanel: View {
     @State private var lastFreed: String?
     @State private var modelsVolumeFreeBytes: Int64?
 
-    @State private var query: String = ""
+    @State private var loadingTableAliases: Set<String> = []
     /// Which file category is showing (Chat / Audio / Image / Video). Model
     /// Management manages every kind, but never mixes them in one list.
     @State private var capability: ModelKind = .chat
-    @State private var filterMode: ModelCacheActions.FilterMode = .all
-    @State private var sortOrder: ModelCacheActions.SortOrder = .familyThenSize
 
     /// Issue #503: the user's chosen models folder (absolute path), or
     /// ``nil`` for the default location. Mirrors
@@ -112,7 +82,6 @@ struct SettingsModelManagementPanel: View {
         }
     }
 
-    @Environment(\.settingsContentIsCompact) private var isCompact
 
     /// The combined 模型 page supplies the page title.
     var showsPageHeader: Bool = true
@@ -126,24 +95,18 @@ struct SettingsModelManagementPanel: View {
             linkedModelsSection
             storageOverviewSection
             capabilityTabs
-            controlsRow
-            if capability == .chat {
-                if showRecommendedSection {
-                    recommendedSection
-                }
-            }
             if loading && catalog.isEmpty {
                 loadingState
             } else if catalog.isEmpty {
                 emptyState
             } else {
-                allModelsSection
+                modelFilesTable
             }
             if let lastError {
                 InlineNotice(
                     message: lastError,
                     tone: .error,
-                    actionTitle: "Dismiss",
+                    actionTitle: i18n.text(zh: "关闭", en: "Dismiss"),
                     actionIdentifier: "Settings.ModelManagement.DismissError",
                     action: { self.lastError = nil }
                 )
@@ -152,7 +115,7 @@ struct SettingsModelManagementPanel: View {
                 InlineNotice(
                     message: lastFreed,
                     tone: .success,
-                    actionTitle: "Dismiss",
+                    actionTitle: i18n.text(zh: "关闭", en: "Dismiss"),
                     actionIdentifier: "Settings.ModelManagement.DismissSuccess",
                     action: { self.lastFreed = nil }
                 )
@@ -190,10 +153,7 @@ struct SettingsModelManagementPanel: View {
         // through ``ModelCacheActions.deletionConfirmation`` so
         // the wording matches.
         .confirmationDialog(
-            ModelCacheActions.deletionConfirmation(
-                for: pendingDeletion ?? ModelEntry(alias: "", hfRepo: nil, sizeOnDisk: nil, cached: false),
-                isServing: pendingDeletion?.alias == server.servingAlias
-            ).title,
+            i18n.text(zh: "删除模型文件？", en: "Delete model files?"),
             isPresented: Binding(
                 get: { pendingDeletion != nil },
                 set: { if !$0 { pendingDeletion = nil } }
@@ -201,23 +161,67 @@ struct SettingsModelManagementPanel: View {
             titleVisibility: .visible,
             presenting: pendingDeletion
         ) { entry in
-            Button(
-                entry.alias == server.servingAlias ? "Stop and delete" : "Delete from disk",
-                role: .destructive
-            ) {
+            Button(i18n.text(zh: "删除文件", en: "Delete files"), role: .destructive) {
                 Task { await deleteAlias(entry) }
                 pendingDeletion = nil
             }
             .accessibilityIdentifier("Settings.ModelManagement.ConfirmDelete")
-            Button("Keep on disk", role: .cancel) {
-                pendingDeletion = nil
-            }
-            .accessibilityIdentifier("Settings.ModelManagement.KeepOnDisk")
+            Button(i18n.text(zh: "保留", en: "Keep files"), role: .cancel) { pendingDeletion = nil }
+                .accessibilityIdentifier("Settings.ModelManagement.KeepOnDisk")
         } message: { entry in
-            Text(ModelCacheActions.deletionConfirmation(
-                for: entry,
-                isServing: entry.alias == server.servingAlias
-            ).message)
+            Text(i18n.text(zh: "将删除 \(entry.alias) 的本地文件，需要时可重新下载。不会删除任务和对话。", en: "Remove local files for \(entry.alias). You can download them again. Tasks and conversations are not deleted."))
+        }
+    }
+
+    // MARK: - Native sortable model-file table
+
+    private var tableRows: [YouziModelTableData.Row] {
+        let recommendations = capability == .chat ? Array(recommendedPicks.prefix(2)) : []
+        return catalog.filter { $0.supports(capability) }.map { entry in
+            YouziModelTableData.Row(
+                entry: entry,
+                badge: ModelCacheActions.statusBadge(for: entry, downloadJob: downloads.jobs[entry.alias], servingAlias: server.servingAlias),
+                loaded: YouziScenarioModels.isReady(entry, in: server.residency) || server.servingAlias == entry.alias,
+                loading: loadingTableAliases.contains(entry.alias) || server.residentLoadsInFlight[entry.alias, default: 0] > 0,
+                recommendationRank: recommendations.firstIndex { $0.pick.alias == entry.alias },
+                favorite: favorites.contains(entry.alias),
+                scores: capability == .chat ? BenchScoresCatalog.lookup(alias: entry.alias) : nil
+            )
+        }
+    }
+
+    private var modelFilesTable: some View {
+        YouziModelTableView(rows: tableRows, hardwareDescription: hardware.shortDescription,
+            download: { entry in
+                guard tableRows.first(where: { $0.id == entry.alias })?.canDownload == true else { return }
+                downloads.dismissJob(alias: entry.alias)
+                _ = downloads.startDownload(alias: entry.alias, hfPath: entry.hfRepo)
+            },
+            cancel: { downloads.cancelDownload(alias: $0.alias) },
+            load: { entry in Task { await loadTableModel(entry) } },
+            delete: { entry in
+                guard tableRows.first(where: { $0.id == entry.alias })?.canDelete == true else { return }
+                pendingDeletion = entry
+            },
+            favorite: { toggleFavorite($0.alias) })
+        .id(capability)
+    }
+
+    private func loadTableModel(_ entry: ModelEntry) async {
+        guard tableRows.first(where: { $0.id == entry.alias })?.canLoad == true else { return }
+        loadingTableAliases.insert(entry.alias)
+        defer { loadingTableAliases.remove(entry.alias) }
+        lastError = nil
+        let success: Bool
+        if server.servingAlias != nil { success = await server.loadStartupModel(entry) }
+        else if entry.kind == .chat { success = await server.ensureServing(alias: entry.alias, hfPath: entry.hfRepo) }
+        else {
+            lastError = i18n.text(zh: "请先启动聊天服务，再加载图片、语音或视频模型。", en: "Start the chat service before loading an image, audio or video model.")
+            return
+        }
+        if !success {
+            lastError = server.residentLoadFailures[entry.alias]?.message
+                ?? i18n.text(zh: "模型未能加载，请检查模型设置或服务日志。", en: "Model could not load. Check model settings or service logs.")
         }
     }
 
@@ -552,226 +556,19 @@ struct SettingsModelManagementPanel: View {
         .accessibilityIdentifier("Settings.ModelManagement.CapabilityTabs")
     }
 
-    @ViewBuilder
-    private var controlsRow: some View {
-        VStack(spacing: RapidTheme.Space.sm) {
-            HStack(spacing: RapidTheme.Space.sm) {
-                HStack(spacing: RapidTheme.Space.xs) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(RapidTheme.utilityActionLabel)
-                        .accessibilityHidden(true)
-                    TextField("Search models", text: $query)
-                        .textFieldStyle(.plain)
-                        .font(RapidFont.body)
-                        .accessibilityIdentifier("Settings.ModelManagement.Search")
-                    if !query.isEmpty {
-                        QuietIconButton(
-                            symbol: "xmark.circle.fill",
-                            label: "Clear search",
-                            size: RapidTheme.ControlHeight.mini
-                        ) {
-                            query = ""
-                        }
-                        .accessibilityIdentifier("Settings.ModelManagement.ClearSearch")
-                    }
-                }
-                .padding(.horizontal, RapidTheme.Space.sm)
-                .frame(height: RapidTheme.ControlHeight.medium)
-                // The one input treatment: same radius and border the
-                // composer uses, instead of a local 7pt capsule over a
-                // hand-mixed `Color.secondary.opacity(0.08)`.
-                .background(
-                    RoundedRectangle(cornerRadius: RapidTheme.Radius.input, style: .continuous)
-                        .fill(RapidTheme.surfaceRaised)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: RapidTheme.Radius.input, style: .continuous)
-                        .strokeBorder(RapidTheme.hairlineStrong, lineWidth: 1)
-                )
-                .frame(maxWidth: .infinity)
-
-                Menu {
-                    ForEach(ModelCacheActions.SortOrder.allCases) { order in
-                        Button {
-                            sortOrder = order
-                        } label: {
-                            if sortOrder == order {
-                                Label(order.displayLabel, systemImage: "checkmark")
-                            } else {
-                                Text(order.displayLabel)
-                            }
-                        }
-                        .accessibilityIdentifier("Settings.ModelManagement.Sort.\(order.rawValue)")
-                    }
-                } label: {
-                    Label("Sort", systemImage: "arrow.up.arrow.down")
-                        .font(RapidFont.body)
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                // `.tint(nil)` as well as `.foregroundStyle`: the scene
-                // applies `.tint(brandAmber)` app-wide, and a borderless
-                // Menu's label reads the TINT, not the foreground style —
-                // so without this the Sort control rendered amber and read
-                // as the page's primary action rather than a utility next
-                // to the search field.
-                .tint(nil)
-                .foregroundStyle(RapidTheme.utilityActionLabel)
-                .accessibilityIdentifier("Settings.ModelManagement.SortMenu")
-            }
-            RapidSegmentedControl(
-                selection: $filterMode,
-                options: ModelCacheActions.FilterMode.allCases.map {
-                    .init(value: $0, title: $0.displayLabel)
-                },
-                accessibilityLabel: "Filter"
-            )
-            .accessibilityIdentifier("Settings.ModelManagement.Filter")
-        }
-    }
-
-    // MARK: - Recommended (issue #507)
-
-    /// The recommended picks for this Mac's RAM: the primary (index 0)
-    /// plus an optional faster alternative (only the smallest tier carries
-    /// one). One card per pick.
     private var recommendedPicks: [(pick: RAMBucketedDefault.Pick, isPrimary: Bool)] {
-        RAMBucketedDefault.catalogPicks(
-            from: hardware.recommendedPicks,
-            catalog: catalog
-        ).map { resolved in
-            (resolved.pick, resolved.isPrimary)
-        }
+        RAMBucketedDefault.catalogPicks(from: hardware.recommendedPicks, catalog: catalog)
+            .map { ($0.pick, $0.isPrimary) }
     }
 
-    /// alias → the badge an "All models" row carries (RECOMMENDED for the
-    /// primary, FASTER for the alt). Primary wins if an alias somehow
-    /// appears twice.
-    private var recommendedBadgeByAlias: [String: String] {
-        var map: [String: String] = [:]
-        for resolved in RAMBucketedDefault.catalogPicks(
-            from: hardware.recommendedPicks,
-            catalog: catalog
-        ) where map[resolved.pick.alias] == nil {
-            map[resolved.pick.alias] = resolved.isPrimary ? "RECOMMENDED" : "FASTER"
-        }
-        return map
+    private var availableKinds: [ModelKind] { ModelFileCategory.kinds }
+
+    private func toggleFavorite(_ alias: String) {
+        _ = ModelFavorites.toggle(alias)
+        favorites = ModelFavorites.load()
     }
 
-    /// Cards only make sense on the unfiltered default view. Hide them
-    /// the moment the user searches or switches the cached filter so
-    /// those controls act on the whole catalog without a fixed 4-card
-    /// header in the way.
-    private var showRecommendedSection: Bool {
-        !catalog.isEmpty
-            && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && filterMode == .all
-    }
-
-    @ViewBuilder
-    private var recommendedSection: some View {
-        VStack(alignment: .leading, spacing: RapidTheme.Space.sm) {
-            SectionHeader("Recommended for your \(hardware.shortDescription)")
-                .accessibilityIdentifier("Settings.ModelManagement.RecommendedHeader")
-            ForEach(recommendedPicks, id: \.pick.alias) { entry in
-                recommendedCard(pick: entry.pick, isPrimary: entry.isPrimary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func recommendedCard(pick: RAMBucketedDefault.Pick, isPrimary: Bool) -> some View {
-        let alias = pick.alias
-        let entry = entry(forAlias: alias)
-        let badge = ModelCacheActions.statusBadge(
-            for: entry,
-            downloadJob: downloads.jobs[entry.alias],
-            servingAlias: server.servingAlias
-        )
-        // Meters live UNDER the name/blurb (not as a fixed right column) so
-        // the card fits the narrow Settings pane at the app's 720pt minimum
-        // window — a fixed brand + meters + action row overflows and clips
-        // the action button there (design review B1).
-        HStack(alignment: .top, spacing: 12) {
-            // One marker, not two. This column used to render "Best pick"
-            // as a label AND "BEST PICK" as a capsule directly beneath it
-            // — the same two words, stacked, on the same card. The label
-            // stays because it carries the star and reads at a glance; the
-            // capsule goes because the card's own brand tint, brand border
-            // and shadow already say "this is the featured one", and the
-            // table below still pills the same alias as RECOMMENDED.
-            Label(isPrimary ? "Best pick" : "Faster",
-                  systemImage: isPrimary ? "star.fill" : "hare.fill")
-                .font(RapidFont.caption)
-                .foregroundStyle(isPrimary ? RapidTheme.brandPrimaryDeep : RapidTheme.textSecondary)
-                .labelStyle(.titleAndIcon)
-                .frame(width: RecommendedCardLayout.markerColumnWidth, alignment: .leading)
-
-            BrandIcon(alias: alias)
-
-            VStack(alignment: .leading, spacing: 7) {
-                VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
-                    Text(modelSubtitle(alias))
-                        .font(RapidFont.bodyEmphasis)
-                        .foregroundStyle(RapidTheme.textPrimary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(Self.pickStatsLine(pick))
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textSecondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                // No per-axis standard-benchmark meters here: the
-                // recommendation card shows only the curated capability /
-                // speed stats above (its single source of truth). The
-                // standard-bench bars live in the "All models" rows below,
-                // so a pick never shows two conflicting sets of numbers.
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            // ``fixedSize`` is the actual guarantee: it hands the action
-            // its intrinsic width so a label can never be compressed into
-            // an ellipsis. The frame is alignment only — a floor wide
-            // enough for the longest label this slot renders, so the two
-            // stacked cards line up, with no ceiling to clip against.
-            //
-            // The bug this replaces: a hard ``.frame(width: 92)`` around a
-            // caption + button cluster. The caption ate ~50pt and the
-            // prominent "Download" button was left with ~40, rendering as
-            // "Dow…" for every user whose best pick wasn't cached. Widening
-            // the Settings window did nothing — the clamp was on the card.
-            recommendedAction(entry: entry, badge: badge)
-                .fixedSize(horizontal: true, vertical: false)
-                .frame(minWidth: RecommendedCardLayout.actionColumnWidth, alignment: .trailing)
-        }
-        .padding(SettingsCardMetrics.inset(isCompact: isCompact))
-        // The featured card is distinguished by the product's selection
-        // pair — amber tint and an amber edge — not by a steel-blue tint
-        // and a drop shadow. The shadow is gone: the tint plus the border
-        // already separate this tier from the flush table below it, and a
-        // shadow was the only one of its kind on the page.
-        .background(
-            RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                .fill(isPrimary ? RapidTheme.brandPrimaryTint : RapidTheme.surfaceRaised)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                .strokeBorder(
-                    isPrimary ? RapidTheme.brandPrimary.opacity(0.35) : RapidTheme.hairline,
-                    lineWidth: 1
-                )
-        )
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("Settings.ModelManagement.Recommended.\(isPrimary ? "primary" : "alt")")
-    }
-
-    /// Compact stats line under a recommended card's model name:
-    /// "7.6 GB · 86% capability · ~17 tok/s" (tok/s omitted when we have
-    /// no local measurement for that tier). When the pick carries a
-    /// ``caveat`` (e.g. a chat specialist), that word replaces the
-    /// capability % — "4.8 GB · ~117 tok/s · Chat only" — because the
-    /// blended score would understate conversation and overstate the rest.
+    // Compatibility helpers for existing model-size and recommendation fixtures.
     static func pickStatsLine(_ pick: RAMBucketedDefault.Pick) -> String {
         var parts = [String(format: "%.1f GB", pick.footprintGB)]
         if let caveat = pick.caveat {
@@ -788,635 +585,16 @@ struct SettingsModelManagementPanel: View {
         return parts.joined(separator: " · ")
     }
 
-    /// The card's trailing slot: a status pill when there is nothing to
-    /// do, otherwise the one action button.
-    ///
-    /// No size caption here. ``pickStatsLine`` already opens with the
-    /// pick's footprint two columns to the left ("7.6 GB · 86%
-    /// capability · ~17 tok/s"), so a second "7.6 GB" beside the button
-    /// was the same fact twice on one card — and the two were computed
-    /// from different sources (the curated ``Pick.footprintGB`` vs
-    /// ``ModelSizing.estimate``), so they could disagree by a rounding
-    /// step while claiming to be the same number. It was also what
-    /// starved the button into "Dow…".
-    @ViewBuilder
-    private func recommendedAction(entry: ModelEntry, badge: ModelCacheActions.StatusBadge) -> some View {
-        switch badge {
-        case .cached, .inUse:
-            statusBadgeView(badge)
-        default:
-            actionButton(for: entry, badge: badge)
-        }
-    }
-
-    // MARK: - All models section
-
-    @ViewBuilder
-    private var allModelsSection: some View {
-        // Resolved once and handed to both the heading and the list, so
-        // the number in the heading and the rows under it can never
-        // describe different sets.
-        let entries = visibleEntries
-        let kindEntries = catalog.filter { $0.supports(capability) }
-        let heading = ModelCacheActions.listHeading(
-            filter: filterMode,
-            query: query,
-            visibleCount: entries.count,
-            totalCount: kindEntries.count
-        )
-        VStack(alignment: .leading, spacing: RapidTheme.Space.sm) {
-            ModelsTableHeading(heading: heading)
-            // The meter legend + Quality·Speed column belong to CHAT rows only
-            // — image models have no tok/s benchmark, so their tab shows a
-            // leaner row (name · repo · size · download). They also need
-            // room: under ``compactContentWidth`` the 158pt meters column
-            // squeezes the model name to nothing, so the meters stand down
-            // and the name keeps the width. Nothing actionable is hidden —
-            // the meters are read-only.
-            if capability == .chat && showsMeters {
-                meterLegend
-                columnHeader
-            }
-            listSection(entries)
-            if let footer = ModelCacheActions.diskUsageFooter(
-                ModelCacheActions.aggregateOnDiskBytes(kindEntries)
-            ) {
-                Text(footer)
-                    .font(RapidFont.caption)
-                    .foregroundStyle(RapidTheme.textSecondary)
-                    .padding(.top, RapidTheme.Space.xxs)
-                    .accessibilityIdentifier("Settings.ModelManagement.Footer")
-            }
-        }
-    }
-
-    /// One-line meaning of the two meters + the explicit unknown state. Rendered inside
-    /// the "All models" section, immediately above the only rows that
-    /// carry the Quality · Speed bars. (It used to sit at the panel top,
-    /// but the recommendation cards no longer show meters — they show the
-    /// curated capability / speed stats — so a top-of-panel legend
-    /// misattributed those curated numbers as published benchmarks.)
-    @ViewBuilder
-    private var meterLegend: some View {
-        Text("Quality = published benchmark, labelled per row (Accuracy / Code / Tool / Instructions) · Speed = measured tokens/sec on this class of Mac · Untested = no compatible result recorded yet.")
-            .font(RapidFont.caption)
-            .foregroundStyle(RapidTheme.textTertiary)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("Settings.ModelManagement.MeterLegend")
-    }
-
-    @ViewBuilder
-    private var columnHeader: some View {
-        HStack(spacing: RapidTheme.Space.sm) {
-            Spacer().frame(width: 15)
-            Spacer().frame(width: 30)
-            Text("Model").frame(maxWidth: .infinity, alignment: .leading)
-            Text("Quality · Speed").frame(width: ModelTableLayout.metersColumnWidth, alignment: .leading)
-            Text("Size").frame(width: ModelTableLayout.sizeColumnWidth, alignment: .trailing)
-        }
-        .font(RapidFont.groupLabel)
-        .foregroundStyle(RapidTheme.textTertiary)
-        .padding(.horizontal, RapidTheme.Space.lg)
-    }
-
-    // MARK: - Shared meters
-
-    @ViewBuilder
-    private func metersView(alias: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            SegmentedBenchMeter(meter: ModelMeter.qualityMeter(for: alias))
-            SegmentedBenchMeter(meter: ModelMeter.speedMeter(for: alias))
-        }
-    }
-
-    // MARK: - Row helpers (issue #507)
-
-    /// The catalog entry for an alias, or a synthesised not-cached stub
-    /// when the alias isn't in the catalog snapshot (defensive — the
-    /// catalog is the full alias list, so this is the empty-catalog race).
-    private func entry(forAlias alias: String) -> ModelEntry {
-        catalog.first { $0.alias == alias }
-            ?? ModelEntry(alias: alias, hfRepo: nil, sizeOnDisk: nil, cached: false)
-    }
-
-    /// "Qwen 3.6 · 35B · 4-bit" — family + params + quant.
-    private func modelSubtitle(_ alias: String) -> String {
-        var parts = [ModelBrandStyle.displayFamily(forAlias: alias)]
-        if let p = paramsLabel(alias) { parts.append(p) }
-        parts.append("\(ModelSizing.parseBitsPerWeight(alias))-bit")
-        return parts.joined(separator: " · ")
-    }
-
-    /// Table meta line — subtitle plus the context window when known.
-    private func rowMeta(_ alias: String) -> String {
-        var s = modelSubtitle(alias)
-        if let ctx = contextLabel(alias) { s += " · \(ctx)" }
-        return s
-    }
-
-    private func paramsLabel(_ alias: String) -> String? {
-        guard let p = ModelSizing.estimate(alias: alias).paramsBillions else { return nil }
-        if p >= 1 {
-            return p.truncatingRemainder(dividingBy: 1) == 0
-                ? "\(Int(p))B"
-                : String(format: "%.1fB", p)
-        }
-        return String(format: "%.1fB", p)
-    }
-
-    private func contextLabel(_ alias: String) -> String? {
-        guard let ctx = ModelInfoCatalog.familyAndContext(for: alias).contextWindow else { return nil }
-        if ctx >= 1024, ctx % 1024 == 0 { return "\(ctx / 1024)k" }
-        return "\(ctx)"
-    }
-
-    /// ESTIMATED download size for a model that is not on disk, derived
-    /// from the alias string by ``ModelSizing`` — not a measurement of
-    /// anything. The caller renders it with a leading "~" so it can't be
-    /// mistaken for the measured on-disk figure cached rows in the same
-    /// column now show; #1550 has a case where this estimate lands ~12%
-    /// under the real download.
     nonisolated static func downloadSizeLabel(_ alias: String) -> String? {
         let fp = ModelSizing.estimate(alias: alias)
         guard fp.weightsGB > 0 else { return nil }
         return String(format: "%.1f GB", fp.weightsGB)
     }
 
-    /// MEASURED size of a cached model, exactly as ``rapid-mlx ls``
-    /// reported it (and as Settings → Models quotes it, so the two
-    /// surfaces can't print different numbers for the same model).
-    /// Never an estimate: if the measurement is missing, the row shows no
-    /// size rather than substituting ``ModelSizing``'s guess.
     nonisolated static func onDiskSizeLabel(_ entry: ModelEntry) -> String? {
         guard let raw = entry.sizeOnDisk?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty else { return nil }
         return raw
-    }
-
-    @ViewBuilder
-    private func favoriteStar(_ alias: String) -> some View {
-        let isFav = favorites.contains(alias)
-        Button {
-            toggleFavorite(alias)
-        } label: {
-            Image(systemName: isFav ? "star.fill" : "star")
-                .font(.system(size: 13))
-                .foregroundStyle(isFav ? RapidTheme.brandPrimaryDeep : RapidTheme.textTertiary)
-        }
-        .buttonStyle(.plain)
-        .frame(width: 15)
-        .accessibilityLabel(isFav ? "Unpin \(alias)" : "Pin \(alias)")
-        .accessibilityIdentifier("Settings.ModelManagement.Favorite.\(alias)")
-    }
-
-    private func toggleFavorite(_ alias: String) {
-        if ModelFavorites.toggle(alias) {
-            favorites.insert(alias)
-        } else {
-            favorites.remove(alias)
-        }
-    }
-
-    @ViewBuilder
-    private func rowBadge(for alias: String) -> some View {
-        if let badge = recommendedBadgeByAlias[alias] {
-            badgePill(badge, color: RapidTheme.brandPrimaryDeep)
-        } else if ModelBrandStyle.modelType(forAlias: alias) == .vision {
-            badgePill("VISION", color: RapidTheme.textSecondary)
-        }
-        ForEach(ModelCacheActions.retentionBadges(
-            alias: alias,
-            starterAlias: QuickstartCoordinator.defaultChoice.alias,
-            lastServedAlias: ServerManager.lastServedAlias()
-        ), id: \.self) { badge in
-            badgePill(badge, color: badge == "STARTER" ? RapidTheme.amber : RapidTheme.green)
-        }
-    }
-
-    @ViewBuilder
-    private func badgePill(_ text: String, color: Color) -> some View {
-        Text(text)
-            .scaledSystemFont(9, weight: .bold)
-            .foregroundStyle(color)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .background(Capsule().fill(color.opacity(0.14)))
-    }
-
-    // NOTE: a hard-coded purple ``visionColor`` used to live here. It was
-    // the only violet in the product and carried no meaning the palette
-    // owns — "this model takes images" is a capability, not a status — so
-    // the VISION pill now uses the neutral secondary text colour and is
-    // distinguished by its word, not by a unique hue.
-
-    /// Right-hand "Size" column: cached → check + delete; serving →
-    /// label; not-cached → size + download; downloading → cancel;
-    /// failed → retry. Preserves the accessibility identifiers the
-    /// original text buttons carried so existing selectors still resolve.
-    @ViewBuilder
-    private func sizeAction(entry: ModelEntry, badge: ModelCacheActions.StatusBadge) -> some View {
-        switch badge {
-        case .cached:
-            // The size is the point of this tab. A cached row used to show
-            // the check and the trash and nothing else, so the one surface
-            // whose job is reclaiming space never said how much any given
-            // model would reclaim — while its own "Size (largest first)"
-            // sort ordered the table by exactly that number.
-            HStack(spacing: ModelTableLayout.cellSpacing) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(RapidFont.caption)
-                    .foregroundStyle(RapidTheme.statusReady)
-                    .accessibilityHidden(true)
-                if let size = Self.onDiskSizeLabel(entry) {
-                    Text(size)
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textSecondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(ModelTableLayout.cellMinimumScaleFactor)
-                        .help(
-                            entry.isExternal
-                                ? "Measured size on disk. Downloaded by another app — "
-                                    + "Youzi can't delete it."
-                                : "Measured size on disk. Deleting frees this much."
-                        )
-                        .accessibilityLabel("On disk, \(size)")
-                } else {
-                    // No measurement from ``rapid-mlx ls``. Say "On disk"
-                    // and stop — substituting the alias-derived estimate
-                    // here would quote a guess as a measurement.
-                    Text("On disk")
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textSecondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(ModelTableLayout.cellMinimumScaleFactor)
-                }
-                // A model another MLX runtime downloaded gets no delete
-                // button (#1718). Deletion rebuilds
-                // ``<hub-root>/models--<repo>``, which is not where this
-                // one lives, so the button would either do nothing or
-                // remove an unrelated hub entry of the same name. We did
-                // not download it, so it is not ours to remove — same
-                // reasoning as the absent delete on a serving model below.
-                if !entry.isExternal {
-                    // Destructive, and now visibly so: the shared quiet
-                    // icon button turns red under the pointer instead of
-                    // staying the same grey as the copy glyph beside it.
-                    QuietIconButton(
-                        symbol: "trash",
-                        label: "Delete \(entry.alias) from disk",
-                        help: "Delete from disk",
-                        tint: RapidTheme.statusError,
-                        size: RapidTheme.ControlHeight.mini
-                    ) {
-                        pendingDeletion = entry
-                    }
-                    .accessibilityIdentifier("Settings.ModelManagement.Delete.\(entry.alias)")
-                }
-            }
-        case .inUse:
-            // A serving model is a CACHED model, so it owes the same
-            // answer as any other cached row: how much disk it is using.
-            // Showing only "Serving" left the one model the user is most
-            // likely to be weighing as the single row with no size.
-            // Deletion remains available, but its confirmed action stops the
-            // server before touching weights that are currently mmap'd.
-            HStack(spacing: ModelTableLayout.cellSpacing) {
-                if let size = Self.onDiskSizeLabel(entry) {
-                    Text(size)
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textSecondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(ModelTableLayout.cellMinimumScaleFactor)
-                        .help("Measured size on disk. Stop this model before deleting it.")
-                        .accessibilityLabel("On disk, \(size)")
-                }
-                Text("Serving")
-                    .font(RapidFont.caption)
-                    .foregroundStyle(RapidTheme.statusReady)
-                    .lineLimit(1)
-                    .minimumScaleFactor(ModelTableLayout.cellMinimumScaleFactor)
-                if !entry.isExternal {
-                    QuietIconButton(
-                        symbol: "trash",
-                        label: "Stop serving and delete \(entry.alias) from disk",
-                        help: "Stop serving and delete this model from disk.",
-                        tint: RapidTheme.statusError,
-                        size: RapidTheme.ControlHeight.mini
-                    ) {
-                        pendingDeletion = entry
-                    }
-                    .accessibilityIdentifier("Settings.ModelManagement.Delete.\(entry.alias)")
-                }
-            }
-        case .notCached:
-            HStack(spacing: 8) {
-                if let gb = Self.downloadSizeLabel(entry.alias) {
-                    Text("~\(gb)")
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textSecondary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(ModelTableLayout.cellMinimumScaleFactor)
-                        .help("Estimated download size.")
-                        .accessibilityLabel("Estimated download, about \(gb)")
-                }
-                QuietIconButton(
-                    symbol: "arrow.down.circle",
-                    label: "Download \(entry.alias)",
-                    help: "Download",
-                    size: RapidTheme.ControlHeight.mini,
-                    symbolSize: 14
-                ) {
-                    _ = downloads.startDownload(alias: entry.alias, hfPath: entry.hfRepo)
-                }
-                .accessibilityIdentifier("Settings.ModelManagement.Download.\(entry.alias)")
-            }
-        case .downloading(let pct):
-            Button {
-                downloads.cancelDownload(alias: entry.alias)
-            } label: {
-                Text(pct.map { "\($0)%" } ?? "Cancel")
-            }
-            .buttonStyle(.rapidSecondaryCompact)
-            .help("Cancel download")
-            .accessibilityLabel(pct.map { "Cancel download, \($0) percent" } ?? "Cancel download")
-            .accessibilityIdentifier("Settings.ModelManagement.Cancel.\(entry.alias)")
-        case .failed:
-            Button {
-                downloads.dismissJob(alias: entry.alias)
-                _ = downloads.startDownload(alias: entry.alias, hfPath: entry.hfRepo)
-            } label: {
-                Text("Retry")
-            }
-            .buttonStyle(.rapidSecondaryCompact)
-            .accessibilityIdentifier("Settings.ModelManagement.Retry.\(entry.alias)")
-        }
-    }
-
-    // MARK: - List
-
-    private var visibleEntries: [ModelEntry] {
-        let byCapability = catalog.filter { $0.supports(capability) }
-        let filtered = ModelCacheActions.filter(byCapability, by: filterMode, query: query)
-        let sorted = ModelCacheActions.sorted(filtered, order: sortOrder)
-        return ModelFavorites.favoritesFirst(sorted, favorites: favorites)
-    }
-
-    /// Whether the Quality·Speed meters column has the room to render.
-    ///
-    /// Read-only decoration, so it is the correct thing to drop when the
-    /// column gets narrow — every ACTION in the row (download, cancel,
-    /// retry, delete) stays reachable at every supported window size.
-    private var showsMeters: Bool { !isCompact }
-
-    /// Categories stay visible with an empty catalog or after deletion.
-    private var availableKinds: [ModelKind] {
-        ModelFileCategory.kinds
-    }
-
-    @ViewBuilder
-    private func listSection(_ entries: [ModelEntry]) -> some View {
-        if entries.isEmpty {
-            Text(noMatchesCopy)
-                .font(RapidFont.body)
-                .foregroundStyle(RapidTheme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, RapidTheme.Space.md)
-        } else {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(entries.enumerated()), id: \.element.alias) { idx, entry in
-                    if capability == .chat {
-                        row(for: entry)
-                    } else {
-                        capabilityRow(for: entry)
-                    }
-                    if idx < entries.count - 1 {
-                        Rectangle()
-                            .fill(RapidTheme.hairline)
-                            .frame(height: 1)
-                            .accessibilityHidden(true)
-                    }
-                }
-            }
-            .settingsGroupedCard()
-        }
-    }
-
-    private var noMatchesCopy: String {
-        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            switch filterMode {
-            case .all:
-                return capability == .video
-                    ? i18n.text(zh: "当前运行时未提供可管理的视频模型。刷新目录或更新运行时后重试。", en: "This runtime has no manageable video models. Refresh the catalog or update the runtime.")
-                    : i18n.text(zh: "此分类暂无模型。请刷新目录后重试。", en: "No models in this category. Refresh the catalog to retry.")
-            case .cached:
-                return "Nothing cached on disk yet. Pick a row from \"Not cached\" and hit Download."
-            case .notCached:
-                return "Every model in the catalog is already downloaded."
-            }
-        }
-        return "No matches for \"\(query)\"."
-    }
-
-    @ViewBuilder
-    private func row(for entry: ModelEntry) -> some View {
-        let badge = ModelCacheActions.statusBadge(
-            for: entry,
-            downloadJob: downloads.jobs[entry.alias],
-            servingAlias: server.servingAlias
-        )
-        HStack(spacing: RapidTheme.Space.sm) {
-            favoriteStar(entry.alias)
-            BrandIcon(alias: entry.alias)
-            VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
-                HStack(spacing: RapidTheme.Space.xs) {
-                    Text(entry.alias)
-                        .font(RapidFont.bodyEmphasis)
-                        .foregroundStyle(RapidTheme.textPrimary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    rowBadge(for: entry.alias)
-                }
-                Text(rowMeta(entry.alias))
-                    .font(RapidFont.caption)
-                    .foregroundStyle(RapidTheme.textTertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            if showsMeters {
-                metersView(alias: entry.alias)
-                    .frame(width: ModelTableLayout.metersColumnWidth)
-            }
-            sizeAction(entry: entry, badge: badge)
-                .frame(width: ModelTableLayout.sizeColumnWidth, alignment: .trailing)
-        }
-        .padding(.vertical, RapidTheme.Space.md)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("Settings.ModelManagement.Row.\(entry.alias)")
-    }
-
-    /// A leaner row for image/audio models: no chat tok/s meters, just
-    /// name · capability/repo · size and the same download/delete control.
-    @ViewBuilder
-    private func capabilityRow(for entry: ModelEntry) -> some View {
-        let badge = ModelCacheActions.statusBadge(
-            for: entry,
-            downloadJob: downloads.jobs[entry.alias],
-            servingAlias: server.servingAlias
-        )
-        HStack(spacing: RapidTheme.Space.sm) {
-            BrandIcon(alias: entry.alias)
-            VStack(alignment: .leading, spacing: RapidTheme.Space.xxs) {
-                Text(entry.alias)
-                    .font(RapidFont.bodyEmphasis)
-                    .foregroundStyle(RapidTheme.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if entry.kind == .video {
-                    Text(entry.videoCapabilities.map {
-                        $0 == .textToVideo ? i18n.text(zh: "文生视频", en: "Text to video")
-                            : i18n.text(zh: "图生视频", en: "Image to video")
-                    }.joined(separator: " · "))
-                        .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
-                }
-                if capability == .audio, let audioCapability = entry.audioCapability {
-                    Text(audioCapabilityLabel(audioCapability))
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textSecondary)
-                }
-                if capability == .image, let imageCapability = entry.imageCapability {
-                    Text(imageCapability.label)
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textSecondary)
-                }
-                if let repo = entry.hfRepo {
-                    Text(repo)
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textTertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            sizeAction(entry: entry, badge: badge)
-                .frame(width: ModelTableLayout.sizeColumnWidth, alignment: .trailing)
-        }
-        .padding(.vertical, RapidTheme.Space.md)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("Settings.ModelManagement.Row.\(entry.alias)")
-    }
-
-    private func audioCapabilityLabel(_ capability: AudioModelCapability) -> String {
-        switch capability {
-        case .transcription: return "Speech to text"
-        case .alignment: return "Forced alignment"
-        case .speech: return "Text to speech"
-        case .voiceCloning: return "Voice cloning"
-        case .voiceDesign: return "Voice design"
-        }
-    }
-
-    @ViewBuilder
-    private func statusBadgeView(_ badge: ModelCacheActions.StatusBadge) -> some View {
-        switch badge {
-        case .cached:
-            pill(text: "On disk", color: RapidTheme.statusReady)
-        case .inUse:
-            pill(text: "In use", color: RapidTheme.statusReady)
-        case .notCached:
-            pill(text: "Not cached", color: RapidTheme.statusIdle)
-        case .downloading(let pct):
-            let label: String = {
-                if let pct {
-                    return "Downloading… \(pct)%"
-                }
-                return "Downloading…"
-            }()
-            pill(text: label, color: RapidTheme.statusWorking)
-        case .failed:
-            pill(text: "Failed", color: RapidTheme.statusError)
-        }
-    }
-
-    @ViewBuilder
-    private func pill(text: String, color: Color) -> some View {
-        Text(text)
-            .font(RapidFont.caption)
-            .foregroundStyle(color)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(color.opacity(0.15))
-            )
-            .lineLimit(1)
-            .fixedSize()
-            .accessibilityIdentifier("Settings.ModelManagement.Status.\(text)")
-    }
-
-    /// The prominent action button on a Recommended CARD. The dense
-    /// table row uses ``sizeAction`` instead; this helper is card-only,
-    /// so its identifiers are namespaced ``.Recommended.*`` to stay
-    /// unique when the same alias also appears as a table row below
-    /// (design review / correctness MINOR: duplicate identifiers).
-    @ViewBuilder
-    private func actionButton(for entry: ModelEntry, badge: ModelCacheActions.StatusBadge) -> some View {
-        switch badge {
-        case .cached:
-            if entry.isExternal {
-                // Downloaded by another MLX runtime (#1718): usable, but
-                // outside the hub root the delete path addresses. Say where
-                // it came from instead of offering a delete that cannot
-                // reach it.
-                Text("External")
-                    .font(RapidFont.caption)
-                    .foregroundStyle(RapidTheme.textSecondary)
-                    .help("Found outside Youzi's models folder. Youzi didn't download it, so it can't remove it.")
-                    .accessibilityIdentifier(
-                        "Settings.ModelManagement.Recommended.External.\(entry.alias)"
-                    )
-            } else {
-                Button {
-                    pendingDeletion = entry
-                } label: {
-                    Text("Delete")
-                }
-                .buttonStyle(.rapidDestructiveCompact)
-                .accessibilityIdentifier("Settings.ModelManagement.Recommended.Delete.\(entry.alias)")
-            }
-        case .inUse:
-            // rapid-mlx holds the weights mmap'd — a mid-serve rm would
-            // either fail or corrupt inference. Mirror the picker's
-            // "currently-serving rows are off-limits" rule.
-            Text("Serving")
-                .font(RapidFont.caption)
-                .foregroundStyle(RapidTheme.statusReady)
-        case .notCached:
-            Button {
-                _ = downloads.startDownload(alias: entry.alias, hfPath: entry.hfRepo)
-            } label: {
-                Text("Download")
-            }
-            .buttonStyle(.rapidPrimaryCompact)
-            .accessibilityIdentifier("Settings.ModelManagement.Recommended.Download.\(entry.alias)")
-        case .downloading:
-            Button {
-                downloads.cancelDownload(alias: entry.alias)
-            } label: {
-                Text("Cancel")
-            }
-            .buttonStyle(.rapidSecondaryCompact)
-            .accessibilityIdentifier("Settings.ModelManagement.Recommended.Cancel.\(entry.alias)")
-        case .failed:
-            Button {
-                downloads.dismissJob(alias: entry.alias)
-                _ = downloads.startDownload(alias: entry.alias, hfPath: entry.hfRepo)
-            } label: {
-                Text("Retry")
-            }
-            .buttonStyle(.rapidSecondaryCompact)
-            .accessibilityIdentifier("Settings.ModelManagement.Recommended.Retry.\(entry.alias)")
-        }
     }
 
     // MARK: - States
@@ -1425,7 +603,7 @@ struct SettingsModelManagementPanel: View {
     private var loadingState: some View {
         HStack(spacing: RapidTheme.Space.sm) {
             ProgressView().controlSize(.small)
-            Text("Loading model catalog…")
+            Text(i18n.text(zh: "正在读取模型列表…", en: "Loading model catalog…"))
                 .font(RapidFont.body)
                 .foregroundStyle(RapidTheme.textSecondary)
         }
@@ -1434,7 +612,7 @@ struct SettingsModelManagementPanel: View {
 
     @ViewBuilder
     private var emptyState: some View {
-        Text("Couldn't load the model list. Restart Youzi to try again.")
+        Text(i18n.text(zh: "模型列表读取失败，请重新打开设置后重试。", en: "Couldn't load the model list. Reopen settings to retry."))
             .font(RapidFont.body)
             .foregroundStyle(RapidTheme.textSecondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -1605,17 +783,14 @@ struct SettingsModelManagementPanel: View {
     private func deleteAlias(_ entry: ModelEntry) async {
         lastError = nil
         lastFreed = nil
-        if server.servingAlias != entry.alias,
-           server.isModelResident(entry.alias) || (entry.hfRepo.map { server.isModelResident($0) } ?? false) {
-            lastError = i18n.text(zh: "模型仍在使用中，请先停止该模型后再删除文件。", en: "This model is still loaded. Stop it before deleting its files.")
+        guard !entry.isExternal, !loadingTableAliases.contains(entry.alias),
+              server.residentLoadsInFlight[entry.alias, default: 0] == 0,
+              server.servingAlias != entry.alias,
+              !server.isModelResident(entry.alias),
+              !(entry.hfRepo.map { server.isModelResident($0) } ?? false),
+              !YouziScenarioModels.isReady(entry, in: server.residency) else {
+            lastError = i18n.text(zh: "模型仍在使用中或属于外部文件，请先停止模型；外部文件请到原目录管理。", en: "This model is loaded/loading or externally managed. Stop it first; manage external files in their original folder.")
             return
-        }
-        if server.servingAlias == entry.alias {
-            await server.stop()
-            guard server.servingAlias != entry.alias else {
-                lastError = "Couldn't stop \(entry.alias), so it was not deleted."
-                return
-            }
         }
         let outcome = await ModelCacheActions.runDeletion(
             for: entry,
