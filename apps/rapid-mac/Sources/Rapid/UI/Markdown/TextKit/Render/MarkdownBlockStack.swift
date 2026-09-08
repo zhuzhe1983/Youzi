@@ -295,7 +295,10 @@ struct MarkdownTableView: View {
     ) -> some View {
         ForEach(Array(cells.enumerated()), id: \.offset) { column, runs in
             let cell = Text(styled(runs, isHeader: isHeader))
-                .frame(minWidth: 80, alignment: alignment(for: column))
+                // Grid aligns columns but does not stretch intrinsic-width Text.
+                // Fill the column before painting backgrounds/dividers, including
+                // empty/short headers and centered/right-aligned body cells.
+                .frame(minWidth: 80, maxWidth: .infinity, alignment: alignment(for: column))
                 .padding(.horizontal, options.tableCellInsets.leading)
                 .padding(.vertical, options.tableCellInsets.top)
                 // `maxHeight` so a short cell still fills a row made tall by a
