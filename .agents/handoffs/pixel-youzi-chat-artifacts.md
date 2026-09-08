@@ -23,8 +23,19 @@
   Apple M5 Max/128 GiB/macOS 26.6.2: preload plus 3 sequential 512-square/4-step
   renders from distinct caller threads all produced decodable nonuniform PNGs;
   owner cleanup completed. No model downloads or user domain writes.
-- New UI screenshots are synthetic shared-component fixtures, not an end-to-end
-  client/LLM acceptance result. See the operations note for reproduction.
+- Shared-component screenshot fixtures passed. In the paired Release candidate,
+  a real historical image receipt renders beneath its collapsed tool in both
+  Simple and Professional chat. Clicking opens the media overlay in both modes;
+  Simple mode zoom changed from 100% to 125%, and closing restored the transcript.
+  Two successful historical audio receipts also show inline Play controls.
+  No new user prompt, model download or expensive video generation was needed.
+- Complete Release build, deep/strict signature verification, bundled resource
+  verifier and embedded `rapid-mlx --version` passed. Candidate identity is
+  `candidate-ab59e332`; native version remains 0.14.4 (174).
+- Extra `ChatRestoredToolsGoldenTests` crashed for a missing `YouziI18nConfig`
+  environment. The pre-existing base Release test binary failed identically
+  with `--skip-build`. This baseline harness issue is not a passing test; the
+  selected 40-test native result above is not a claim that the full suite passes.
 
 ## Backend risk / review
 
@@ -41,10 +52,20 @@ stream mutation, forced unloading of another modality or raw error persistence.
 ## Delivery and next action
 
 - Main and the installed app are untouched. No release authorized for this task.
-- Complete paired local build and installed-resource/signature checks before
-  switching clients. Never modify the running sibling worktree's bundle.
-- Use `RAPID_DESKTOP_NO_PORT_SWEEP=1` for every native test/build/launch.
-- Verify zero active user work, quit normally and keep the prior candidate for
-  rollback. Validate historical output cards in the actual client after launch.
+- On 2026-09-08, confirmed the previous client had empty input and no model-service
+  listener, quit it normally, then launched the new paired Release candidate
+  with `RAPID_DESKTOP_NO_PORT_SWEEP=1`. Verified the process executable belongs
+  to this task worktree. The old sibling candidate remains intact for rollback.
+- The client is left in Simple mode on the historical image chat with its new
+  card visible. The model server was not started; history/preview acceptance
+  is not a fresh packaged-client LLM-to-multimodal roundtrip. Actual image
+  generation was verified separately using the fixed source and bundled deps.
+- Audio Play controls were inspected but not audibly exercised in this GUI pass;
+  video/HTML UI coverage remains the synthetic fixture and selected media tests.
+- Use `RAPID_DESKTOP_NO_PORT_SWEEP=1` for every native test/build/launch. Never
+  modify the running sibling worktree's bundle.
+- Next optional acceptance: start an already downloaded model through the UI
+  and run a fresh multimodal conversation; separately repair the baseline Golden
+  test environment without mixing it into this focused diff.
 - Integrator: review this task branch together with its prerequisite UI branches,
   not an isolated cherry-pick onto old main that drops recent user work.
