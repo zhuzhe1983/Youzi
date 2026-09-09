@@ -4,6 +4,7 @@ import SwiftUI
 struct YouziScenarioModelPicker: View {
     @Binding var assistantAlias: String
     let chatEntries: [ModelEntry]
+    var chatIsStreaming = false
     @Environment(ServerManager.self) private var server
     @Environment(AudioViewModel.self) private var audio
     @Environment(ImageGenViewModel.self) private var images
@@ -13,6 +14,11 @@ struct YouziScenarioModelPicker: View {
     @Environment(YouziFontSizeConfig.self) private var fonts
     @Environment(SettingsRouter.self) private var router: SettingsRouter?
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var remoteHealth = YouziRemoteModelAvailability()
+    @State private var probeRefresh = 0
+    @State private var residencyVerified = false
+    @State private var residencyCheckedAt: Date?
     @State private var presented = false
     @State private var media: [ModelEntry] = []
     @State private var loading = true
@@ -25,23 +31,78 @@ struct YouziScenarioModelPicker: View {
         YouziModelOccupancy.resolve(residency: server.residency, host: MemoryProbe.snapshot(), voiceLaneResident: false)
     }
 
+    private var selections: [RemoteModelSlot: String] {
+        let explicit: [RemoteModelSlot: String] = [.chat: assistantAlias,
+            .speech: audio.selectedSpeechAlias, .transcription: audio.selectedTranscriptionAlias,
+            .image: images.selectedAlias, .video: videos.selectedAlias]
+        return explicit.merging(Dictionary(uniqueKeysWithValues: RemoteModelSlot.allCases.compactMap { slot in
+            guard explicit[slot, default: ""].isEmpty,
+                  let localSlot = YouziResidentServicePreference.Slot(rawValue: slot.rawValue),
+                  let alias = server.automaticModelAlias(for: localSlot, entries: entries) else { return nil }
+            return (slot, alias)
+        })) { _, automatic in automatic }
+    }
+
+    private var localReachable: Bool {
+        guard case .ready = server.state, residencyVerified, let residencyCheckedAt else { return false }
+        return Date.now.timeIntervalSince(residencyCheckedAt) < 15
+    }
+    private var readySlots: Set<RemoteModelSlot> {
+        let settings = RemoteModelSettings.shared
+        let online = Set(settings.document.models.filter {
+            $0.enabled && remoteHealth.status($0.alias, revision: settings.revision) == .online
+        }.map(\.alias))
+        return YouziModelAvailability.readySlots(selections: selections, entries: entries,
+            residency: server.residency, localReachable: localReachable, remoteOnline: online)
+    }
+    private var availabilityDescription: String {
+        let available = RemoteModelSlot.allCases.filter { readySlots.contains($0) }
+            .map { $0.title(chinese: i18n.isChinese) }.joined(separator: " / ")
+        return available.isEmpty ? i18n.text(zh: "当前默认模型尚未就绪", en: "No selected model is ready")
+            : i18n.text(zh: "可用：", en: "Available: ") + available
+    }
+    private var probeAliases: [String] {
+        let selected = selections.values.filter(RemoteModelEndpoint.isRemote)
+        let visible = presented ? RemoteModelSettings.shared.entries(kind: selectedKind).map(\.alias) : []
+        return Array(Set(selected + visible)).sorted()
+    }
+    private struct ProbeKey: Equatable {
+        var aliases: [String]
+        var revision: Int
+        var active: Bool
+        var refresh: Int
+    }
+
     var body: some View {
         Button { presented.toggle() } label: {
-            HStack(spacing: 4) {
-                ForEach(YouziModelLane.allCases) { lane in
-                    Circle().fill(lane.occupancyColor).frame(width: 5, height: 5)
-                }
-                Text(assistantAlias.isEmpty ? i18n.text(zh: "选择模型", en: "Select model") : RemoteModelSettings.shared.title(assistantAlias))
-                    .font(RapidFont.caption).lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9))
-            }
-            .foregroundStyle(RapidTheme.textSecondary)
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(RapidTheme.surfaceCanvas, in: RoundedRectangle(cornerRadius: 6))
+            YouziModelAvailabilityOrb(lanes: YouziModelAvailability.lanes(for: readySlots))
+                .frame(width: 44, height: 44).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(i18n.text(zh: "模型选择 · ", en: "Model selection · ") + availabilityDescription)
+        .accessibilityLabel(i18n.text(zh: "模型选择", en: "Model selection"))
+        .accessibilityValue(availabilityDescription)
         .accessibilityIdentifier("YouziSimple.NewTask.ModelSelector")
         .popover(isPresented: $presented, arrowEdge: .top) { panel }
+        .task(id: ModelPickerBar.PickerCatalogKey(binaryPath: server.binaryPath, cacheGeneration: downloads.cacheGeneration, refreshEnabled: true)) { await refresh() }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                residencyVerified = await server.refreshResidency()
+                residencyCheckedAt = .now
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            }
+        }
+        .task(id: ProbeKey(aliases: probeAliases, revision: RemoteModelSettings.shared.revision, active: scenePhase == .active, refresh: probeRefresh)) {
+            guard scenePhase == .active, !probeAliases.isEmpty else { return }
+            let aliases = probeAliases
+            var force = probeRefresh > 0
+            while !Task.isCancelled {
+                await remoteHealth.refresh(aliases: aliases, settings: .shared, force: force)
+                force = false
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            }
+        }
     }
 
     private var panel: some View {
@@ -54,51 +115,27 @@ struct YouziScenarioModelPicker: View {
             if let error { Text(error).font(RapidFont.caption).foregroundStyle(.orange) }
             ScrollView {
                 LazyVStack(spacing: 4) {
-                    let choices = entries.filter { $0.kind == selectedKind && $0.cached }
-                    if choices.isEmpty && !loading && error == nil {
-                        Text(i18n.text(zh: "暂无已下载模型", en: "No downloaded models"))
+                    let choices = entries.filter { $0.kind == selectedKind && $0.cached && !$0.isRemote }
+                    let remotes = RemoteModelSettings.shared.entries(kind: selectedKind)
+                    if choices.isEmpty && remotes.isEmpty && !loading && error == nil {
+                        Text(i18n.text(zh: "暂无可选模型", en: "No models available"))
                             .font(RapidFont.secondary).foregroundStyle(.secondary).padding(.vertical, 16)
                     }
                     ForEach(choices) { entry in modelRow(entry) }
-                    let remotes = RemoteModelSettings.shared.entries(kind: selectedKind)
-                    if !remotes.isEmpty {
-                        ForEach(RemoteModelSlot.allCases.filter { $0.kind == selectedKind }) { slot in
-                            Button(i18n.text(zh: "按优先级选择 · \(slot.title(chinese: true))", en: "Choose by priority · \(slot.title(chinese: false))")) {
-                                if let localSlot = YouziResidentServicePreference.Slot(rawValue: slot.rawValue),
-                                   let alias = server.automaticModelAlias(for: localSlot, entries: entries) {
-                                    select(alias, slot: slot); presented = false
-                                }
-                            }.buttonStyle(.plain).font(RapidFont.caption).foregroundStyle(RapidTheme.brand)
-                                .disabled(laneBusy)
-                                .accessibilityIdentifier("Youzi.ScenarioModels.Priority.\(slot.rawValue)")
-                        }
-                        Text(i18n.text(zh: "远程模型（可选）", en: "Remote models (optional)"))
-                            .font(RapidFont.caption).foregroundStyle(.secondary).padding(.top, 8)
-                        ForEach(remotes) { entry in
-                            Button {
-                                if let slot = RemoteModelSettings.shared.document.model(alias: entry.alias)?.slot { select(entry.alias, slot: slot) }
-                                presented = false
-                            } label: {
-                                Label(RemoteModelSettings.shared.title(entry.alias), systemImage: "network")
-                                    .font(RapidFont.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                            }.buttonStyle(.plain)
-                                .disabled((entry.kind == .video && !videos.canSwitchModels) || (entry.kind == .audio && audio.isBusy) || (entry.kind == .image && images.isGenerating))
-                                .accessibilityIdentifier("Youzi.ScenarioModels.\(entry.alias)")
-                        }
-                    }
+                    ForEach(remotes) { entry in remoteRow(entry) }
                 }
             }.frame(maxHeight: 240)
             YouziScenarioModelMemoryFooter(occupancy: occupancy, refreshing: loading) {
+                probeRefresh += 1
                 Task { await refresh() }
             }
         }
         .padding(16).frame(width: YouziScenarioModelToolbar.panelWidth(scale: fonts.scale))
-        .task(id: ModelPickerBar.PickerCatalogKey(binaryPath: server.binaryPath, cacheGeneration: downloads.cacheGeneration, refreshEnabled: true)) { await refresh() }
     }
 
     private var laneBusy: Bool {
         switch selectedKind {
-        case .chat: false
+        case .chat: chatIsStreaming
         case .audio: audio.isBusy
         case .image: images.isGenerating
         case .video: !videos.canSwitchModels
@@ -127,8 +164,25 @@ struct YouziScenarioModelPicker: View {
         else { openWindow(id: "settings") }
     }
 
+    private func isSelected(_ entry: ModelEntry) -> Bool {
+        guard let slot = YouziModelAvailability.slot(for: entry) else { return false }
+        return selections[slot] == entry.alias
+    }
+
+    private func remoteRow(_ entry: ModelEntry) -> some View {
+        Button {
+            if let slot = YouziModelAvailability.slot(for: entry) { select(entry.alias, slot: slot) }
+            presented = false
+        } label: {
+            YouziScenarioModelRow(title: RemoteModelSettings.shared.document.model(alias: entry.alias)?.displayName ?? entry.alias,
+                remoteStatus: remoteHealth.status(entry.alias, revision: RemoteModelSettings.shared.revision), selected: isSelected(entry))
+        }
+        .buttonStyle(.plain).disabled(laneBusy || loadingAlias != nil)
+        .accessibilityIdentifier("Youzi.ScenarioModels.\(entry.alias)")
+    }
+
     private func modelRow(_ entry: ModelEntry) -> some View {
-        let ready = YouziScenarioModels.isReady(entry, in: server.residency)
+        let ready = localReachable && YouziScenarioModels.isReady(entry, in: server.residency)
         return Button {
             Task {
                 loadingAlias = entry.alias
@@ -138,34 +192,31 @@ struct YouziScenarioModelPicker: View {
                 else if server.servingAlias != nil { success = await server.loadStartupModel(entry) }
                 else if entry.kind == .chat { success = await server.ensureServing(alias: entry.alias, hfPath: entry.hfRepo) }
                 else { success = false }
-                if success && entry.kind == .chat { assistantAlias = entry.alias }
-                if !success { error = i18n.text(zh: "模型未能启动，请在模型设置中查看详情。", en: "Model could not start. See model settings for details.") }
+                if success, let slot = YouziModelAvailability.slot(for: entry) {
+                    // Video selection validates against its own catalog; populate it before selecting.
+                    if slot == .video && !videos.videoModels.contains(where: { $0.alias == entry.alias }) { await videos.refreshCatalog() }
+                    select(entry.alias, slot: slot)
+                    error = nil
+                    residencyVerified = await server.refreshResidency()
+                    residencyCheckedAt = .now
+                } else {
+                    error = i18n.text(zh: "模型未能启动，请在模型设置中查看详情。", en: "Model could not start. See model settings for details.")
+                }
             }
         } label: {
-            HStack(spacing: 8) {
-                Text(entry.alias).font(RapidFont.secondary).lineLimit(1).truncationMode(.middle)
-                if YouziResidentServicePreference.Slot.allCases.contains(where: {
-                    YouziResidentServicePreference.aliases(for: $0).contains(entry.alias)
-                }) {
-                    Image(systemName: "bolt.fill").font(RapidFont.caption).foregroundStyle(.orange)
-                        .accessibilityLabel(i18n.text(zh: "自动加载优选模型", en: "Automatic preferred model"))
-                }
-                Spacer(minLength: 4)
-                Text(memoryLabel(entry)).font(RapidFont.caption).foregroundStyle(.secondary)
-                if loadingAlias == entry.alias { ProgressView().controlSize(.mini) }
-                else if ready { Image(systemName: "checkmark").foregroundStyle(.green) }
-            }.padding(8).contentShape(Rectangle())
+            YouziScenarioModelRow(title: entry.alias, detail: memoryLabel(entry), resident: ready,
+                selected: isSelected(entry), loading: loadingAlias == entry.alias)
         }
-        .buttonStyle(.plain).disabled(loadingAlias != nil)
+        .buttonStyle(.plain).disabled(laneBusy || loadingAlias != nil)
         .accessibilityIdentifier("Youzi.ScenarioModels.\(entry.alias)")
-        .accessibilityValue(ready ? i18n.text(zh: "已加载", en: "Loaded") : i18n.text(zh: "已下载，未加载", en: "Downloaded, not loaded"))
     }
 
     private func memoryLabel(_ entry: ModelEntry) -> String {
-        if let resident = server.residency.models.first(where: { $0.matches(entry.alias) }), resident.displayBytes > 0 {
+        if localReachable, YouziScenarioModels.isReady(entry, in: server.residency),
+           let resident = server.residency.models.first(where: { $0.matches(entry.alias) || entry.hfRepo.map($0.matches) == true }), resident.displayBytes > 0 {
             return formatGigabytes(resident.displayBytes)
         }
-        if entry.kind == .audio && YouziScenarioModels.isReady(entry, in: server.residency) { return "—" }
+        if localReachable && entry.kind == .audio && YouziScenarioModels.isReady(entry, in: server.residency) { return "—" }
         return entry.sizeOnDisk.map { i18n.text(zh: "磁盘 ", en: "Disk ") + $0 } ?? "—"
     }
 
@@ -182,7 +233,8 @@ struct YouziScenarioModelPicker: View {
         }
         media = result
         error = nil
-        await server.refreshResidency()
+        residencyVerified = await server.refreshResidency()
+        residencyCheckedAt = .now
     }
 }
 
@@ -224,7 +276,7 @@ struct YouziScenarioModelToolbar: View {
             }.pickerStyle(.segmented).labelsHidden().fixedSize()
                 .accessibilityIdentifier("YouziScenarioModelPicker.Picker.fa4bba6e5b")
             Spacer(minLength: 0)
-            Button(i18n.text(zh: "更多模型设置…", en: "More model settings…"), action: moreModelSettings)
+            Button(i18n.text(zh: "模型设置", en: "Model settings"), action: moreModelSettings)
                 .buttonStyle(.plain).font(fonts.font(12.5)).foregroundStyle(RapidTheme.brand)
                 .lineLimit(1).fixedSize()
                 .accessibilityIdentifier("YouziScenarioModelPicker.Button.d87486a311")

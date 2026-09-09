@@ -4,11 +4,19 @@ import SwiftUI
 struct YouziLiveVoiceButton: View {
     @Environment(YouziI18nConfig.self) private var i18n
     @Binding var isPresented: Bool
+    var compact = false
     var body: some View {
-        Button { isPresented = true } label: {
-            Label(i18n.text(zh: "语音对话", en: "Live Voice"), systemImage: "waveform")
+        Group {
+            if compact {
+                YouziComposerIconButton(symbol: "waveform", label: i18n.text(zh: "语音对话", en: "Live Voice")) {
+                    isPresented = true
+                }
+            } else {
+                Button { isPresented = true } label: {
+                    Label(i18n.text(zh: "语音对话", en: "Live Voice"), systemImage: "waveform")
+                }.buttonStyle(.borderless)
+            }
         }
-        .buttonStyle(.borderless)
         .help(i18n.text(zh: "打开语音对话；开始前不会使用麦克风", en: "Open voice conversation; the microphone stays off until Start"))
         .accessibilityIdentifier("LiveVoice.Open")
     }

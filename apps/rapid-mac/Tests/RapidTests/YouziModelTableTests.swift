@@ -170,6 +170,6 @@ struct YouziModelTableTests {
         let toolbar = try #require(source.range(of: "HStack(spacing: 12) {"))
         let end = try #require(source.range(of: "YouziScenarioModelPicker.ScenarioToolbar"))
         #expect(source[toolbar.lowerBound..<end.upperBound].contains("moreModelSettings"))
-        #expect(source.components(separatedBy: "Button(i18n.text(zh: \"更多模型设置…\"").count == 2)
+        #expect(source.components(separatedBy: "Button(i18n.text(zh: \"模型设置\"").count == 2)
     }
 }

@@ -479,56 +479,23 @@ struct YouziSimpleTaskView: View {
                             .foregroundStyle(RapidTheme.textSecondary)
                     }
 
-                    Label(runtimeStatus, systemImage: runtimeSymbol)
-                        .font(RapidFont.caption)
-                        .foregroundStyle(RapidTheme.textSecondary)
-                        .lineLimit(1)
-
                     Spacer(minLength: 0)
-
-                    YouziLiveVoiceButton(isPresented: $showsLiveVoice)
 
                     modelQuickPicker
 
                     YouziContextUsageRing(messages: chat.messages, alias: assistantAlias)
 
-                    if chat.isStreaming {
-                        Button(action: { chat.stop() }) {
-                            Image(systemName: "stop.fill")
-                                .frame(width: 28, height: 28)
-                                .frame(width: 44, height: 44)
-                        }
-                        .buttonStyle(.bordered)
-                        .help(i18n.text(zh: "停止", en: "Stop"))
-                        .accessibilityLabel(i18n.text(zh: "停止任务", en: "Stop task"))
-                        .accessibilityIdentifier("YouziSimple.NewTask.SendOrStop")
-                    } else {
-                        Button(action: submit) {
-                            Image(systemName: "arrow.up")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundStyle(
-                                    canSubmit ? RapidTheme.onBrandPrimary : RapidTheme.textSecondary
-                                )
-                                .frame(width: 28, height: 28)
-                                .background(
-                                    Circle().fill(
-                                        canSubmit ? RapidTheme.brandPrimary : Color.clear
-                                    )
-                                )
-                                .overlay(
-                                    Circle().strokeBorder(
-                                        canSubmit ? .clear : RapidTheme.hairlineStrong,
-                                        lineWidth: 1
-                                    )
-                                )
-                                .frame(width: 44, height: 44)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!canSubmit)
-                        .help(assistantAlias.isEmpty ? i18n.text(zh: "选择聊天模型", en: "Choose a chat model") : i18n.text(zh: "开始任务", en: "Start task"))
-                        .accessibilityLabel(i18n.text(zh: "开始任务", en: "Start task"))
-                        .accessibilityIdentifier("YouziSimple.NewTask.SendOrStop")
+                    YouziComposerIconButton(
+                        symbol: chat.isStreaming ? "stop.fill" : "arrow.up",
+                        label: chat.isStreaming ? i18n.text(zh: "停止任务", en: "Stop task") : i18n.text(zh: "开始任务", en: "Start task"),
+                        enabled: chat.isStreaming || canSubmit
+                    ) {
+                        if chat.isStreaming { chat.stop() } else { submit() }
                     }
+                    .help(chat.isStreaming ? i18n.text(zh: "停止", en: "Stop") : i18n.text(zh: "开始任务", en: "Start task"))
+                    .accessibilityIdentifier("YouziSimple.NewTask.SendOrStop")
+
+                    YouziLiveVoiceButton(isPresented: $showsLiveVoice, compact: true)
                 }
             }
             .padding(.horizontal, RapidTheme.Space.md)
@@ -558,7 +525,7 @@ struct YouziSimpleTaskView: View {
     }
 
     private var modelQuickPicker: some View {
-        YouziScenarioModelPicker(assistantAlias: $assistantAlias, chatEntries: catalogEntries)
+        YouziScenarioModelPicker(assistantAlias: $assistantAlias, chatEntries: catalogEntries, chatIsStreaming: chat.isStreaming)
     }
 
     private func insertReference(_ text: String) {
@@ -743,25 +710,6 @@ struct YouziSimpleTaskView: View {
         return switch server.state {
         case .missing, .crashed: true
         case .idle, .starting, .ready, .stopped: false
-        }
-    }
-
-    private var runtimeStatus: String {
-        if assistantAlias.isEmpty { return i18n.text(zh: "请选择聊天模型", en: "Choose a chat model") }
-        return switch server.state {
-        case .starting: i18n.text(zh: "正在本地准备…", en: "Preparing locally…")
-        case .ready: i18n.text(zh: "已在本机就绪", en: "Ready locally")
-        case .missing, .crashed: i18n.text(zh: "需要处理", en: "Action needed")
-        case .idle, .stopped: i18n.text(zh: "随时可以开始", en: "Ready to start")
-        }
-    }
-
-    private var runtimeSymbol: String {
-        switch server.state {
-        case .ready: "checkmark.circle.fill"
-        case .starting: "hourglass"
-        case .missing, .crashed: "exclamationmark.circle"
-        case .idle, .stopped: "lock.shield"
         }
     }
 

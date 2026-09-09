@@ -1,7 +1,7 @@
 import Foundation
 
 /// Shared by the scenario selector and the model-facing local tools. Selection
-/// and residency are different: a saved preference is never a ready checkmark.
+/// and residency are different: a saved preference is never proof of loaded weights.
 enum YouziScenarioModels {
     static func merge(chat: [ModelEntry], media: [ModelEntry]) -> [ModelEntry] {
         var entries: [String: ModelEntry] = [:]

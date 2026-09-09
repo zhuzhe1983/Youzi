@@ -14,7 +14,7 @@ struct YouziScenarioModelsTests {
         #expect(result.filter { $0.kind == .audio && $0.cached } == [voice])
     }
 
-    @Test("Checkmarks follow canonical paths and aliases, not registered/loading preferences")
+    @Test("Resident status follows canonical paths and aliases, not registered/loading preferences")
     func ready() {
         let entry = ModelEntry(alias: "short", hfRepo: "local/full", sizeOnDisk: nil, cached: true)
         for state in ["resident", "busy", "registered", "loading", "evicting", "failed"] {
