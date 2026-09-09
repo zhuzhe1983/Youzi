@@ -20,6 +20,16 @@ was used. No other worktree's dirty files were consumed or edited.
 - No user configuration writes, real provider inference, model load/download,
   service shutdown, main integration or public release as part of verification.
 
+## Candidate delivery
+
+- Native code commit `ffec5c44`, local identity `candidate-ffec5c44`, debug/ad-hoc
+  app assembled successfully. Existing version fields remain `0.14.4 (174)`.
+- Bundled unchanged runtime from preserved `candidate-6e5aac94` after an empty
+  source/recipe/resource diff; full strict codesign verification and bundled
+  CLI `--help` passed. See operations doc for exact provenance and paths.
+- Candidate not launched; the prior running client was left untouched. This is
+  not a main merge, notarized release, or real-provider inference acceptance.
+
 ## Remaining acceptance / risks
 
 - Provider-specific live inference is not tested. A `/models` list alone is not

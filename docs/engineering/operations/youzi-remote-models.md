@@ -96,3 +96,20 @@ HTTP 重定向拒绝策略尚无真实重定向服务器集成用例；单元 tr
 - 本次不合并 main、不发布 release；未完成的记忆整合分支不在本任务范围内。
 - 回退 UI/客户端时使用保留的上一候选 app，不需要删除模型、聊天或记忆数据。
 - 旧客户端忽略新增远程配置。再次启用新客户端时配置仍保留；不应靠清空全部偏好回退。
+
+### 2026-09-09 候选构建记录
+
+- 原生客户端源码：`ffec5c44`；候选标识：`candidate-ffec5c44`。
+- 产物位于本任务 worktree 的 `apps/rapid-mac/build/Rapid-MLX Desktop.app`。
+  这是本地 debug / ad-hoc 签名候选版，版本字段仍为 `0.14.4 (174)`，不是公开 release。
+- 先以 `RAPID_BUILD_CONFIG=debug`、`SKIP_SIDECAR=1` 和上述候选标识构建原生 app，
+  再复用保留的 `candidate-6e5aac94` 中 `Contents/Resources/rapid-mlx` 运行时。
+  复用前已通过 `git diff --exit-code 6e5aac94 ffec5c44 -- vllm_mlx pyproject.toml
+  apps/rapid-mac/scripts apps/rapid-mac/Resources` 确认运行时源码、依赖声明、
+  打包脚本和资源没有变化；不是无 sidecar 的空壳包。
+- 旧包签名校验通过；复制运行时后重新 ad-hoc 签名，完整产物通过
+  `codesign --verify --deep --strict`。内置 `rapid-mlx --help` 返回 0。
+- 378 个测试及原生界面 fixture 对应上述源码提交。构建日志中的已有 Keychain
+  弃用警告和快照资源警告不影响构建成功，但不等同于没有警告。
+- 未启动这个新 app，未替换或退出正在运行的 `candidate-6e5aac94`。
+  因此当前客户端尚不显示新增功能；真实提供方端到端验收仍待单独进行。
