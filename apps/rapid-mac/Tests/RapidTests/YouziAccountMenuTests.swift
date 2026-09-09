@@ -22,6 +22,60 @@ struct YouziAccountMenuTests {
         #expect(YouziExperienceMode.professional.localizedDisplayName(isChinese: false) == "Professional Mode")
     }
 
+
+    @Test("Profile uses the user's chosen address with localized empty fallback",
+          arguments: ["", " ", "\n\t ", "  测试用户  ", "Ada", "🍊伙伴"])
+    @MainActor
+    func profileDisplayName(address: String) {
+        let clean = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        for chinese in [true, false] {
+            #expect(YouziAccountMenuTrigger.displayName(userAddress: address, isChinese: chinese)
+                == (clean.isEmpty ? (chinese ? "柚子" : "Youzi") : clean))
+        }
+    }
+
+    @Test("Profile follows personal address edits, clear, and reload, never the AI name")
+    @MainActor
+    func personalizationProfile() throws {
+        let suite = "youzi-profile-tests-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let config = CustomInstructionsConfig(defaults: defaults)
+        func label(_ config: CustomInstructionsConfig) -> String {
+            YouziAccountMenuTrigger.displayName(userAddress: config.userAddress, isChinese: true)
+        }
+        config.assistantName = "Assistant-only name"
+        #expect(label(config) == "柚子")
+        config.userAddress = "  测试用户  "
+        #expect(label(config) == "测试用户")
+        #expect(label(CustomInstructionsConfig(defaults: defaults)) == "测试用户")
+        config.userAddress = "Alex"
+        #expect(label(config) == "Alex")
+        config.userAddress = "\n\t "
+        #expect(label(config) == "柚子")
+        #expect(label(CustomInstructionsConfig(defaults: defaults)) == "柚子")
+        #expect(config.assistantName == "Assistant-only name")
+    }
+
+    @Test("Only the profile logo is removed; name observation and full accessibility remain")
+    @MainActor
+    func profileWiring() throws {
+        let menu = try Self.source("Sources/Rapid/UI/YouziAccountMenu.swift")
+        let trigger = try Self.source("Sources/Rapid/UI/YouziAccountMenuContent.swift")
+            .components(separatedBy: "struct YouziAccountMenuContent")[0]
+        let shell = try Self.source("Sources/Rapid/UI/YouziSimple/YouziSimpleShell.swift")
+        #expect(!trigger.contains("YouziLogo("))
+        #expect(shell.contains("YouziLogo("))
+        #expect(menu.contains("@Environment(CustomInstructionsConfig.self)"))
+        #expect(menu.contains("userAddress: personalization.userAddress"))
+        #expect(!menu.contains("personalization.assistantName"))
+        #expect(menu.contains("\\(profileDisplayName)菜单"))
+        #expect(trigger.contains(".help(displayName)"))
+        #expect(trigger.contains(".truncationMode(.tail)"))
+        #expect(trigger.contains("Youzi.AccountMenu.ModeBadge"))
+        #expect(trigger.contains("chevron.up.chevron.down"))
+    }
+
     @Test("Account menu is the shared uncommon-action entry")
     @MainActor
     func sharedEntryContract() throws {

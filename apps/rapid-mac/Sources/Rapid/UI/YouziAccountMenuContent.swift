@@ -6,25 +6,41 @@ struct YouziAccountMenuTrigger: View {
     let mode: YouziExperienceMode
     let isChinese: Bool
     let scale: CGFloat
+    var userAddress: String = ""
+
+    /// A profile label, not the assistant's conversational name or app brand.
+    static func displayName(userAddress: String, isChinese: Bool) -> String {
+        let name = CustomInstructionsConfig.identity(userAddress)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? (isChinese ? "柚子" : "Youzi") : name
+    }
+
+    private var displayName: String {
+        Self.displayName(userAddress: userAddress, isChinese: isChinese)
+    }
 
     var body: some View {
         HStack(spacing: RapidTheme.Space.sm) {
-            YouziLogo(size: 28)
-            Text(isChinese ? "柚子" : "Youzi")
+            Text(displayName)
                 .font(.system(size: round(13.5 * scale), weight: .medium))
                 .foregroundStyle(RapidTheme.textPrimary)
+                .truncationMode(.tail)
+                .help(displayName)
+                .accessibilityIdentifier("Youzi.AccountMenu.DisplayName")
             Text(mode.localizedShortDisplayName(isChinese: isChinese))
                 .font(.system(size: round(11.5 * scale), weight: .medium))
                 .foregroundStyle(RapidTheme.brandPrimary)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
                 .background(RapidTheme.brandPrimary.opacity(0.12), in: Capsule())
+                .fixedSize(horizontal: true, vertical: false)
                 .accessibilityLabel(mode.localizedDisplayName(isChinese: isChinese))
                 .accessibilityIdentifier("Youzi.AccountMenu.ModeBadge")
             Spacer(minLength: 0)
             Image(systemName: "chevron.up.chevron.down")
                 .font(.system(size: round(11.5 * scale)))
                 .foregroundStyle(RapidTheme.textSecondary)
+                .fixedSize()
         }
         .lineLimit(1)
         .padding(.horizontal, RapidTheme.Space.sm)

@@ -17,6 +17,7 @@ struct YouziAccountMenu: View {
     @Environment(SettingsRouter.self) private var settingsRouter
     @Environment(YouziI18nConfig.self) private var i18n
     @Environment(YouziFontSizeConfig.self) private var fonts
+    @Environment(CustomInstructionsConfig.self) private var personalization
     @Environment(\.openWindow) private var openWindow
 
     @State private var isPresented = false
@@ -30,11 +31,16 @@ struct YouziAccountMenu: View {
         )
     }
 
+    private var profileDisplayName: String {
+        YouziAccountMenuTrigger.displayName(userAddress: personalization.userAddress, isChinese: i18n.isChinese)
+    }
+
     var body: some View {
         Button {
             isPresented.toggle()
         } label: {
-            YouziAccountMenuTrigger(mode: experienceMode.mode, isChinese: i18n.isChinese, scale: fonts.scale)
+            YouziAccountMenuTrigger(mode: experienceMode.mode, isChinese: i18n.isChinese,
+                scale: fonts.scale, userAddress: personalization.userAddress)
         }
         .buttonStyle(.plain)
         .padding(.horizontal, RapidTheme.Space.sm)
@@ -43,7 +49,7 @@ struct YouziAccountMenu: View {
             menuBody
         }
         .accessibilityIdentifier("Youzi.AccountMenu")
-        .accessibilityLabel(i18n.text(zh: "柚子菜单", en: "Youzi menu"))
+        .accessibilityLabel(i18n.text(zh: "\(profileDisplayName)菜单", en: "\(profileDisplayName) menu"))
         .accessibilityValue(experienceMode.mode.localizedDisplayName(isChinese: i18n.isChinese))
     }
 
