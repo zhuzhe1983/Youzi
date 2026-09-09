@@ -572,6 +572,8 @@ struct YouziSimpleTaskView: View {
     }
 
     private func resolveAssistantAliasIfNeeded() {
+        // Keep an explicit remote selection, even disabled: fail visibly, never silently send elsewhere.
+        if RemoteModelEndpoint.isRemote(assistantAlias) { return }
         if !assistantAlias.isEmpty,
            downloadedChatModels.contains(where: { $0.alias == assistantAlias }) {
             return

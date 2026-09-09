@@ -140,6 +140,7 @@ struct VideoView: View {
         .sheet(item: $pendingDeletion) { job in
             VideoDeletionSheet(
                 job: job,
+                remote: viewModel.selectedModel?.isRemote == true,
                 onKeep: { pendingDeletion = nil },
                 onDelete: {
                     pendingDeletion = nil
@@ -216,6 +217,7 @@ struct VideoView: View {
     }
 
     private var emptyStageTitle: String {
+        if viewModel.selectedModel?.isRemote == true && !viewModel.isServerReady { return "Connect remote video model" }
         if !viewModel.catalogLoaded { return "Finding video models…" }
         if viewModel.videoModels.isEmpty { return "No supported video models" }
         if !viewModel.isSelectedModelEligible { return "This model doesn't fit this Mac" }
@@ -224,6 +226,7 @@ struct VideoView: View {
     }
 
     private var emptyStageMessage: String {
+        if viewModel.selectedModel?.isRemote == true { return "Remote generation may incur charges. Sizes and durations are your configured presets, not provider-discovered capabilities. The endpoint stays fixed for this video session; reconnect to apply changes." }
         if !viewModel.catalogLoaded { return "Rapid is reading the local model catalog." }
         if viewModel.videoModels.isEmpty {
             return "The signed engine does not currently advertise a compatible video model."
@@ -253,7 +256,7 @@ struct VideoView: View {
                         .buttonStyle(.rapidSecondary)
                         .accessibilityIdentifier("Video.CancelDownload")
                 }
-            } else if !model.cached {
+            } else if !model.isAvailableForInference {
                 Button("Download \(model.alias)") {
                     _ = downloads.startDownload(alias: model.alias, hfPath: model.hfRepo)
                 }
@@ -270,7 +273,7 @@ struct VideoView: View {
                             Text("Starting…")
                         }
                     } else {
-                        Label("Start Video Model", systemImage: "play.fill")
+                        Label(model.isRemote ? "Connect Remote Model" : "Start Video Model", systemImage: model.isRemote ? "network" : "play.fill")
                     }
                 }
                 .buttonStyle(.rapidPrimary)
@@ -299,14 +302,14 @@ struct VideoView: View {
                 .multilineTextAlignment(.center)
                 .lineLimit(3)
                 .frame(maxWidth: 480)
-            if job.status == .queued {
+            if job.status == .queued && viewModel.selectedModel?.isRemote != true {
                 Button("Cancel Queued Video", role: .destructive) {
                     Task { await viewModel.delete(job) }
                 }
                 .buttonStyle(.rapidSecondary)
                 .accessibilityIdentifier("Video.Job.Cancel")
-            } else if job.status == .inProgress {
-                Text("Generation can't be interrupted safely once Metal work begins.")
+            } else if job.status == .inProgress || (job.status == .queued && viewModel.selectedModel?.isRemote == true) {
+                Text(viewModel.selectedModel?.isRemote == true ? "The provider is processing this job. Deleting a record is not cancellation; manage active jobs at your provider." : "Generation can't be interrupted safely once Metal work begins.")
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textTertiary)
             } else if job.status == .completed && viewModel.previewURL == nil {
@@ -520,22 +523,31 @@ struct VideoView: View {
     }
 
     private var modelMenu: some View {
-        Picker("Model", selection: modelBinding) {
-            if viewModel.videoModels.isEmpty { Text("No video models").tag("") }
-            ForEach(viewModel.videoModels) { model in
-                Text(modelPickerLabel(model))
-                    .tag(model.alias)
+        Menu {
+            ForEach(viewModel.videoModels.filter { !$0.isRemote }) { model in
+                Button(modelPickerLabel(model)) { viewModel.selectModel(model.alias) }
                     .disabled(!viewModel.isModelEligible(model))
             }
+            RemoteModelMenuSection(slot: .video, selection: viewModel.selectedAlias,
+                automatic: { server.automaticModelAlias(for: .video, entries: viewModel.videoModels.filter(viewModel.isModelEligible)) },
+                select: { viewModel.selectModel($0) })
+            if viewModel.selectedModel?.isRemote == true && viewModel.isServerReady {
+                Divider()
+                Button(YouziI18nConfig.shared.text(zh: "重新连接（应用最新配置）", en: "Reconnect with saved settings")) {
+                    Task { await viewModel.prepareSelectedModel() }
+                }.accessibilityIdentifier("Video.Remote.Reconnect")
+            }
+        } label: {
+            Text(viewModel.selectedModel.map(modelPickerLabel) ?? "—").lineLimit(1)
         }
-        .labelsHidden()
-        .frame(maxWidth: 220)
+        .frame(maxWidth: 260)
         .disabled(!viewModel.canSwitchModels)
         .accessibilityLabel("Video model")
         .accessibilityIdentifier("Video.ModelMenu")
     }
 
     private func modelPickerLabel(_ model: ModelEntry) -> String {
+        if model.isRemote { return RemoteModelSettings.shared.title(model.alias) }
         guard let minimum = model.minimumMemoryGB else { return model.alias }
         return "\(model.alias) · \(Int(minimum.rounded())) GB"
     }
@@ -695,6 +707,7 @@ private struct VideoPlaybackView: View {
 
 private struct VideoDeletionSheet: View {
     let job: VideoJob
+    var remote = false
     let onKeep: () -> Void
     let onDelete: () -> Void
 
@@ -720,6 +733,7 @@ private struct VideoDeletionSheet: View {
     }
 
     private var deletionMessage: String {
+        if remote { return "This deletes the video at the remote provider and removes its local preview. This cannot be undone and is not a billing refund." }
         switch job.status {
         case .queued:
             return "The queued request will be removed before generation begins."

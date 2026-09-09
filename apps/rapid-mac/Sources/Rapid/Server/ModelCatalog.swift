@@ -130,7 +130,7 @@ enum ModelSelectionPurpose: Sendable, Hashable {
                     // the signed Desktop runtime bundles family-specific
                     // assets. Keep the current Qwen3-only product contract
                     // until atomic runtime requirements are representable.
-                    && entry.audioFamily == "qwen3_tts"
+                    && (entry.audioFamily == "qwen3_tts" || entry.isRemote)
             case .textToVideo:
                 return entry.taskTypes.contains(.videoGeneration)
                     && entry.operationModes.contains(.textToVideo)
@@ -157,7 +157,7 @@ enum ModelSelectionPurpose: Sendable, Hashable {
             // dependencies this surface deliberately does not collect.
             return entry.kind == .audio
                 && entry.audioCapability?.supportsPresetSpeech == true
-                && entry.audioFamily == "qwen3_tts"
+                && (entry.audioFamily == "qwen3_tts" || entry.isRemote)
         case .textToVideo:
             return entry.kind == .video
                 && entry.videoCapabilities.contains(.textToVideo)

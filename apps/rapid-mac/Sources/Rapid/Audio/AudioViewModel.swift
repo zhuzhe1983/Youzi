@@ -36,7 +36,11 @@ final class AudioViewModel {
     }
 
     var mode: Mode = .dictation
-    var audioModels: [ModelEntry] = []
+    private var localAudioModels: [ModelEntry] = []
+    var audioModels: [ModelEntry] {
+        get { localAudioModels + RemoteModelSettings.shared.entries(kind: .audio) }
+        set { localAudioModels = newValue.filter { !$0.isRemote } }
+    }
     var catalogLoaded = false
     var selectedTranscriptionAlias = ""
     var selectedSpeechAlias = ""
@@ -110,6 +114,7 @@ final class AudioViewModel {
         guard let binary = server.binaryPath else {
             audioModels = []
             catalogLoaded = true
+            resolveSelections()
             return
         }
         audioModels = await ModelCatalog.audioEntries(binary: binary)
@@ -428,7 +433,7 @@ final class AudioViewModel {
     }
 
     func resolveSelections() {
-        if !transcriptionSelectionModels.contains(where: {
+        if !RemoteModelEndpoint.isRemote(selectedTranscriptionAlias), !transcriptionSelectionModels.contains(where: {
             $0.alias == selectedTranscriptionAlias
         }) {
             selectedTranscriptionAlias = server.automaticModelAlias(for: .transcription, entries: transcriptionSelectionModels) ?? preferredAlias(
@@ -436,7 +441,7 @@ final class AudioViewModel {
                 preferred: ["whisper-small", "whisper-large-v3-turbo", "whisper-large-v3"]
             )
         }
-        if !speechModels.contains(where: { $0.alias == selectedSpeechAlias }) {
+        if !RemoteModelEndpoint.isRemote(selectedSpeechAlias), !speechModels.contains(where: { $0.alias == selectedSpeechAlias }) {
             selectedSpeechAlias = server.automaticModelAlias(for: .speech, entries: speechModels) ?? preferredAlias(
                 from: speechModels,
                 preferred: ["qwen3-tts-4bit", "qwen3-tts-6bit", "qwen3-tts"]

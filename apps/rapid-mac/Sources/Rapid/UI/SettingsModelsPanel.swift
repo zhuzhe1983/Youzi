@@ -35,20 +35,26 @@ struct SettingsModelsPanel: View {
             .accessibilityIdentifier("Settings.Models.Tabs")
             Group {
                 switch selection {
-                case .service: SettingsModelServicePanel()
+                case .service:
+                    SettingsModelServicePanel()
+                    SettingsRemoteModelsPanel()
                 case .files: SettingsModelManagementPanel(showsPageHeader: false)
                 case .chat:
                     SettingsResidentServicePanel(slots: [.chat], showsLaunchGuidance: false)
                     SettingsChatModelPanel()
+                    SettingsRemoteModelsPanel(kind: .chat)
                 case .audio:
                     SettingsResidentServicePanel(slots: [.transcription, .speech], showsLaunchGuidance: false)
                     SettingsAudioDefaultsPanel(generation: generation)
+                    SettingsRemoteModelsPanel(kind: .audio)
                 case .image:
                     SettingsResidentServicePanel(slots: [.image], showsLaunchGuidance: false)
                     imageDefaults
+                    SettingsRemoteModelsPanel(kind: .image)
                 case .video:
                     SettingsResidentServicePanel(slots: [.video], showsLaunchGuidance: false)
                     SettingsVideoDefaultsPanel(generation: generation)
+                    SettingsRemoteModelsPanel(kind: .video)
                 }
             }
             .id(selection)

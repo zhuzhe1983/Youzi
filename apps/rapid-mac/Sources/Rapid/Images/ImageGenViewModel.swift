@@ -154,7 +154,11 @@ final class ImageGenViewModel {
     /// Every installed/available image model (all image capability rows). The
     /// picker lists these directly — one dropdown that scales to N models,
     /// same shape as the chat picker, rather than a fixed set of boxes.
-    var imageModels: [ModelEntry] = []
+    private var localImageModels: [ModelEntry] = []
+    var imageModels: [ModelEntry] {
+        get { localImageModels + RemoteModelSettings.shared.entries(kind: .image) }
+        set { localImageModels = newValue.filter { !$0.isRemote } }
+    }
     var catalogLoaded: Bool = false
     /// The alias the picker points at. Settable directly by the dropdown.
     var selectedAlias: String = ""
@@ -316,8 +320,7 @@ final class ImageGenViewModel {
     func refreshCatalog() async {
         catalogRefreshGeneration &+= 1
         let refreshGeneration = catalogRefreshGeneration
-        guard let binary = server.binaryPath else { return }
-        let loaded = await catalogLoader(binary)
+        let loaded = if let binary = server.binaryPath { await catalogLoader(binary) } else { [ModelEntry]() }
         guard !Task.isCancelled,
               refreshGeneration == catalogRefreshGeneration else { return }
         imageModels = loaded
@@ -330,6 +333,8 @@ final class ImageGenViewModel {
     /// when the current selection is empty or no longer in the catalog, so a
     /// user's explicit pick survives a refresh.
     private func resolveAlias() {
+        // An explicitly chosen provider must never silently change on disable/removal.
+        if RemoteModelEndpoint.isRemote(selectedAlias) { return }
         let candidates = selectableModels
         let stillValid = candidates.contains { $0.alias == selectedAlias }
         guard selectedAlias.isEmpty || !stillValid else { return }
@@ -357,6 +362,7 @@ final class ImageGenViewModel {
     /// land — otherwise a delayed cancel could arrive after this generation
     /// ended and stop the *following* one.
     private var cancelTask: Task<Void, Never>?
+    private var remoteGenerationTask: Task<Void, Error>?
 
     func cancel() {
         guard isGenerating, !cancelling else { return }
@@ -364,6 +370,7 @@ final class ImageGenViewModel {
         let port = server.activePort
         let bearer = server.activeBearer
         guard let model = inFlightAlias else { return }
+        if RemoteModelEndpoint.isRemote(model) { remoteGenerationTask?.cancel(); return }
         cancelTask = Task { await client.cancel(model: model, port: port, bearer: bearer) }
     }
 
@@ -448,6 +455,7 @@ final class ImageGenViewModel {
     /// ``progress`` / ``phase`` so the stage shows a true step bar and ETA.
     private func startPolling(model: String, port: Int, bearer: String?) -> Task<Void, Never> {
         Task { [weak self] in
+            guard !RemoteModelEndpoint.isRemote(model) else { return }
             while !Task.isCancelled {
                 if let snap = await self?.client.fetchProgress(
                     model: model,
@@ -521,7 +529,14 @@ final class ImageGenViewModel {
             denoiseETASeconds = nil
         }
         do {
-            try await body()
+            if RemoteModelEndpoint.isRemote(inFlightAlias ?? "") {
+                let task = Task { try await body() }
+                remoteGenerationTask = task
+                defer { remoteGenerationTask = nil }
+                try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            } else {
+                try await body()
+            }
         } catch is CancellationError {
             // Cancel during residency loading has no image engine to signal yet;
             // once loading returns, stop locally before sending the render.
@@ -538,7 +553,7 @@ final class ImageGenViewModel {
         return RequestTarget(
             alias: selected.alias,
             hfPath: selected.hfRepo,
-            estimatedMemoryGB: ModelSizing.imageResidentEstimateGB(
+            estimatedMemoryGB: selected.isRemote ? 0 : ModelSizing.imageResidentEstimateGB(
                 alias: selected.alias,
                 sizeText: selected.sizeOnDisk,
                 minimumMemoryGB: selected.minimumMemoryGB

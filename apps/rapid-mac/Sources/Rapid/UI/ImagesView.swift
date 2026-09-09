@@ -255,6 +255,7 @@ struct ImagesView: View {
     /// engine resident beside the chat engine; otherwise the shared resolver
     /// presents the same on-demand load guidance used by Chat.
     private var readiness: ModelReadiness {
+        if let remote = RemoteModelSettings.shared.readiness(viewModel.selectedAlias) { return remote }
         // In-process image admission leaves the chat sidecar globally
         // `.ready`, so the generic resolver cannot infer that this alias is
         // downloading/loading. Use ServerManager's alias-scoped SSOT; without
@@ -856,7 +857,7 @@ struct ImagesView: View {
                      ? (viewModel.isEditing ? "No image editing models available" : "No image generation models available")
                      : "Loading…")
             } else {
-                ForEach(viewModel.selectableModels) { entry in
+                ForEach(viewModel.selectableModels.filter { !$0.isRemote }) { entry in
                     Button {
                         viewModel.selectedAlias = entry.alias
                     } label: {
@@ -871,12 +872,16 @@ struct ImagesView: View {
                     .accessibilityIdentifier("Images.Model.\(entry.alias)")
                 }
             }
+            RemoteModelMenuSection(slot: .image, selection: viewModel.selectedAlias,
+                entries: viewModel.selectableModels.filter(\.isRemote), automatic: {
+                    server.automaticModelAlias(for: .image, entries: viewModel.selectableModels)
+                }) { viewModel.selectedAlias = $0 }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: viewModel.isEditing ? "pencil.and.scribble" : "photo")
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
-                Text(viewModel.selectedAlias.isEmpty ? "Choose a model" : viewModel.selectedAlias)
+                Text(viewModel.selectedAlias.isEmpty ? "Choose a model" : RemoteModelSettings.shared.title(viewModel.selectedAlias))
                     .font(RapidFont.secondary)
                     .foregroundStyle(viewModel.selectedAlias.isEmpty ? .secondary : .primary)
                     .lineLimit(1)

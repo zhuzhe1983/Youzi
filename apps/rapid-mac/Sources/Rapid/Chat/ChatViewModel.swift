@@ -595,6 +595,7 @@ final class ChatViewModel {
         // happens next.
         followUp = .idle
         followUpAnchorID = nil
+        guard !RemoteModelEndpoint.isRemote(lastTurnAlias ?? "") else { return }
 
         guard let server, case .ready(let alias) = server.state else { return }
         guard Self.laneAllowsBackgroundWork(server.activeModelProfile, alias: alias) else { return }
@@ -1214,6 +1215,7 @@ final class ChatViewModel {
     /// ``isStreaming`` didSet when a turn ends; never blocks the UI or
     /// competes with an active stream because it runs on a separate task.
     private func scheduleMemoryExtraction() {
+        guard !RemoteModelEndpoint.isRemote(lastTurnAlias ?? "") else { return }
         guard let memoryStore, memoryStore.isEnabled else { return }
         guard let alias = lastTurnAlias else { return }
         guard messages.count >= 2 else { return }
@@ -1296,8 +1298,8 @@ final class ChatViewModel {
         // send the instant it happens, not only once the reply lands.
         persistActive()
 
-        let resolvedImageCapability = supportsImageInput
-            ?? ModelBrandStyle.supportsImageInput(forAlias: alias)
+        let resolvedImageCapability = RemoteModelSettings.shared.document.model(alias: alias)?.supportsVision
+            ?? supportsImageInput ?? ModelBrandStyle.supportsImageInput(forAlias: alias)
         beginAssistantTurn(
             alias: alias,
             supportsImageInput: resolvedImageCapability,
@@ -1348,6 +1350,15 @@ final class ChatViewModel {
         let memoryContext = memoryStore?.formattedForPrompt()
         inflight = Task { [weak self] in
             guard let self else { return }
+
+            // Freeze remote credentials/host for the whole tool loop. No local load for remote requests.
+            do { client.remoteEndpoint = try client.remoteRepository.endpoint(alias: alias) }
+            catch {
+                finishWithStartupFailure(placeholderIndex: placeholderIndex, alias: alias,
+                    imageMessageID: imageMessageID, epoch: epoch)
+                lastError = error.localizedDescription
+                return
+            }
 
             // Bring the model up if it isn't serving yet. The user's
             // turn is already in the transcript, so a load that takes a

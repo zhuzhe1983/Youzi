@@ -35,6 +35,8 @@ struct ChatStreamClient {
     /// onto ``ServerManager.activePort`` before every send via
     /// ``Self.loopbackURL(port:)`` so a PortAllocator fallback off
     /// the default port still reaches the live child.
+    var remoteEndpoint: RemoteModelEndpoint?
+    var remoteRepository = RemoteModelRepository()
     var baseURL: URL
     /// Injectable monotonic time source keeps integration tests independent
     /// of host scheduling while production continues to use ContinuousClock.
@@ -394,7 +396,9 @@ struct ChatStreamClient {
         bearerToken: String? = nil,
         onEvent: @escaping @MainActor (Event) -> Void
     ) async throws {
-        let url = Self.chatCompletionsURL(base: baseURL)
+        let remote = try remoteEndpoint ?? remoteRepository.endpoint(alias: request.alias, slot: .chat)
+        guard remote == nil || (remote?.configuration.alias == request.alias && remote?.configuration.slot == .chat) else { throw RemoteModelError.unavailable }
+        let url = remote?.url("chat/completions") ?? Self.chatCompletionsURL(base: baseURL)
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -404,13 +408,14 @@ struct ChatStreamClient {
         // rapid-mlx checks the matching ``RAPID_MLX_API_KEY`` env.
         // Anything else hitting :<port>/v1/chat/completions without
         // this header lands on 401.
-        if let bearerToken, !bearerToken.isEmpty {
+        let credential = remote == nil ? bearerToken : remote?.apiKey
+        if let bearerToken = credential, !bearerToken.isEmpty {
             req.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
         }
         req.timeoutInterval = requestTimeout
 
         let body = Wire.ChatCompletionRequest(
-            model: request.alias,
+            model: remote?.modelID ?? request.alias,
             messages: request.messages,
             stream: true,
             temperature: request.temperature,
@@ -437,6 +442,13 @@ struct ChatStreamClient {
         let encoder = JSONEncoder()
         encoder.outputFormatting = []
         req.httpBody = try encoder.encode(body)
+        if remote != nil {
+            guard let data = req.httpBody,
+                  var json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw RemoteModelError.invalidResponse }
+            json.removeValue(forKey: "repetition_penalty")
+            json.removeValue(forKey: "chat_template_kwargs")
+            req.httpBody = try JSONSerialization.data(withJSONObject: json)
+        }
 
         // URLSession.shared inherits app-level timeouts which can be
         // shorter than we want; we keep a process-wide shared
@@ -448,7 +460,7 @@ struct ChatStreamClient {
         // Codex audit r1 (ChatStreamClient.swift:175): the previous
         // shape constructed and invalidated a fresh URLSession per
         // call, defeating connection reuse.
-        let session: URLSession = injectedSession ?? Self.sharedSession
+        let session: URLSession = injectedSession ?? (remote == nil ? Self.sharedSession : RemoteModelEndpoint.session)
 
         // Audit P1 — pre-stream transient retry. If the connection
         // dies BEFORE any token bytes arrive (server is restarting
@@ -460,14 +472,15 @@ struct ChatStreamClient {
         // already hold partial bytes and the server has no resume
         // semantic, so we ONLY retry the initial `session.bytes`
         // dispatch.
-        let (bytes, response) = try await Self.openBytesWithRetry(
-            session: session,
-            request: req
-        )
+        let (bytes, response) = try await (remote == nil
+            ? Self.openBytesWithRetry(session: session, request: req)
+            : session.bytes(for: req))
+        defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse else {
             throw ChatStreamError.transport("non-HTTP response")
         }
         guard (200..<300).contains(http.statusCode) else {
+            if remote != nil { throw RemoteModelError.http(http.statusCode) }
             // Drain whatever the server sent so we can surface its error
             // text in the UI. Most rapid-mlx 4xx/5xx replies are JSON, but
             // we treat the body as opaque text for the error message.

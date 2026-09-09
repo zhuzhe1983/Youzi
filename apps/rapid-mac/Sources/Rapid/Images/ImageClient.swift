@@ -57,6 +57,9 @@ struct ImageClient {
 
     var session: URLSession = ImageClient.sharedSession
     var generationDefaults = ModelGenerationDefaults()
+    var remoteRepository = RemoteModelRepository()
+    var remoteSession: URLSession = RemoteModelEndpoint.session
+    var remoteImageDownload: @Sendable (URL) async throws -> Data = RemoteImageDownload.fetch
 
     static func loopbackURL(port: Int) -> URL {
         URL(string: "http://127.0.0.1:\(port)")!
@@ -69,12 +72,12 @@ struct ImageClient {
         let prompt: String
         let n: Int
         let size: String
-        let response_format = "b64_json"
+        var response_format: String? = "b64_json"
         let seed: Int?
     }
 
     private struct ImageResponse: Decodable {
-        struct Item: Decodable { let b64_json: String? }
+        struct Item: Decodable { let b64_json: String?; let url: String? }
         let data: [Item]
         let cancelled: Bool?
     }
@@ -100,17 +103,18 @@ struct ImageClient {
         port: Int,
         bearer: String?
     ) async throws -> [GeneratedImage] {
-        let url = Self.loopbackURL(port: port).appendingPathComponent("v1/images/generations")
+        let remote = try remoteRepository.endpoint(alias: model, slot: .image)
+        let url = remote?.url("images/generations") ?? Self.loopbackURL(port: port).appendingPathComponent("v1/images/generations")
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = Self.requestTimeout
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        applyBearer(&req, bearer)
+        applyBearer(&req, remote == nil ? bearer : remote?.apiKey)
         req.httpBody = try JSONEncoder().encode(
-            GenerationBody(model: model, prompt: prompt, n: count, size: size ?? generationDefaults.imageSize, seed: seed)
+            GenerationBody(model: remote?.modelID ?? model, prompt: prompt, n: count, size: size ?? generationDefaults.imageSize, response_format: remote == nil || remote?.configuration.imageResponseFormat == "b64_json" ? "b64_json" : nil, seed: remote == nil ? seed : nil)
         )
-        let images = try await sendAndDecode(req)
+        let images = try await sendAndDecode(req, remote: remote != nil)
         return images.map { GeneratedImage(pngData: $0, prompt: prompt, isEdit: false) }
     }
 
@@ -127,12 +131,14 @@ struct ImageClient {
         port: Int,
         bearer: String?
     ) async throws -> [GeneratedImage] {
-        let url = Self.loopbackURL(port: port).appendingPathComponent("v1/images/edits")
+        let remote = try remoteRepository.endpoint(alias: model, slot: .image)
+        if let remote, !remote.configuration.supportsImageEditing { throw RemoteModelError.unavailable }
+        let url = remote?.url("images/edits") ?? Self.loopbackURL(port: port).appendingPathComponent("v1/images/edits")
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = Self.requestTimeout
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        applyBearer(&req, bearer)
+        applyBearer(&req, remote == nil ? bearer : remote?.apiKey)
 
         let boundary = "rapid-\(UUID().uuidString)"
         req.setValue(
@@ -141,17 +147,19 @@ struct ImageClient {
         )
         var fields: [(String, String)] = [
             ("prompt", prompt),
-            ("model", model),
+            ("model", remote?.modelID ?? model),
             ("n", String(count)),
-            ("response_format", "b64_json"),
         ]
-        if let seed { fields.append(("seed", String(seed))) }
+        if remote == nil || remote?.configuration.imageResponseFormat == "b64_json" {
+            fields.append(("response_format", "b64_json"))
+        }
+        if remote == nil, let seed { fields.append(("seed", String(seed))) }
         req.httpBody = Self.multipartBody(
             boundary: boundary, fields: fields,
             fileField: "image", fileName: "input.png",
             fileMime: "image/png", fileData: imagePNG
         )
-        let images = try await sendAndDecode(req)
+        let images = try await sendAndDecode(req, remote: remote != nil)
         return images.map { GeneratedImage(pngData: $0, prompt: prompt, isEdit: true) }
     }
 
@@ -165,18 +173,21 @@ struct ImageClient {
 
     /// Send, validate status, decode the ``{data:[{b64_json}]}`` envelope
     /// into raw PNG byte blobs.
-    private func sendAndDecode(_ req: URLRequest) async throws -> [Data] {
+    private func sendAndDecode(_ req: URLRequest, remote: Bool = false) async throws -> [Data] {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: req)
+            (data, response) = try await (remote ? remoteSession : session).data(for: req)
         } catch {
+            if Task.isCancelled { throw CancellationError() }
+            if remote { throw RemoteModelError.transport }
             throw ImageClientError.transport(error.localizedDescription)
         }
         guard let http = response as? HTTPURLResponse else {
             throw ImageClientError.transport("Malformed server response.")
         }
         guard (200...299).contains(http.statusCode) else {
+            if remote { throw RemoteModelError.http(http.statusCode) }
             let message = (try? JSONDecoder().decode(ErrorEnvelope.self, from: data))?.message
             throw ImageClientError.http(status: http.statusCode, message: message)
         }
@@ -194,10 +205,11 @@ struct ImageClient {
         // would hide server corruption behind a partial gallery.
         var blobs: [Data] = []
         for item in decoded.data {
-            guard let b64 = item.b64_json, let data = Data(base64Encoded: b64) else {
-                throw ImageClientError.emptyResponse
-            }
-            blobs.append(data)
+            if let b64 = item.b64_json, let data = Data(base64Encoded: b64) {
+                blobs.append(data)
+            } else if remote, let text = item.url, let url = URL(string: text) {
+                blobs.append(try await remoteImageDownload(url))
+            } else { throw ImageClientError.emptyResponse }
         }
         return blobs
     }
@@ -224,6 +236,7 @@ struct ImageClient {
     /// ``GET /v1/images/progress`` — polled during a render. Returns nil on any
     /// transport hiccup so the caller simply keeps its last known state.
     func fetchProgress(model: String, port: Int, bearer: String?) async -> ImageProgress? {
+        guard !RemoteModelEndpoint.isRemote(model) else { return nil }
         var components = URLComponents(
             url: Self.loopbackURL(port: port).appendingPathComponent("v1/images/progress"),
             resolvingAgainstBaseURL: false
@@ -245,6 +258,7 @@ struct ImageClient {
     /// ``POST /v1/images/cancel`` — best-effort; the render stops at its next
     /// denoise step and its in-flight ``generate`` returns the finished images.
     func cancel(model: String, port: Int, bearer: String?) async {
+        guard !RemoteModelEndpoint.isRemote(model) else { return }
         var components = URLComponents(
             url: Self.loopbackURL(port: port).appendingPathComponent("v1/images/cancel"),
             resolvingAgainstBaseURL: false

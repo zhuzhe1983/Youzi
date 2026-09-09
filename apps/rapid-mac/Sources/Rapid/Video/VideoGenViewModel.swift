@@ -9,6 +9,7 @@ final class VideoGenViewModel {
         let port: Int
         let bearer: String
         let sessionGeneration: UInt64
+        var remote: RemoteModelEndpoint? = nil
     }
 
     /// Only meaningful readiness changes should refresh controls, not every
@@ -46,7 +47,20 @@ final class VideoGenViewModel {
         let mimeType: String
     }
 
-    var videoModels: [ModelEntry] = []
+    private var remoteSessionContext: ServerRequestContext?
+    var remoteSettings = RemoteModelSettings.shared
+    var remoteClientFactory: (RemoteModelEndpoint) -> any VideoClientProtocol = { VideoClient(remoteEndpoint: $0) }
+    private var localVideoModels: [ModelEntry] = []
+    var videoModels: [ModelEntry] {
+        get {
+            var entries = localVideoModels + remoteSettings.entries(kind: .video)
+            // Preserve the pinned provider of active work after disable/removal.
+            if let pinned = remoteSessionContext?.remote?.configuration.entry,
+               !entries.contains(where: { $0.alias == pinned.alias }) { entries.append(pinned) }
+            return entries
+        }
+        set { localVideoModels = newValue.filter { !$0.isRemote } }
+    }
     var catalogLoaded = false
     var selectedAlias = ""
     var mode: Mode = .text
@@ -151,6 +165,7 @@ final class VideoGenViewModel {
     var canSubmit: Bool {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         return isServerReady
+            && (!RemoteModelEndpoint.isRemote(selectedAlias) || remoteSettings.document.model(alias: selectedAlias) != nil)
             && loadedServerContext == currentServerContext
             && capabilities != nil
             && isSelectedModelEligible
@@ -183,7 +198,7 @@ final class VideoGenViewModel {
             && !isPreparing
             && !hasLiveActiveJobs
             && pendingCacheCleanupJobIDs.isEmpty
-            && (!isServerReady || jobsAreReconciled)
+            && (RemoteModelEndpoint.isRemote(selectedAlias) || !isServerReady || jobsAreReconciled)
     }
 
     var needsServerRefresh: Bool {
@@ -191,6 +206,7 @@ final class VideoGenViewModel {
     }
 
     func isModelEligible(_ model: ModelEntry) -> Bool {
+        if model.isRemote { return true }
         guard let minimum = model.minimumMemoryGB,
               minimum.isFinite, minimum > 0, physicalRAMGB > 0 else { return false }
         return physicalRAMGB >= minimum
@@ -199,14 +215,8 @@ final class VideoGenViewModel {
     func refreshCatalog() async {
         catalogRefreshGeneration &+= 1
         let generation = catalogRefreshGeneration
-        guard let binary = server.binaryPath else {
-            catalogLoaded = true
-            videoModels = []
-            selectedAlias = ""
-            selectedModelDidChange()
-            return
-        }
-        let loaded = await catalogLoader(binary)
+        let local = if let binary = server.binaryPath { await catalogLoader(binary) } else { [ModelEntry]() }
+        let loaded = local + remoteSettings.entries(kind: .video)
         guard !Task.isCancelled, generation == catalogRefreshGeneration else { return }
         let previousModel = selectedModel
         var filtered = loaded.filter {
@@ -222,7 +232,7 @@ final class VideoGenViewModel {
         videoModels = filtered
         catalogLoaded = true
         let stillValid = filtered.contains { $0.alias == selectedAlias }
-        if selectedAlias.isEmpty || !stillValid {
+        if !RemoteModelEndpoint.isRemote(selectedAlias) && (selectedAlias.isEmpty || !stillValid) {
             selectedAlias = server.automaticModelAlias(for: .video, entries: filtered.filter(isModelEligible))
                 ?? (filtered.first { $0.cached && isModelEligible($0) }
                 ?? filtered.first(where: isModelEligible)
@@ -262,15 +272,23 @@ final class VideoGenViewModel {
     }
 
     func prepareSelectedModel() async {
-        guard !isPreparing, let model = selectedModel, isSelectedModelEligible else { return }
+        guard !isPreparing, canSwitchModels, let model = selectedModel, isSelectedModelEligible else { return }
         isPreparing = true
         errorMessage = nil
         defer { isPreparing = false }
-        let ready = await server.ensureVideoServing(
+        let ready: Bool
+        if model.isRemote {
+            do {
+                guard let endpoint = try remoteSettings.repository.endpoint(alias: model.alias, slot: .video) else { throw RemoteModelError.unavailable }
+                remoteSessionContext = ServerRequestContext(alias: model.alias, port: 0, bearer: "", sessionGeneration: 0, remote: endpoint)
+                ready = true
+            } catch { errorMessage = error.localizedDescription; return }
+        }
+        else { ready = await server.ensureVideoServing(
             alias: model.alias,
             hfPath: model.hfRepo,
             minimumMemoryGB: model.minimumMemoryGB
-        )
+        ) }
         guard selectedAlias == model.alias else { return }
         guard ready else {
             errorMessage = "Rapid couldn't start this video model. Check the memory notice or server log, then try again."
@@ -305,7 +323,7 @@ final class VideoGenViewModel {
             if refreshGeneration == serverRefreshGeneration { isRefreshing = false }
         }
         do {
-            let newCapabilities = try await client.capabilities(
+            let newCapabilities = try await client(for: context).capabilities(
                 model: context.alias, port: context.port, bearer: context.bearer
             )
             guard requestIsCurrent(
@@ -318,7 +336,7 @@ final class VideoGenViewModel {
             reconcileControls()
             errorMessage = nil
             do {
-                let newJobs = try await client.list(
+                let newJobs = try await client(for: context).list(
                     port: context.port, bearer: context.bearer, limit: 30
                 )
                 guard requestIsCurrent(
@@ -357,9 +375,20 @@ final class VideoGenViewModel {
         let contextGeneration = serverContextGeneration
         do {
             let previous = selectedJob?.status
-            let newJobs = try await client.list(
+            let newJobs: [VideoJob]
+            if context.remote != nil {
+                var updated: [VideoJob] = []
+                for job in jobs {
+                    if job.status == .queued || job.status == .inProgress {
+                        updated.append(try await client(for: context).retrieve(id: job.id, port: context.port, bearer: context.bearer))
+                    } else { updated.append(job) }
+                }
+                newJobs = updated
+            } else {
+                newJobs = try await client(for: context).list(
                 port: context.port, bearer: context.bearer, limit: 30
-            )
+                )
+            }
             guard requestIsCurrent(
                 context, contextGeneration: contextGeneration
             ) else { return }
@@ -382,6 +411,11 @@ final class VideoGenViewModel {
     }
 
     func submit() async {
+        if RemoteModelEndpoint.isRemote(selectedAlias),
+           remoteSettings.document.model(alias: selectedAlias) == nil {
+            errorMessage = RemoteModelError.unavailable.localizedDescription
+            return
+        }
         guard canSubmit, let context = currentServerContext else { return }
         let contextGeneration = serverContextGeneration
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -390,7 +424,7 @@ final class VideoGenViewModel {
         errorMessage = nil
         defer { isSubmitting = false }
         do {
-            let job = try await client.create(
+            let job = try await client(for: context).create(
                 VideoCreateRequest(
                     prompt: trimmed,
                     model: selectedAlias,
@@ -445,7 +479,7 @@ final class VideoGenViewModel {
         isLoadingPreview = true
         defer { if generation == previewGeneration { isLoadingPreview = false } }
         do {
-            let url = try await client.content(
+            let url = try await client(for: context).content(
                 id: job.id, port: context.port, bearer: context.bearer
             )
             guard generation == previewGeneration,
@@ -468,10 +502,11 @@ final class VideoGenViewModel {
     func delete(_ job: VideoJob) async {
         guard let context = currentServerContext,
               (jobsServerContext == context || pendingCacheCleanupJobIDs.contains(job.id)),
-              job.status != .inProgress else { return }
+              job.status != .inProgress,
+              !(context.remote != nil && job.status == .queued) else { return }
         let contextGeneration = serverContextGeneration
         do {
-            try await client.delete(
+            try await client(for: context).delete(
                 id: job.id, port: context.port, bearer: context.bearer
             )
             guard requestIsCurrent(
@@ -499,6 +534,7 @@ final class VideoGenViewModel {
     }
 
     private func selectedModelDidChange() {
+        remoteSessionContext = nil
         invalidateServerContext()
         capabilities = nil
         jobs = []
@@ -577,7 +613,15 @@ final class VideoGenViewModel {
         return serverJobs + retained
     }
 
+    private func client(for context: ServerRequestContext) -> any VideoClientProtocol {
+        if let remote = context.remote { return remoteClientFactory(remote) }
+        return client
+    }
+
     private var currentServerContext: ServerRequestContext? {
+        if RemoteModelEndpoint.isRemote(selectedAlias) {
+            return remoteSessionContext?.alias == selectedAlias ? remoteSessionContext : nil
+        }
         guard let model = selectedModel, server.servingAlias != nil,
               server.servingAlias == selectedAlias || YouziScenarioModels.isReady(model, in: server.residency),
               let bearer = server.activeBearer, !bearer.isEmpty else { return nil }

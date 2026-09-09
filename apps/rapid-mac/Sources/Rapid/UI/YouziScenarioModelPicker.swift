@@ -5,6 +5,9 @@ struct YouziScenarioModelPicker: View {
     @Binding var assistantAlias: String
     let chatEntries: [ModelEntry]
     @Environment(ServerManager.self) private var server
+    @Environment(AudioViewModel.self) private var audio
+    @Environment(ImageGenViewModel.self) private var images
+    @Environment(VideoGenViewModel.self) private var videos
     @Environment(DownloadManager.self) private var downloads
     @Environment(YouziI18nConfig.self) private var i18n
     @Environment(YouziFontSizeConfig.self) private var fonts
@@ -28,7 +31,7 @@ struct YouziScenarioModelPicker: View {
                 ForEach(YouziModelLane.allCases) { lane in
                     Circle().fill(lane.occupancyColor).frame(width: 5, height: 5)
                 }
-                Text(assistantAlias.isEmpty ? i18n.text(zh: "选择模型", en: "Select model") : assistantAlias)
+                Text(assistantAlias.isEmpty ? i18n.text(zh: "选择模型", en: "Select model") : RemoteModelSettings.shared.title(assistantAlias))
                     .font(RapidFont.caption).lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 9))
             }
@@ -57,6 +60,32 @@ struct YouziScenarioModelPicker: View {
                             .font(RapidFont.secondary).foregroundStyle(.secondary).padding(.vertical, 16)
                     }
                     ForEach(choices) { entry in modelRow(entry) }
+                    let remotes = RemoteModelSettings.shared.entries(kind: selectedKind)
+                    if !remotes.isEmpty {
+                        ForEach(RemoteModelSlot.allCases.filter { $0.kind == selectedKind }) { slot in
+                            Button(i18n.text(zh: "按优先级选择 · \(slot.title(chinese: true))", en: "Choose by priority · \(slot.title(chinese: false))")) {
+                                if let localSlot = YouziResidentServicePreference.Slot(rawValue: slot.rawValue),
+                                   let alias = server.automaticModelAlias(for: localSlot, entries: entries) {
+                                    select(alias, slot: slot); presented = false
+                                }
+                            }.buttonStyle(.plain).font(RapidFont.caption).foregroundStyle(RapidTheme.brand)
+                                .disabled(laneBusy)
+                                .accessibilityIdentifier("Youzi.ScenarioModels.Priority.\(slot.rawValue)")
+                        }
+                        Text(i18n.text(zh: "远程模型（可选）", en: "Remote models (optional)"))
+                            .font(RapidFont.caption).foregroundStyle(.secondary).padding(.top, 8)
+                        ForEach(remotes) { entry in
+                            Button {
+                                if let slot = RemoteModelSettings.shared.document.model(alias: entry.alias)?.slot { select(entry.alias, slot: slot) }
+                                presented = false
+                            } label: {
+                                Label(RemoteModelSettings.shared.title(entry.alias), systemImage: "network")
+                                    .font(RapidFont.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                            }.buttonStyle(.plain)
+                                .disabled((entry.kind == .video && !videos.canSwitchModels) || (entry.kind == .audio && audio.isBusy) || (entry.kind == .image && images.isGenerating))
+                                .accessibilityIdentifier("Youzi.ScenarioModels.\(entry.alias)")
+                        }
+                    }
                 }
             }.frame(maxHeight: 240)
             YouziScenarioModelMemoryFooter(occupancy: occupancy, refreshing: loading) {
@@ -65,6 +94,25 @@ struct YouziScenarioModelPicker: View {
         }
         .padding(16).frame(width: YouziScenarioModelToolbar.panelWidth(scale: fonts.scale))
         .task(id: ModelPickerBar.PickerCatalogKey(binaryPath: server.binaryPath, cacheGeneration: downloads.cacheGeneration, refreshEnabled: true)) { await refresh() }
+    }
+
+    private var laneBusy: Bool {
+        switch selectedKind {
+        case .chat: false
+        case .audio: audio.isBusy
+        case .image: images.isGenerating
+        case .video: !videos.canSwitchModels
+        }
+    }
+
+    private func select(_ alias: String, slot: RemoteModelSlot) {
+        switch slot {
+        case .chat: assistantAlias = alias
+        case .transcription: audio.selectedTranscriptionAlias = alias
+        case .speech: audio.selectSpeechModel(alias)
+        case .image: images.selectedAlias = alias
+        case .video: videos.selectModel(alias)
+        }
     }
 
     private func openModelSettings() {

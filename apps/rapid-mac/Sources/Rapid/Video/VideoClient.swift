@@ -32,6 +32,22 @@ struct VideoJob: Identifiable, Codable, Sendable, Hashable {
     }
 }
 
+extension VideoJob {
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        model = try c.decode(String.self, forKey: .model)
+        prompt = try c.decodeIfPresent(String.self, forKey: .prompt) ?? ""
+        seconds = try c.decode(String.self, forKey: .seconds)
+        size = try c.decode(String.self, forKey: .size)
+        status = try c.decode(VideoJobStatus.self, forKey: .status)
+        progress = try c.decode(Int.self, forKey: .progress)
+        createdAt = try c.decode(Int.self, forKey: .createdAt)
+        completedAt = try c.decodeIfPresent(Int.self, forKey: .completedAt)
+        error = try c.decodeIfPresent(VideoJobError.self, forKey: .error)
+    }
+}
+
 struct VideoCapabilities: Decodable, Sendable, Hashable {
     struct Limits: Decodable, Sendable, Hashable {
         struct Dimension: Decodable, Sendable, Hashable {
@@ -160,6 +176,7 @@ struct VideoCapabilities: Decodable, Sendable, Hashable {
     let family: String
     let modes: [VideoModelCapability]
     let limits: Limits
+    var configuredRemoteDurations: [Int]? = nil
 
     /// Image MIME types advertised by the reference, independent of whether the
     /// reference is currently usable. Kept separate from the gated
@@ -244,6 +261,7 @@ struct VideoCapabilities: Decodable, Sendable, Hashable {
     }
 
     func durationPresets(for size: String) -> [Int] {
+        if let configuredRemoteDurations { return sizePresets.contains(size) ? configuredRemoteDurations : [] }
         let candidates = Set([limits.seconds.minimum, 1, 2, 4]).sorted()
         let values = candidates.filter {
             Self.contains($0, minimum: limits.seconds.minimum, maximum: limits.seconds.maximum)
@@ -436,11 +454,19 @@ enum VideoClientError: Error, LocalizedError, Equatable {
 }
 
 protocol VideoClientProtocol: Sendable {
+    func retrieve(id: String, port: Int, bearer: String?) async throws -> VideoJob
     func capabilities(model: String?, port: Int, bearer: String?) async throws -> VideoCapabilities
     func create(_ request: VideoCreateRequest, port: Int, bearer: String?) async throws -> VideoJob
     func list(port: Int, bearer: String?, limit: Int) async throws -> [VideoJob]
     func delete(id: String, port: Int, bearer: String?) async throws
     func content(id: String, port: Int, bearer: String?) async throws -> URL
+}
+
+extension VideoClientProtocol {
+    func retrieve(id: String, port: Int, bearer: String?) async throws -> VideoJob {
+        guard let job = try await list(port: port, bearer: bearer, limit: 100).first(where: { $0.id == id }) else { throw VideoClientError.invalidResponse }
+        return job
+    }
 }
 
 struct VideoClient: VideoClientProtocol, @unchecked Sendable {
@@ -454,6 +480,8 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
         return URLSession(configuration: configuration)
     }()
 
+    var remoteEndpoint: RemoteModelEndpoint? = nil
+    var remoteSession: URLSession = RemoteModelEndpoint.session
     var session: URLSession = sharedSession
     var cacheDirectory: URL = FileManager.default.urls(
         for: .cachesDirectory, in: .userDomainMask
@@ -463,6 +491,7 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
     }
 
     func capabilities(model: String? = nil, port: Int, bearer: String?) async throws -> VideoCapabilities {
+        if let endpoint = remoteEndpoint { return Self.configuredCapabilities(endpoint.configuration) }
         var request = request(path: "v1/videos/capabilities", port: port, bearer: bearer)
         if let model {
             guard let requestURL = request.url,
@@ -484,6 +513,10 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
         port: Int,
         bearer: String?
     ) async throws -> VideoJob {
+        if let endpoint = remoteEndpoint {
+            guard endpoint.configuration.slot == .video, value.model == endpoint.configuration.alias,
+                  value.reference == nil || endpoint.configuration.supportsVideoImageInput else { throw RemoteModelError.unavailable }
+        }
         var request = request(path: "v1/videos", port: port, bearer: bearer)
         request.httpMethod = "POST"
         request.timeoutInterval = Self.requestTimeout
@@ -493,11 +526,10 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
             boundary: boundary,
             fields: [
                 ("prompt", value.prompt),
-                ("model", value.model),
+                ("model", remoteEndpoint?.modelID ?? value.model),
                 ("seconds", String(value.seconds)),
                 ("size", value.size),
-                ("seed", String(value.seed)),
-            ],
+            ] + (remoteEndpoint == nil ? [("seed", String(value.seed))] : []),
             file: value.reference.map {
                 (
                     field: "input_reference",
@@ -514,7 +546,7 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
 
     func list(port: Int, bearer: String?, limit: Int = 30) async throws -> [VideoJob] {
         var components = URLComponents(
-            url: Self.loopbackURL(port: port).appendingPathComponent("v1/videos"),
+            url: remoteEndpoint?.url("videos") ?? Self.loopbackURL(port: port).appendingPathComponent("v1/videos"),
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
@@ -525,7 +557,7 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
         guard envelope.data.allSatisfy({ Self.isValidJobID($0.id) }) else {
             throw VideoClientError.invalidJobID
         }
-        return envelope.data
+        return envelope.data.filter { remoteEndpoint == nil || $0.model == remoteEndpoint?.modelID }
     }
 
     func delete(id: String, port: Int, bearer: String?) async throws {
@@ -557,7 +589,8 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
         )
         let request = request(path: "v1/videos/\(id)/content", port: port, bearer: bearer)
         do {
-            let (temporary, response) = try await session.download(for: request)
+            let (temporary, response) = try await (remoteEndpoint == nil ? session : remoteSession).download(for: request)
+            if remoteEndpoint != nil, let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw RemoteModelError.http(http.statusCode) }
             try Self.validate(response: response, data: nil)
             let staging = cacheDirectory.appendingPathComponent(".\(UUID().uuidString).mp4")
             try FileManager.default.moveItem(at: temporary, to: staging)
@@ -573,6 +606,8 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
         } catch let error as VideoClientError {
             throw error
         } catch {
+            if Task.isCancelled { throw CancellationError() }
+            if remoteEndpoint != nil { throw (error as? RemoteModelError) ?? RemoteModelError.transport }
             throw VideoClientError.transport(error.localizedDescription)
         }
     }
@@ -671,14 +706,15 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
     }
 
     private func request(path: String, port: Int, bearer: String?) -> URLRequest {
-        var request = URLRequest(url: Self.loopbackURL(port: port).appendingPathComponent(path))
+        var request = URLRequest(url: remoteEndpoint?.url(path) ?? Self.loopbackURL(port: port).appendingPathComponent(path))
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         applyBearer(&request, bearer)
         return request
     }
 
     private func applyBearer(_ request: inout URLRequest, _ bearer: String?) {
-        if let bearer, !bearer.isEmpty {
+        let credential = remoteEndpoint == nil ? bearer : remoteEndpoint?.apiKey
+        if let bearer = credential, !bearer.isEmpty {
             request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         }
     }
@@ -694,12 +730,15 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
 
     private func send(_ request: URLRequest) async throws -> Data {
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await (remoteEndpoint == nil ? session : remoteSession).data(for: request)
+            if remoteEndpoint != nil, let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw RemoteModelError.http(http.statusCode) }
             try Self.validate(response: response, data: data)
             return data
         } catch let error as VideoClientError {
             throw error
         } catch {
+            if Task.isCancelled { throw CancellationError() }
+            if remoteEndpoint != nil { throw (error as? RemoteModelError) ?? RemoteModelError.transport }
             throw VideoClientError.transport(error.localizedDescription)
         }
     }
@@ -717,7 +756,11 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
     }
 
     private func cacheURL(for id: String) throws -> URL {
-        cacheDirectory.appendingPathComponent(try Self.cacheFileName(for: id))
+        if let remoteEndpoint {
+            let digest = SHA256.hash(data: Data((remoteEndpoint.configuration.id.uuidString + remoteEndpoint.baseURL.absoluteString).utf8)).map { String(format: "%02x", $0) }.joined()
+            return cacheDirectory.appendingPathComponent(digest + "-" + (try Self.cacheFileName(for: id)))
+        }
+        return cacheDirectory.appendingPathComponent(try Self.cacheFileName(for: id))
     }
 }
 
@@ -743,6 +786,7 @@ extension VideoClient: YouziVideoToolClient {
     /// Atomic server-side queued-only cancellation. A just-completed result
     /// must not be deleted because the caller's last poll still said queued.
     func cancelPending(id: String, port: Int, bearer: String?) async throws {
+        guard remoteEndpoint == nil else { throw RemoteModelError.unavailable }
         _ = try Self.cacheFileName(for: id)
         var request = request(path: "v1/videos/\(id)", port: port, bearer: bearer)
         request.url?.append(queryItems: [URLQueryItem(name: "pending_only", value: "true")])
@@ -753,6 +797,8 @@ extension VideoClient: YouziVideoToolClient {
     /// No preview cache: a prior session's same-ID bytes must never satisfy a
     /// conversation. Bound even chunked responses, before adding them to Data.
     func videoData(id: String, maximumBytes: Int, port: Int, bearer: String?) async throws -> Data {
+        // This tool-only API deliberately stays local; remote tools require separate consent.
+        guard remoteEndpoint == nil else { throw RemoteModelError.unavailable }
         _ = try Self.cacheFileName(for: id)
         guard maximumBytes > 0 else { throw VideoClientError.outputTooLarge }
         let request = request(path: "v1/videos/\(id)/content", port: port, bearer: bearer)

@@ -63,6 +63,8 @@ struct AudioClient {
 
     var session: URLSession = AudioClient.sharedSession
     var generationDefaults = ModelGenerationDefaults()
+    var remoteRepository = RemoteModelRepository()
+    var remoteSession: URLSession = RemoteModelEndpoint.session
 
     private struct TranscriptionWire: Decodable {
         let text: String
@@ -142,10 +144,9 @@ struct AudioClient {
         }
 
         let boundary = "rapid-audio-\(UUID().uuidString)"
-        var request = URLRequest(
-            url: Self.loopbackURL(port: port)
-                .appendingPathComponent("v1/audio/transcriptions")
-        )
+        let remote = try remoteRepository.endpoint(alias: model, slot: .transcription)
+        var request = URLRequest(url: remote?.url("audio/transcriptions")
+            ?? Self.loopbackURL(port: port).appendingPathComponent("v1/audio/transcriptions"))
         request.httpMethod = "POST"
         request.timeoutInterval = Self.requestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -153,17 +154,18 @@ struct AudioClient {
             "multipart/form-data; boundary=\(boundary)",
             forHTTPHeaderField: "Content-Type"
         )
-        applyBearer(&request, bearer)
+        applyBearer(&request, remote == nil ? bearer : remote?.apiKey)
         request.httpBody = ImageClient.multipartBody(
             boundary: boundary,
-            fields: [("model", model), ("response_format", "json")],
+            fields: [("model", remote?.modelID ?? model), ("response_format", "json")],
             fileField: "file",
             fileName: "input.\(upload.fileExtension)",
             fileMime: upload.mimeType,
             fileData: upload.data
         )
 
-        let (data, response) = try await send(request)
+        let (data, response) = try await send(request, remote: remote != nil)
+        if remote != nil, let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw RemoteModelError.http(http.statusCode) }
         try validate(response: response, data: data)
         guard let decoded = try? JSONDecoder().decode(TranscriptionWire.self, from: data) else {
             throw AudioClientError.invalidResponse
@@ -199,10 +201,9 @@ struct AudioClient {
         guard !audioData.isEmpty else { throw AudioClientError.emptyAudio }
 
         let boundary = "rapid-dictation-\(UUID().uuidString)"
-        var request = URLRequest(
-            url: Self.loopbackURL(port: port)
-                .appendingPathComponent("v1/audio/transcriptions")
-        )
+        let remote = try remoteRepository.endpoint(alias: model, slot: .transcription)
+        var request = URLRequest(url: remote?.url("audio/transcriptions")
+            ?? Self.loopbackURL(port: port).appendingPathComponent("v1/audio/transcriptions"))
         request.httpMethod = "POST"
         request.timeoutInterval = Self.requestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -210,11 +211,11 @@ struct AudioClient {
             "multipart/form-data; boundary=\(boundary)",
             forHTTPHeaderField: "Content-Type"
         )
-        applyBearer(&request, bearer)
+        applyBearer(&request, remote == nil ? bearer : remote?.apiKey)
 
-        var fields = [("model", model), ("response_format", "json")]
+        var fields = [("model", remote?.modelID ?? model), ("response_format", "json")]
         if let context, !context.isEmpty {
-            fields.append(("context", context))
+            fields.append((remote == nil ? "context" : "prompt", context))
         }
 
         request.httpBody = ImageClient.multipartBody(
@@ -226,7 +227,8 @@ struct AudioClient {
             fileData: audioData
         )
 
-        let (data, response) = try await send(request)
+        let (data, response) = try await send(request, remote: remote != nil)
+        if remote != nil, let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw RemoteModelError.http(http.statusCode) }
         try validate(response: response, data: data)
         guard let decoded = try? JSONDecoder().decode(TranscriptionWire.self, from: data) else {
             throw AudioClientError.invalidResponse
@@ -243,6 +245,7 @@ struct AudioClient {
         port: Int,
         bearer: String?
     ) async throws -> [String] {
+        if let remote = try remoteRepository.endpoint(alias: model, slot: .speech) { return remote.configuration.voiceNames }
         var components = URLComponents(
             url: Self.loopbackURL(port: port).appendingPathComponent("v1/audio/voices"),
             resolvingAgainstBaseURL: false
@@ -280,18 +283,19 @@ struct AudioClient {
             }
             resolvedVoice = preferred
         }
-        var request = URLRequest(
-            url: Self.loopbackURL(port: port).appendingPathComponent("v1/audio/speech")
-        )
+        let remote = try remoteRepository.endpoint(alias: model, slot: .speech)
+        var request = URLRequest(url: remote?.url("audio/speech")
+            ?? Self.loopbackURL(port: port).appendingPathComponent("v1/audio/speech"))
         request.httpMethod = "POST"
         request.timeoutInterval = Self.requestTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("audio/wav", forHTTPHeaderField: "Accept")
-        applyBearer(&request, bearer)
+        applyBearer(&request, remote == nil ? bearer : remote?.apiKey)
         request.httpBody = try JSONEncoder().encode(
-            SpeechBody(model: model, input: text, voice: resolvedVoice, speed: speed ?? generationDefaults.speed)
+            SpeechBody(model: remote?.modelID ?? model, input: text, voice: resolvedVoice, speed: speed ?? generationDefaults.speed)
         )
-        let (data, response) = try await send(request)
+        let (data, response) = try await send(request, remote: remote != nil)
+        if remote != nil, let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw RemoteModelError.http(http.statusCode) }
         try validate(response: response, data: data)
         guard !data.isEmpty else { throw AudioClientError.emptyAudio }
         let contentType = (response as? HTTPURLResponse)?
@@ -309,12 +313,14 @@ struct AudioClient {
         }
     }
 
-    private func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
+    private func send(_ request: URLRequest, remote: Bool = false) async throws -> (Data, URLResponse) {
         do {
-            return try await session.data(for: request)
+            return try await (remote ? remoteSession : session).data(for: request)
         } catch let error as AudioClientError {
             throw error
         } catch {
+            if Task.isCancelled { throw CancellationError() }
+            if remote { throw RemoteModelError.transport }
             throw AudioClientError.transport(error.localizedDescription)
         }
     }

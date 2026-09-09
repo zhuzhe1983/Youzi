@@ -517,6 +517,11 @@ struct ContentView: View {
     }
 
     private func autoResolveAlias() {
+        if RemoteModelEndpoint.isRemote(alias) { return }
+        if alias.isEmpty, let automatic = server.automaticModelAlias(for: .chat, entries: catalogEntries) {
+            alias = automatic
+            return
+        }
         if !alias.isEmpty,
            catalogEntries.contains(where: { $0.alias == alias && $0.kind == .chat }) {
             return
@@ -942,7 +947,8 @@ struct ContentView: View {
     /// answer at any instant. See ``ModelReadiness`` for the precedence
     /// rules and the copy contract.
     private var readiness: ModelReadiness {
-        ModelReadiness.resolve(
+        if let remote = RemoteModelSettings.shared.readiness(alias) { return remote }
+        return ModelReadiness.resolve(
             serverState: server.readinessState(for: alias),
             alias: alias,
             cacheState: cacheState(for: alias),

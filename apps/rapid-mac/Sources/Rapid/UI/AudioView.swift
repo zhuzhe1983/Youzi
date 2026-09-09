@@ -44,6 +44,7 @@ struct AudioView: View {
     /// Audio uses the same lifecycle SSOT and CTA semantics as Chat and
     /// Images: choose → Download & start / Start → ready.
     private var readiness: ModelReadiness {
+        if let remote = RemoteModelSettings.shared.readiness(selectedAlias) { return remote }
         // Voice co-loading: once the app is serving ANY model on the primary
         // server, speech is available in the same process — the chosen STT/TTS
         // engine lazy-loads on the mounted ``/v1/audio/*`` lane whenever an
@@ -451,7 +452,7 @@ struct AudioView: View {
         identifier: String
     ) -> some View {
         Menu {
-            ForEach(entries) { entry in
+            ForEach(entries.filter { !$0.isRemote }) { entry in
                 Button {
                     selection.wrappedValue = entry.alias
                 } label: {
@@ -468,11 +469,12 @@ struct AudioView: View {
                     selection.wrappedValue == entry.alias ? .isSelected : []
                 )
             }
+            RemoteModelMenuSection(slot: entries.first?.audioCapability == .speech ? .speech : .transcription,
+                selection: selection.wrappedValue, entries: entries.filter(\.isRemote), automatic: {
+                    server.automaticModelAlias(for: entries.first?.audioCapability == .speech ? .speech : .transcription, entries: entries)
+                }) { selection.wrappedValue = $0 }
         } label: {
-            popupControlLabel(
-                entries.first(where: { $0.alias == selection.wrappedValue })
-                    .map(\.alias) ?? "Choose a model"
-            )
+            popupControlLabel(selection.wrappedValue.isEmpty ? "Choose a model" : RemoteModelSettings.shared.title(selection.wrappedValue))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
@@ -572,6 +574,7 @@ struct AudioView: View {
               let initialEntry = viewModel.audioModels.first(where: { $0.alias == alias }) else {
             return
         }
+        if initialEntry.isRemote { return }
         modelLoadsInFlight.insert(alias)
         defer { modelLoadsInFlight.remove(alias) }
         viewModel.errorMessage = nil

@@ -240,6 +240,7 @@ enum ServerState: Equatable {
 @MainActor
 @Observable
 final class ServerManager {
+    var remoteModelSettings = RemoteModelSettings.shared
     struct PendingModelSwitch: Identifiable, Equatable, Sendable {
         let id: UUID
         let risk: ModelSwitchRisk
@@ -410,6 +411,7 @@ final class ServerManager {
     /// when no primary model is running at all.
     @discardableResult
     func ensureVoiceLane(alias: String, hfPath: String?) async -> Bool {
+        if RemoteModelEndpoint.isRemote(alias) { return remoteModelSettings.document.model(alias: alias)?.slot.kind == .audio }
         if voiceCoLoadsOnPrimary {
             return true
         }
@@ -429,6 +431,7 @@ final class ServerManager {
         hfPath: String?,
         minimumMemoryGB: Double?
     ) async -> Bool {
+        if RemoteModelEndpoint.isRemote(alias) { return remoteModelSettings.document.model(alias: alias)?.slot == .video }
         let memorySnapshot = memorySnapshotProvider()
         let estimatedFootprintGB = Self.videoEstimatedFootprintGB(
             minimumMemoryGB: minimumMemoryGB
@@ -485,9 +488,12 @@ final class ServerManager {
     /// UI and workspaces share the same ordered pool as startup. A ready pool
     /// member wins over a stopped one, avoiding needless co-loads.
     func automaticModelAlias(for slot: YouziResidentServicePreference.Slot, entries: [ModelEntry]) -> String? {
-        YouziResidentServicePreference.automaticAlias(
-            for: slot, entries: entries, snapshot: residency, in: sessionDefaults ?? .standard
+        let localEntries = entries.filter { !$0.isRemote }
+        let local = YouziResidentServicePreference.automaticAlias(
+            for: slot, entries: localEntries, snapshot: residency, in: sessionDefaults ?? .standard
         )
+        guard let remoteSlot = RemoteModelSlot(rawValue: slot.rawValue) else { return local }
+        return remoteModelSettings.document.automatic(for: remoteSlot, local: local)
     }
 
     /// Restore the explicitly selected media set after the primary is healthy.
@@ -628,7 +634,8 @@ final class ServerManager {
     /// Feed the existing readiness resolver an alias-specific view of a
     /// process that may now hold several ready engines.
     func readinessState(for alias: String) -> ServerState {
-        isModelResident(alias) ? .ready(alias: alias) : state
+        if remoteModelSettings.document.model(alias: alias) != nil { return .ready(alias: alias) }
+        return isModelResident(alias) ? .ready(alias: alias) : state
     }
 
     @discardableResult
@@ -1868,6 +1875,7 @@ final class ServerManager {
         requestIsMedia: Bool = false,
         mediaKind: ModelKind? = nil
     ) async -> Bool {
+        if RemoteModelEndpoint.isRemote(alias) { return remoteModelSettings.document.model(alias: alias) != nil }
         guard !communityBenchmarkReserved else { return false }
         let trimmed = alias.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
@@ -2678,6 +2686,7 @@ final class ServerManager {
         videoOutputDirectory: String? = nil,
         estimatedMemoryGB: Double? = nil
     ) async {
+        guard !RemoteModelEndpoint.isRemote(alias) else { return }
         guard !communityBenchmarkReserved else { return }
         // Issue #278: a manual restart is the user taking over the
         // lifecycle — reset the budget at entry so a previously
@@ -4690,6 +4699,10 @@ final class ServerManager {
         forAlias alias: String,
         catalogSupportsImageInput: Bool? = nil
     ) -> ImageInputAvailability {
+        if RemoteModelEndpoint.isRemote(alias) {
+            let supported = remoteModelSettings.document.model(alias: alias)?.supportsVision == true
+            return ImageInputAvailability(isAvailable: supported, unavailableMessage: supported ? nil : "Enable vision in this remote model's settings to send images.")
+        }
         let catalogCapability = catalogSupportsImageInput
             ?? ModelCatalogCache.supportsImageInput(forAlias: alias, binary: binaryPath)
         let safeOverrides = Self.imageSafePerformanceOverrides(

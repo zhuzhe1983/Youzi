@@ -469,6 +469,9 @@ struct ModelPickerBar: View {
                 recommendedSection
                 allAliasesSection
             }
+            RemoteModelMenuSection(slot: .chat, selection: alias, automatic: {
+                server.automaticModelAlias(for: .chat, entries: catalog)
+            }) { selected in alias = selected; onUserSelection(selected) }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: pickerIcon)
@@ -592,7 +595,8 @@ struct ModelPickerBar: View {
 
     /// What the composer chip shows. A real alias, or an instruction.
     private var pickerLabel: String {
-        ModelDisplayName.configValue(alias: alias) ?? "Choose a model"
+        if RemoteModelEndpoint.isRemote(alias) { return RemoteModelSettings.shared.title(alias) }
+        return ModelDisplayName.configValue(alias: alias) ?? "Choose a model"
     }
 
     /// True when the chip is showing the instruction rather than a model.
@@ -633,7 +637,7 @@ struct ModelPickerBar: View {
         }
         .accessibilityIdentifier("ModelPickerBar.ModelInfo")
         .buttonStyle(.plain)
-        .disabled(alias.isEmpty)
+        .disabled(alias.isEmpty || RemoteModelEndpoint.isRemote(alias))
         .help("Show model details")
         .accessibilityLabel("Show model details")
         .popover(isPresented: $showInfo, arrowEdge: .top) {
