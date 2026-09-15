@@ -543,6 +543,7 @@ struct GoldenChatSurface {
         )
         .environment(DownloadManager())
         .environment(QuickstartCoordinator())
+        .environment(makeI18n())
 
         let stage = GoldenStage(view)
         return GoldenChatSurface(stage: stage, chat: chat, server: server, fake: fake)
@@ -568,9 +569,18 @@ struct GoldenChatSurface {
         let view = SidebarChatHarnessView(chat: chat, server: server)
             .environment(DownloadManager())
             .environment(QuickstartCoordinator())
+            .environment(makeI18n())
 
         let stage = GoldenStage(view)
         return GoldenChatSurface(stage: stage, chat: chat, server: server, fake: fake)
+    }
+
+    private static func makeI18n() -> YouziI18nConfig {
+        // Match the app's required environment without inheriting or writing
+        // the developer's language preference. Golden journeys use English.
+        let defaults = UserDefaults(suiteName: "golden-i18n-\(UUID().uuidString)")!
+        defaults.register(defaults: [YouziI18nConfig.storageKey: AppLanguage.en.rawValue])
+        return YouziI18nConfig(defaults: defaults)
     }
 
     private static func assemble(

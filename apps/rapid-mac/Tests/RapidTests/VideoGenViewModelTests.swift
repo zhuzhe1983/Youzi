@@ -375,7 +375,9 @@ struct VideoGenViewModelTests {
         await viewModel.submit()
         #expect(viewModel.hasLiveActiveJobs)
 
-        for _ in 0..<100 where viewModel.hasActiveJobs {
+        // Server completion precedes the asynchronous preview download. Wait
+        // for both before asserting the final visible result.
+        for _ in 0..<100 where viewModel.hasActiveJobs || viewModel.isLoadingPreview {
             try await Task.sleep(for: .milliseconds(5))
         }
 

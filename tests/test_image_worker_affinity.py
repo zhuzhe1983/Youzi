@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Image model load/render/release must not follow asyncio's rotating workers."""
 import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-import threading
 from types import SimpleNamespace
 
-from PIL import Image
 import pytest
+from PIL import Image
 
 from vllm_mlx.image.engine import ImageRuntimeError
 from vllm_mlx.routes._async_utils import run_to_completion

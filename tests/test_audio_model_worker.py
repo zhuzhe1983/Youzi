@@ -739,6 +739,7 @@ async def test_residency_snapshot_includes_audio_lane_truth(monkeypatch):
     assert await residency.model_residency() == {
         "models": [{"id": "chat-model"}],
         "audio_lanes": [{"lane": "stt", "model": "whisper-small"}],
+        "supports_preserve_loaded": True,
     }
 
 

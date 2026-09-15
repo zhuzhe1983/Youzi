@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path
 import signal
 import subprocess
+from pathlib import Path
 
 
 def stop_owned_group(child: subprocess.Popen) -> None:

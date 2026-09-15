@@ -25,11 +25,6 @@ from ..api.models import (
     ChatCompletionResponse,
 )
 from ..api.protocol_mapping import cancellation_error, is_cancellation_finish_reason
-from ..runtime.model_loading_policy import (
-    policy_enabled,
-    reported_model_name,
-    resolve_request_model,
-)
 from ..api.tool_calling import (
     convert_tools_for_template,
     extract_json_schema_for_guided,
@@ -48,6 +43,11 @@ from ..config import get_config
 from ..engine import BaseEngine
 from ..middleware.auth import check_rate_limit_or_x_api_key, verify_api_key_or_x_api_key
 from ..reasoning import finalize_streaming_compat
+from ..runtime.model_loading_policy import (
+    policy_enabled,
+    reported_model_name,
+    resolve_request_model,
+)
 from ..service.helpers import (
     _TOOL_USE_REQUIRED_SUFFIX,
     SSE_RESPONSE_HEADERS,

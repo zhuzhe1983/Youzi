@@ -8,7 +8,10 @@ from fastapi.testclient import TestClient
 
 from vllm_mlx.config import get_config
 from vllm_mlx.runtime.model_loading_policy import (
-    ENV_KEY, initial_pool, is_ready, resolve_request_model,
+    ENV_KEY,
+    initial_pool,
+    is_ready,
+    resolve_request_model,
 )
 from vllm_mlx.runtime.model_registry import ModelEntry, ModelRegistry
 
@@ -65,8 +68,13 @@ def test_standalone_cli_contract_is_unchanged(configured):
 
 
 def test_audio_uses_real_lane_readiness_and_alias_equivalence(configured, monkeypatch):
+    from vllm_mlx.routes.audio import (
+        STT_MODEL_ALIASES,
+        TTS_MODEL_ALIASES,
+        _resolve_stt_model,
+        _resolve_tts_model,
+    )
     from vllm_mlx.runtime.audio_worker import audio_worker
-    from vllm_mlx.routes.audio import TTS_MODEL_ALIASES, STT_MODEL_ALIASES, _resolve_tts_model, _resolve_stt_model
     tts = next(iter(TTS_MODEL_ALIASES))
     stt = next(iter(STT_MODEL_ALIASES))
     configured.automatic_model_pool = {"speech": ["cold-tts", tts], "transcription": [stt]}
@@ -217,6 +225,7 @@ async def test_voice_discovery_uses_pool_and_allows_explicit_cold_metadata(confi
 @pytest.mark.asyncio
 async def test_streaming_speech_rechecks_after_lane_lock_without_loading(configured, monkeypatch):
     from contextlib import asynccontextmanager
+
     from vllm_mlx.routes import audio
     from vllm_mlx.runtime.audio_worker import audio_worker
 
