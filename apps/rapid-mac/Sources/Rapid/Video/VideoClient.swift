@@ -302,8 +302,15 @@ struct VideoCapabilities: Decodable, Sendable, Hashable {
         let validSize: Bool
         switch size.type {
         case "fixed":
-            validSize = !(size.values ?? []).isEmpty
-                && (size.values ?? []).allSatisfy { Self.parseSize($0) != nil }
+            let values = size.values ?? []
+            var allValid = !values.isEmpty
+            // Keep the fixed-size validation explicit: Swift 6.4 whole-module
+            // optimization miscompiles the equivalent throwing-function path
+            // using allSatisfy + parseSize's optional tuple, corrupting ownership.
+            for value in values {
+                if Self.parseSize(value) == nil { allValid = false; break }
+            }
+            validSize = allValid
         case "range":
             validSize = size.width.map(validDimension) == true
                 && size.height.map(validDimension) == true
