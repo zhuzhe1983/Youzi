@@ -1,0 +1,577 @@
+{
+  "schema_version": 1,
+  "status": "historical-unintegrated-prototype",
+  "origin": {
+    "historical_worktree": "Youzi-complete",
+    "historical_branch": "atlas/youzi-local-delivery",
+    "historical_head": "6ec648e6a1991390ecb5d8338397b62d0feaa899",
+    "original_directory": ".wip-stash",
+    "immutable_snapshot": "Youzi-20260930-010706/unfinished-snapshots/Youzi-complete",
+    "snapshot_date": "2026-09-30",
+    "historical_run_date": "2026-09-02",
+    "integration_base": "37d33bfe01bba249949b3fcf178b7b576046844a"
+  },
+  "file_count": 66,
+  "total_bytes": 1173954,
+  "security_review": {
+    "actual_credentials_found": false,
+    "private_service_endpoints_found": false,
+    "machine_specific_secrets_found": false,
+    "sanitized_files": 0,
+    "reviewed_false_positives": [
+      "Synthetic credential-redaction test sentinels and generated keychain references",
+      "Negative private-path fixtures using placeholder identities",
+      "Reserved example domains used by non-fetching URL fixtures",
+      "Reverse-DNS artifact format identifier",
+      "macOS /private/tmp platform behavior comment"
+    ],
+    "scan_categories": [
+      "private-key headers",
+      "known token prefixes",
+      "credential assignments",
+      "URL literals",
+      "private IPv4 literals",
+      "home and machine paths",
+      "email addresses",
+      "JWT-shaped literals"
+    ]
+  },
+  "verification": {
+    "all_files_match_snapshot_manifest": true,
+    "all_paths_relative": true,
+    "symlinks": 0,
+    "swift_syntax_files": 57,
+    "swift_syntax_passed": true,
+    "native_build_or_test_claim": false
+  },
+  "files": [
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/Chat/AssistantTurnRunner.swift",
+      "bytes": 34131,
+      "original_sha256": "4b3a9ffc40c198c93e10864e45cce3da8498470cb9ed9c0d1671be34c3fc2bc2",
+      "archived_sha256": "4b3a9ffc40c198c93e10864e45cce3da8498470cb9ed9c0d1671be34c3fc2bc2",
+      "preservation": "exact",
+      "intended_change": "Canonical foreground/background turn runner with independent handles, scoped tool authorization, typed events/artifacts, and exact cancellation."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/Resources/YouziSkills/data-insight/SKILL.md",
+      "bytes": 307,
+      "original_sha256": "dccf6e102c3f203c814b32fd531f6bae182e56041a10f7bd9d03a10731f652b7",
+      "archived_sha256": "dccf6e102c3f203c814b32fd531f6bae182e56041a10f7bd9d03a10731f652b7",
+      "preservation": "exact",
+      "intended_change": "Bundled data-insight declarative skill instructions consumed by the scratch catalog/package loader."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/Resources/YouziSkills/decision-support/SKILL.md",
+      "bytes": 328,
+      "original_sha256": "2425537c35c4a975ed8ec04b4d230e857b5cdceb6aabba2341ceff279167b68e",
+      "archived_sha256": "2425537c35c4a975ed8ec04b4d230e857b5cdceb6aabba2341ceff279167b68e",
+      "preservation": "exact",
+      "intended_change": "Bundled decision-support declarative skill instructions consumed by the scratch catalog/package loader."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/Resources/YouziSkills/document-organizer/SKILL.md",
+      "bytes": 328,
+      "original_sha256": "75860f3fca3c5303a688d1fc4ff77cf70a5e3999790c921f6b5c5d47b238c6f0",
+      "archived_sha256": "75860f3fca3c5303a688d1fc4ff77cf70a5e3999790c921f6b5c5d47b238c6f0",
+      "preservation": "exact",
+      "intended_change": "Bundled document-organizer declarative skill instructions consumed by the scratch catalog/package loader."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/Resources/YouziSkills/family-coordinator/SKILL.md",
+      "bytes": 307,
+      "original_sha256": "7dbd3f5df0ad2f74b4c29590c1dd542a2513fbaf4653c55de7e12e4b8c6d8ad4",
+      "archived_sha256": "7dbd3f5df0ad2f74b4c29590c1dd542a2513fbaf4653c55de7e12e4b8c6d8ad4",
+      "preservation": "exact",
+      "intended_change": "Bundled family-coordinator declarative skill instructions consumed by the scratch catalog/package loader."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/Resources/YouziSkills/grounded-research/SKILL.md",
+      "bytes": 331,
+      "original_sha256": "90ede6846405b8b1ab963cebd19bb2120e71581e0c053d76a5e003156a13c85b",
+      "archived_sha256": "90ede6846405b8b1ab963cebd19bb2120e71581e0c053d76a5e003156a13c85b",
+      "preservation": "exact",
+      "intended_change": "Bundled grounded-research declarative skill instructions consumed by the scratch catalog/package loader."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/Resources/YouziSkills/project-pilot/SKILL.md",
+      "bytes": 331,
+      "original_sha256": "bddea86ec067a85bf7ccefec9e540345f4228f48035bafc71bd62ccbbfcac4aa",
+      "archived_sha256": "bddea86ec067a85bf7ccefec9e540345f4228f48035bafc71bd62ccbbfcac4aa",
+      "preservation": "exact",
+      "intended_change": "Bundled project-pilot declarative skill instructions consumed by the scratch catalog/package loader."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/Resources/YouziSkills/thoughtful-writing/SKILL.md",
+      "bytes": 322,
+      "original_sha256": "11da1b08e664baef6459db87edbcbbe154f743c886bb12c35a40c0994ab9cb5d",
+      "archived_sha256": "11da1b08e664baef6459db87edbcbbe154f743c886bb12c35a40c0994ab9cb5d",
+      "preservation": "exact",
+      "intended_change": "Bundled thoughtful-writing declarative skill instructions consumed by the scratch catalog/package loader."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/Resources/YouziSkills/weekly-planner/SKILL.md",
+      "bytes": 331,
+      "original_sha256": "70ae2fce27d6900b865cdb97d1010d09744bcbf26a43091e74cfecb968fc71f1",
+      "archived_sha256": "70ae2fce27d6900b865cdb97d1010d09744bcbf26a43091e74cfecb968fc71f1",
+      "preservation": "exact",
+      "intended_change": "Bundled weekly-planner declarative skill instructions consumed by the scratch catalog/package loader."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/Resources/youzi-capabilities-v1.json",
+      "bytes": 8850,
+      "original_sha256": "5d5b2f3a0f14978bf389e571772843c0ee24c55532d7a5062abbc74e74bdc31c",
+      "archived_sha256": "5d5b2f3a0f14978bf389e571772843c0ee24c55532d7a5062abbc74e74bdc31c",
+      "preservation": "exact",
+      "intended_change": "Versioned declarative catalog of 8 skills and 8 helpers, fixed IDs, permission declarations and package paths."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/UI/YouziSimple/YouziMemoryGraphLayout.swift",
+      "bytes": 3232,
+      "original_sha256": "f73058bcf17ec233fc2b9489156b44c3b0be077a84796fdb975751309541e85f",
+      "archived_sha256": "f73058bcf17ec233fc2b9489156b44c3b0be077a84796fdb975751309541e85f",
+      "preservation": "exact",
+      "intended_change": "Deterministic normalized graph layout and depth projection for the Know Me workbench."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/UI/YouziSimple/YouziMemoryWorkbenchModel.swift",
+      "bytes": 10523,
+      "original_sha256": "b8e7d0bdbdf0479bfc75dffa7f254cda4a62ba7fc77b335f45ae116481ca9d9a",
+      "archived_sha256": "b8e7d0bdbdf0479bfc75dffa7f254cda4a62ba7fc77b335f45ae116481ca9d9a",
+      "preservation": "exact",
+      "intended_change": "Injected memory-service view model for bounded graph snapshots, search/filter, citations, classification, import and forgetting."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/UI/YouziSimple/YouziMemoryWorkbenchView.swift",
+      "bytes": 40402,
+      "original_sha256": "006a637bb85a94d4ef83c8cb1508b5f561f9f8e9555e2c39e939734d77294be5",
+      "archived_sha256": "006a637bb85a94d4ef83c8cb1508b5f561f9f8e9555e2c39e939734d77294be5",
+      "preservation": "exact",
+      "intended_change": "Adaptive Graph-C memory UI, graph/list/inspector, import/privacy surfaces and destructive confirmation."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/UI/YouziSimple/YouziSimpleAutomationPage.swift",
+      "bytes": 50159,
+      "original_sha256": "bc88b5001af84ec690a12c6bb29cc55dc968516eeb17ecc2022eb54991862d67",
+      "archived_sha256": "bc88b5001af84ec690a12c6bb29cc55dc968516eeb17ecc2022eb54991862d67",
+      "preservation": "exact",
+      "intended_change": "Simple automation list/editor with trigger, scope, approval, retry and run-history surfaces."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/UI/YouziSimple/YouziSimpleCapabilityCenter.swift",
+      "bytes": 33463,
+      "original_sha256": "561e52b7eb034b8a41a3bb82aec2a6caf81c723ecfe76d2fcf34d84bae83886e",
+      "archived_sha256": "561e52b7eb034b8a41a3bb82aec2a6caf81c723ecfe76d2fcf34d84bae83886e",
+      "preservation": "exact",
+      "intended_change": "Three-tab helper, skill and connected-application management UI; replaces current YouziSimpleHelpersPage and needs reconciliation."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/UI/YouziVoice/YouziVoiceOrbOverlay.swift",
+      "bytes": 8220,
+      "original_sha256": "b572fc9450d38adfe4a55021b5a797402d851b9a6a1ef632daea87c8f4203908",
+      "archived_sha256": "b572fc9450d38adfe4a55021b5a797402d851b9a6a1ef632daea87c8f4203908",
+      "preservation": "exact",
+      "intended_change": "Immersive global/helper voice orb driven by shared presentation state."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziAutomation/YouziAutomationCenter.swift",
+      "bytes": 23287,
+      "original_sha256": "be7fdd9fc41195b5971f7eee69abfa128ec80aa9cfb6efc1bba4f4797c38a381",
+      "archived_sha256": "be7fdd9fc41195b5971f7eee69abfa128ec80aa9cfb6efc1bba4f4797c38a381",
+      "preservation": "exact",
+      "intended_change": "App-owned observable automation composition and lifecycle commands with permission confirmation and notification policy."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziAutomation/YouziAutomationNotification.swift",
+      "bytes": 6449,
+      "original_sha256": "51af7d9935daa3b200328f39abaab04b8bc595c6412e85900b766147d3650c68",
+      "archived_sha256": "51af7d9935daa3b200328f39abaab04b8bc595c6412e85900b766147d3650c68",
+      "preservation": "exact",
+      "intended_change": "Bounded/redacted automation notification delivery with injected system-notification adapters."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziAutomation/YouziAutomationSchedule.swift",
+      "bytes": 14300,
+      "original_sha256": "575266edcda46dda5e3d5e2f49df05ffa10206487e8f778fe10902ad8c1ccb04",
+      "archived_sha256": "575266edcda46dda5e3d5e2f49df05ffa10206487e8f778fe10902ad8c1ccb04",
+      "preservation": "exact",
+      "intended_change": "Deterministic validated cron/manual/interval scheduling and time-zone handling."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziAutomation/YouziAutomationScheduler.swift",
+      "bytes": 45670,
+      "original_sha256": "8d0ba2a236ff3411cf06b8da9d1763f05f8cc8fc7a6cdcc1ac39840ccc7b235c",
+      "archived_sha256": "8d0ba2a236ff3411cf06b8da9d1763f05f8cc8fc7a6cdcc1ac39840ccc7b235c",
+      "preservation": "exact",
+      "intended_change": "App-resident due-run reconciliation, overlap/retry/orphan handling, exact authority checks and canonical execution requests."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziCapabilities/YouziBundledCapabilityCatalog.swift",
+      "bytes": 13816,
+      "original_sha256": "653d0d8509732121de4d9e3aa67c10a43d3dfbb51dc7ffaf4173030829772870",
+      "archived_sha256": "653d0d8509732121de4d9e3aa67c10a43d3dfbb51dc7ffaf4173030829772870",
+      "preservation": "exact",
+      "intended_change": "Validated resource-backed helper/skill catalog and content-addressed declarative packages."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziCapabilities/YouziCapabilityBootstrapper.swift",
+      "bytes": 1008,
+      "original_sha256": "c78dc2d4dbf7da0945a36819f418ac6ad8a862e5869089a31adfd312464cd7d5",
+      "archived_sha256": "c78dc2d4dbf7da0945a36819f418ac6ad8a862e5869089a31adfd312464cd7d5",
+      "preservation": "exact",
+      "intended_change": "Idempotent capability catalog seeding through the repository owner."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziCapabilities/YouziConnectorCapabilityFacade.swift",
+      "bytes": 30453,
+      "original_sha256": "2d9e0429f2f0918dd7a24889dae57af07e50d660083144fa158e9adef49bcfe3",
+      "archived_sha256": "2d9e0429f2f0918dd7a24889dae57af07e50d660083144fa158e9adef49bcfe3",
+      "preservation": "exact",
+      "intended_change": "Projects durable connected-account metadata against live MCP registry status and tool identity."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziCapabilities/YouziConnectorCredentialVault.swift",
+      "bytes": 3312,
+      "original_sha256": "75bf777f52b95c9c58c6831ce687a0ed3def2c40d6b5963b6b595c7d366f64fa",
+      "archived_sha256": "75bf777f52b95c9c58c6831ce687a0ed3def2c40d6b5963b6b595c7d366f64fa",
+      "preservation": "exact",
+      "intended_change": "Keychain credential adapter and reference-based credential lifecycle."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziCapabilities/YouziMCPConnectedApplicationController.swift",
+      "bytes": 37762,
+      "original_sha256": "3060f50a84d8bd9c08e077e7c31e1445781b93b62f23ff4033c771932435429c",
+      "archived_sha256": "3060f50a84d8bd9c08e077e7c31e1445781b93b62f23ff4033c771932435429c",
+      "preservation": "exact",
+      "intended_change": "Plans/reconciles durable account bindings against one live MCP owner, including enable/disconnect/forget recovery."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziCapabilities/YouziSkillPackageService.swift",
+      "bytes": 18841,
+      "original_sha256": "017b34a6bfde92d81b576c5ef7618833a73ae60d4d8fc693bd1df638e6aec7ce",
+      "archived_sha256": "017b34a6bfde92d81b576c5ef7618833a73ae60d4d8fc693bd1df638e6aec7ce",
+      "preservation": "exact",
+      "intended_change": "Bounded safe local declarative skill package import, content digests, manifests and security-scope boundary."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziCapabilities/YouziTaskCapabilityResolver.swift",
+      "bytes": 29184,
+      "original_sha256": "30e82f135ab9e01780c58ed9341971e7bf4f557ff349609791292c954a4df55b",
+      "archived_sha256": "30e82f135ab9e01780c58ed9341971e7bf4f557ff349609791292c954a4df55b",
+      "preservation": "exact",
+      "intended_change": "Resolves exact task/helper/project/skill/account selections to a deterministic tool/instruction context."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziDomain/YouziAutomationRepository.swift",
+      "bytes": 18000,
+      "original_sha256": "a6c0cc3d1502221dbd3dff590effba7316394bc543f16572158fe06a8abb36d2",
+      "archived_sha256": "a6c0cc3d1502221dbd3dff590effba7316394bc543f16572158fe06a8abb36d2",
+      "preservation": "exact",
+      "intended_change": "Transactional automation definitions, revision authority, run history and settlement."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziDomain/YouziCapabilityRepository.swift",
+      "bytes": 31892,
+      "original_sha256": "1e8545affe1bcad5403e9207c5ccbde6ed5f2875d57d83cbf896ddfc57e0b2a0",
+      "archived_sha256": "1e8545affe1bcad5403e9207c5ccbde6ed5f2875d57d83cbf896ddfc57e0b2a0",
+      "preservation": "exact",
+      "intended_change": "Transactional helper/skill/package/connector/account lifecycle with identity and CAS checks."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziDomain/YouziPermissionRepository.swift",
+      "bytes": 34632,
+      "original_sha256": "2edcd046f1e639237978d89ab20bd2ebc22dffc1ed2d0fceaff505bd717158d5",
+      "archived_sha256": "2edcd046f1e639237978d89ab20bd2ebc22dffc1ed2d0fceaff505bd717158d5",
+      "preservation": "exact",
+      "intended_change": "Atomic scoped requests and grants, decision history, once-grant consumption, revocation and revision invalidation."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziExecution/YouziCanonicalTaskPreparationService.swift",
+      "bytes": 7233,
+      "original_sha256": "3bc1f3c20b8b22357dedffbf09bde639e92a34dfbebbcf675beca422e8c412c3",
+      "archived_sha256": "3bc1f3c20b8b22357dedffbf09bde639e92a34dfbebbcf675beca422e8c412c3",
+      "preservation": "exact",
+      "intended_change": "Prepares canonical task input using capability resolution and exact permission planning."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziExecution/YouziProductionTaskExecutionCoordinator.swift",
+      "bytes": 15846,
+      "original_sha256": "5e49af4b4613cbdcf8805492b1e4c3e30d7beabfbdac0a4278f3cb8a3e531c1f",
+      "archived_sha256": "5e49af4b4613cbdcf8805492b1e4c3e30d7beabfbdac0a4278f3cb8a3e531c1f",
+      "preservation": "exact",
+      "intended_change": "Shared-runner production coordinator for foreground/background task execution, reservations and artifact settlement."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziExecution/YouziScopedChatTurnContext.swift",
+      "bytes": 4167,
+      "original_sha256": "a3eaff836b65f7149d6e6bfcfdea6b8c11d1aee5dc38ee6cfeef9db78a334dd5",
+      "archived_sha256": "a3eaff836b65f7149d6e6bfcfdea6b8c11d1aee5dc38ee6cfeef9db78a334dd5",
+      "preservation": "exact",
+      "intended_change": "Immutable scoped per-turn instruction/tool allow-list plus per-dispatch fail-closed authorization boundary."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziExecution/YouziTaskArtifactSink.swift",
+      "bytes": 18606,
+      "original_sha256": "b99c9021985c7f0d9e4c7e727061f0d934cf9f51f1b5722d32dcce6ef85bf79c",
+      "archived_sha256": "b99c9021985c7f0d9e4c7e727061f0d934cf9f51f1b5722d32dcce6ef85bf79c",
+      "preservation": "exact",
+      "intended_change": "Typed local artifact persistence with ownership checks, bounded metadata and replay-safe stable keys."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziExecution/YouziTaskExecutionCoordinator.swift",
+      "bytes": 17636,
+      "original_sha256": "5ca357176d54b9e2f4ae309b50ee2b3ea1de73979ffbc606dae00f3fa968ee56",
+      "archived_sha256": "5ca357176d54b9e2f4ae309b50ee2b3ea1de73979ffbc606dae00f3fa968ee56",
+      "preservation": "exact",
+      "intended_change": "Execution planning and fresh per-dispatch permission authorizer over exact capability snapshots."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziMemory/YouziMemoryMCPService.swift",
+      "bytes": 8047,
+      "original_sha256": "1e883cdb23712efb2ece73591a5703c8ccc573240e85aa32c49df168d381c648",
+      "archived_sha256": "1e883cdb23712efb2ece73591a5703c8ccc573240e85aa32c49df168d381c648",
+      "preservation": "exact",
+      "intended_change": "In-process memory facade and background ingestion boundary over one SQLite repository."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziMemory/YouziMemoryRecords.swift",
+      "bytes": 15679,
+      "original_sha256": "d98921e1ed1ea68a8aec2bc8df2e7d386a5777938e057e70e36883666b24916c",
+      "archived_sha256": "d98921e1ed1ea68a8aec2bc8df2e7d386a5777938e057e70e36883666b24916c",
+      "preservation": "exact",
+      "intended_change": "Memory source/citation/graph/category/access/ingestion records, scope/authorization vocabulary and idle queue APIs."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziMemory/YouziMemorySQLite.swift",
+      "bytes": 115307,
+      "original_sha256": "423a93f83455d3710751cb69af32220ffeb2b98dc8354be07de88ae8d6ee22be",
+      "archived_sha256": "423a93f83455d3710751cb69af32220ffeb2b98dc8354be07de88ae8d6ee22be",
+      "preservation": "exact",
+      "intended_change": "Authoritative local SQLite schema/migrations, FTS5 trigram search, evidence, CAS, merge/forget and durable ingestion queue."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziPermissions/YouziExecutionPermissionEvaluator.swift",
+      "bytes": 16947,
+      "original_sha256": "c51b0cf473462b697ebab9fa121f253c0dacd82f238e4d15b78e037c077f4376",
+      "archived_sha256": "c51b0cf473462b697ebab9fa121f253c0dacd82f238e4d15b78e037c077f4376",
+      "preservation": "exact",
+      "intended_change": "Pure exact task/automation/account authorization intersected with runtime advertisement and low-level approval."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziVoice/YouziVoiceIO.swift",
+      "bytes": 4055,
+      "original_sha256": "dcf3f949bb10898ed89fca3227fbdb4ed59f0f31e3e5cf707cbb070d7babd320",
+      "archived_sha256": "dcf3f949bb10898ed89fca3227fbdb4ed59f0f31e3e5cf707cbb070d7babd320",
+      "preservation": "exact",
+      "intended_change": "Microphone permission, capture and playback adapter seams around existing local audio primitives."
+    },
+    {
+      "path": "apps/rapid-mac/Sources/Rapid/YouziVoice/YouziVoiceSessionDomain.swift",
+      "bytes": 13931,
+      "original_sha256": "2627d1ba6631ad7fe72ca8fddaee555a0e6d1f613050a79fde22dc9800884589",
+      "archived_sha256": "2627d1ba6631ad7fe72ca8fddaee555a0e6d1f613050a79fde22dc9800884589",
+      "preservation": "exact",
+      "intended_change": "Voice scopes, handoff/privacy policy, local profile, VAD state and orb/integration event vocabulary."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/AssistantTurnRunnerTests.swift",
+      "bytes": 10603,
+      "original_sha256": "05df24184108ceaddd48d24f688b8463bbc37f044f586f8c92dc0090c768d412",
+      "archived_sha256": "05df24184108ceaddd48d24f688b8463bbc37f044f586f8c92dc0090c768d412",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: independent handles complete and cancel without cross-turn cancellation; typed events and outcome carry one canonical transcript; background upsert preserves user-managed metadata and notifies observer."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziAutomationCenterTests.swift",
+      "bytes": 11213,
+      "original_sha256": "debbf3b073f01261057975d3ae780b7af0967c80fe536d3a88f8b3be375675a6",
+      "archived_sha256": "debbf3b073f01261057975d3ae780b7af0967c80fe536d3a88f8b3be375675a6",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Retry policy accepts four attempts and rejects five before persistence; Confirmation issues exact persistent authority and denial preserves a safe draft; Pure permission expansion advances authority revision once and revokes no-scope authority."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziAutomationNotificationTests.swift",
+      "bytes": 7392,
+      "original_sha256": "fc22dd457bec841c943da0b079ddf467c47e4c1dda4a758707868e998f35df59",
+      "archived_sha256": "fc22dd457bec841c943da0b079ddf467c47e4c1dda4a758707868e998f35df59",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: A non-app process keeps system notifications unavailable without crashing; Display content is whitespace-normalized, bounded, and requires all fields; Delivery never prompts and fails closed before authorization."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziAutomationRepositoryTests.swift",
+      "bytes": 14506,
+      "original_sha256": "64f64c38667afa239447062036239b848b3c7f14e63f143cbea9d2b84541bbb1",
+      "archived_sha256": "64f64c38667afa239447062036239b848b3c7f14e63f143cbea9d2b84541bbb1",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Create is fail-closed; confirm then scheduled claim is idempotent; Confirm requires exact complete current-revision permission coverage; Run settlement uses status CAS, bounded retry, and exact terminal state."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziAutomationScheduleTests.swift",
+      "bytes": 5997,
+      "original_sha256": "575fa47f457e2e641d9e8122ea4d55acda4e0c8faf9bd668fbe849e1de563aba",
+      "archived_sha256": "575fa47f457e2e641d9e8122ea4d55acda4e0c8faf9bd668fbe849e1de563aba",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Five-field expressions normalize whitespace and match lists, ranges, steps, and names; Sunday accepts both zero and seven; Restricted month-day and weekday use portable cron OR semantics."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziAutomationSchedulerTests.swift",
+      "bytes": 43712,
+      "original_sha256": "3e87d38ceb4dd1eb5d001977f31aef99ed716338ab618e720a36841c6eabbf87",
+      "archived_sha256": "3e87d38ceb4dd1eb5d001977f31aef99ed716338ab618e720a36841c6eabbf87",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Startup runs one missed anchored interval and restart cannot duplicate it; Missed skip records the occurrence without invoking shared execution; Cron reconciliation preserves time zone and DST gap semantics."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziBundledCapabilityCatalogTests.swift",
+      "bytes": 9375,
+      "original_sha256": "6d73562570c02693eba24b3da7e5dbbc3b036e9ad6aeac1b000cd385d774cfea",
+      "archived_sha256": "6d73562570c02693eba24b3da7e5dbbc3b036e9ad6aeac1b000cd385d774cfea",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Product catalog loads every curated helper and declarative skill; Stable product identities do not depend on display names; Every helper recommendation resolves to a catalog skill."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziCanonicalTaskPreparationServiceTests.swift",
+      "bytes": 8398,
+      "original_sha256": "e9e15a19bfbf7ef8646fc62b4b47305611c96181aa9cdb56cee3e35b15e5cc68",
+      "archived_sha256": "e9e15a19bfbf7ef8646fc62b4b47305611c96181aa9cdb56cee3e35b15e5cc68",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Automation retry reuses the task persisted on its exact run; Automation retry rejects a persisted task whose conversation identity drifted; Changed revision, action, or grant snapshot cannot reuse a scheduled task."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziCapabilityBootstrapperTests.swift",
+      "bytes": 3374,
+      "original_sha256": "253b30d53c55aa900863c8cdd7d155e88b26065ff26d950a191690de864d3f63",
+      "archived_sha256": "253b30d53c55aa900863c8cdd7d155e88b26065ff26d950a191690de864d3f63",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Bootstrap installs the complete verified built-in catalog atomically; An invalid package leaves existing durable state byte-for-byte unchanged; Repeated bootstrap does not duplicate catalog identities."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziCapabilityRepositoryTests.swift",
+      "bytes": 19224,
+      "original_sha256": "445f6f61332c4df4d1df66442e8f401534fe8be2dfa4fdb827b0facb628a9732",
+      "archived_sha256": "445f6f61332c4df4d1df66442e8f401534fe8be2dfa4fdb827b0facb628a9732",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Catalog seeds skills and packages atomically with exact parity; Binding CAS and credential cleanup are fail-closed and atomic; Connector binding revision invalidates grants and automation authority."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziConnectorCapabilityFacadeTests.swift",
+      "bytes": 22091,
+      "original_sha256": "b0e27af91c87a7ee666f9aac022da423b1d64377bc3f3d0e778ca6a6c68e6e48",
+      "archived_sha256": "b0e27af91c87a7ee666f9aac022da423b1d64377bc3f3d0e778ca6a6c68e6e48",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: A connector without an account remains an honest definition; Configured and authorized are distinct from a live connection; A connected server projects only exact declared and enabled tool candidates."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziConnectorCredentialVaultTests.swift",
+      "bytes": 5717,
+      "original_sha256": "b3ddd903c1f7a3202756a93282c3f4ab615e7c104b295928d93995530ebcff16",
+      "archived_sha256": "b3ddd903c1f7a3202756a93282c3f4ab615e7c104b295928d93995530ebcff16",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Secret is stored under a deterministic non-secret account reference; References round-trip only in canonical lowercase form; Cross-account reads fail closed without probing Keychain."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziExecutionPermissionEvaluatorTests.swift",
+      "bytes": 24898,
+      "original_sha256": "0136990fcc5c23e868104a738793b3646f755ad306baf29cdaf1577ec7aca13f",
+      "archived_sha256": "0136990fcc5c23e868104a738793b3646f755ad306baf29cdaf1577ec7aca13f",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Interactive task authority is exact and once consumption is only an intent; Permission decisions are history and never authority without a grant; Task grants do not cross tasks, automations, or unscoped app records."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziMCPConnectedApplicationControllerTests.swift",
+      "bytes": 35410,
+      "original_sha256": "676ba3f354ad4d54eaf6c9eba5fa3a6116d1e60a9bbc637c6356db943979a676",
+      "archived_sha256": "676ba3f354ad4d54eaf6c9eba5fa3a6116d1e60a9bbc637c6356db943979a676",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: New live server creates one stable application and repeated inspection is idempotent; Disabled operational state creates an honestly disabled account; Missing stale binding remains needs-attention and never guesses a similar rename."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziMemoryRepositoryTests.swift",
+      "bytes": 28749,
+      "original_sha256": "16c12d4bb8cc2d6c8cc0aa29c598ff8c1ffe88d641ecb1c3a94ffd13f944b2d6",
+      "archived_sha256": "16c12d4bb8cc2d6c8cc0aa29c598ff8c1ffe88d641ecb1c3a94ffd13f944b2d6",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Fresh schema is private, current, and upgrades a real v1 layout; Unsupported future schema and missing evidence fail closed without raw errors; FTS returns confirmed cited memory and source revoke removes search and excerpt."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziMemoryWorkbenchTests.swift",
+      "bytes": 11722,
+      "original_sha256": "c70864e1cea448fab412d42855b3b16b4496b1b2da4fa85a5c455ad8e86875f2",
+      "archived_sha256": "c70864e1cea448fab412d42855b3b16b4496b1b2da4fa85a5c455ad8e86875f2",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Graph layout is deterministic, order-independent, finite, and depth-aware; Workbench reads one repository truth and supports filter, evidence, classification, and forget; Snapshot reports truncation and node classification is revision guarded."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziPermissionRepositoryTests.swift",
+      "bytes": 39919,
+      "original_sha256": "d426ac5ac75157ab0b63a44b5643e768a9555144eb0d2b7c52172a56f01f58b7",
+      "archived_sha256": "d426ac5ac75157ab0b63a44b5643e768a9555144eb0d2b7c52172a56f01f58b7",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Allowed once request issues exactly one grant and consumes exactly once; Task batch reuses exact pending requests and preserves decided history; Invalid task request batch rolls back records and backlinks."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziProductModelCapabilityTests.swift",
+      "bytes": 3222,
+      "original_sha256": "863a1b936e2f1de5b38821fa911270066c484840bef105fbacfe354c45170f33",
+      "archived_sha256": "863a1b936e2f1de5b38821fa911270066c484840bef105fbacfe354c45170f33",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: The app-owned model seeds and exposes the verified product catalog; Favorite helper state updates the one durable graph; A damaged bundled package reports failure without replacing product data."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziProductionTaskExecutionCoordinatorTests.swift",
+      "bytes": 15873,
+      "original_sha256": "905cbeae33d5992a765e740adb462b5ee5bc66072c0c0953be65745aef70c155",
+      "archived_sha256": "905cbeae33d5992a765e740adb462b5ee5bc66072c0c0953be65745aef70c155",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Missing alias and active-conversation conflicts create no transcript or request; Cancellation targets only the exact task and origin handle; Background completion uses the shared runner and preserves sidebar metadata."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziScopedChatTurnTests.swift",
+      "bytes": 18154,
+      "original_sha256": "9822fb41d56ff4b56866f46a149a37e57a766d26864450ab84db93974487c5e2",
+      "archived_sha256": "9822fb41d56ff4b56866f46a149a37e57a766d26864450ab84db93974487c5e2",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Legacy send retains the complete enabled registry and needs no domain authorizer; Exact scoped definitions and instructions stay frozen on every tool-loop round; Explicit empty scoped advertisement sends and runs no tools."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziSkillPackageServiceTests.swift",
+      "bytes": 20991,
+      "original_sha256": "aa82bc1b85e759bfdae7e850720a4cb01e2cfa7472bf9b54e521573b51745684",
+      "archived_sha256": "aa82bc1b85e759bfdae7e850720a4cb01e2cfa7472bf9b54e521573b51745684",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Default entrypoint and declared resources load as deterministic UTF-8 values; An explicit nested alternate entrypoint is supported; Security-scoped root access is balanced on success and failure."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziTaskArtifactSinkTests.swift",
+      "bytes": 13193,
+      "original_sha256": "6d5ddede9efd718c2df44084acae5fd4b0d73207a5dea885dc364c8dd4bf58a3",
+      "archived_sha256": "6d5ddede9efd718c2df44084acae5fd4b0d73207a5dea885dc364c8dd4bf58a3",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Explicit local files persist once and replay by stable identity; Metadata is bounded JSON and remote content is never fetched; Grounding sources remain citations and never become Results records."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziTaskCapabilityResolverTests.swift",
+      "bytes": 37541,
+      "original_sha256": "e76f97dfbe587982f0b534cbc277cf5e4b900881d7a08803c8dcd0e3570c0ac9",
+      "archived_sha256": "e76f97dfbe587982f0b534cbc277cf5e4b900881d7a08803c8dcd0e3570c0ac9",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Helper guidance has explicit precedence and every prompt field is normalized; Persisted empty-selection intent controls project inheritance; Non-empty task selections override project defaults regardless of empty policy."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziTaskExecutionCoordinatorTests.swift",
+      "bytes": 22577,
+      "original_sha256": "560264b962fc11b543dfeb96ee0d539783334e8006ef84bb73dbfeec0f2a9257",
+      "archived_sha256": "560264b962fc11b543dfeb96ee0d539783334e8006ef84bb73dbfeec0f2a9257",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Built-ins receive exact immutable network requirements; Selected skill workspace permissions are included in one preflight plan; One live selected MCP account produces an exact revision-bound read requirement."
+    },
+    {
+      "path": "apps/rapid-mac/Tests/RapidTests/YouziVoiceOrbOverlayTests.swift",
+      "bytes": 2478,
+      "original_sha256": "dc58e430742d058d64ee611dc7c173e622c85f5354febb3750acde9f897fae81",
+      "archived_sha256": "dc58e430742d058d64ee611dc7c173e622c85f5354febb3750acde9f897fae81",
+      "preservation": "exact",
+      "intended_change": "Regression coverage: Every runtime motion maps to one bounded visual state; Global and assistant scopes use the same orb language without identity chrome; The global overlay renders no visible product copy or control labels."
+    }
+  ]
+}

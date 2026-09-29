@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 1,
+  "catalogVersion": "1.0.0",
+  "skills": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "slug": "document-organizer",
+      "name": "文档整理",
+      "summary": "从长文档中提炼结论、依据、行动项和待确认问题。",
+      "packageVersion": "1.0.0",
+      "entrypoint": "SKILL.md",
+      "resourcePaths": [],
+      "executionLocation": "local",
+      "requestedPermissions": ["workspaceRead"],
+      "requiresFirstUseConfirmation": true
+    },
+    {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "slug": "weekly-planner",
+      "name": "周计划",
+      "summary": "把目标、约束和待办排成留有余量的现实计划。",
+      "packageVersion": "1.0.0",
+      "entrypoint": "SKILL.md",
+      "resourcePaths": [],
+      "executionLocation": "local",
+      "requestedPermissions": [],
+      "requiresFirstUseConfirmation": false
+    },
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "slug": "thoughtful-writing",
+      "name": "用心写作",
+      "summary": "根据对象、关系和目标写出自然、得体、有温度的文字。",
+      "packageVersion": "1.0.0",
+      "entrypoint": "SKILL.md",
+      "resourcePaths": [],
+      "executionLocation": "local",
+      "requestedPermissions": [],
+      "requiresFirstUseConfirmation": false
+    },
+    {
+      "id": "44444444-4444-4444-8444-444444444444",
+      "slug": "grounded-research",
+      "name": "可靠研究",
+      "summary": "先区分已知与未知，再用可追溯来源形成研究结论。",
+      "packageVersion": "1.0.0",
+      "entrypoint": "SKILL.md",
+      "resourcePaths": [],
+      "executionLocation": "network",
+      "requestedPermissions": ["networkAccess"],
+      "requiresFirstUseConfirmation": true
+    },
+    {
+      "id": "55555555-5555-4555-8555-555555555555",
+      "slug": "decision-support",
+      "name": "决策梳理",
+      "summary": "把选择、约束、风险和取舍整理成可解释的建议。",
+      "packageVersion": "1.0.0",
+      "entrypoint": "SKILL.md",
+      "resourcePaths": [],
+      "executionLocation": "local",
+      "requestedPermissions": [],
+      "requiresFirstUseConfirmation": false
+    },
+    {
+      "id": "66666666-6666-4666-8666-666666666666",
+      "slug": "data-insight",
+      "name": "数据洞察",
+      "summary": "从表格和结构化资料中发现趋势、异常与可行动结论。",
+      "packageVersion": "1.0.0",
+      "entrypoint": "SKILL.md",
+      "resourcePaths": [],
+      "executionLocation": "local",
+      "requestedPermissions": ["workspaceRead"],
+      "requiresFirstUseConfirmation": true
+    },
+    {
+      "id": "77777777-7777-4777-8777-777777777777",
+      "slug": "family-coordinator",
+      "name": "家庭协同",
+      "summary": "把家庭安排、偏好和约束整理成清楚温和的共同计划。",
+      "packageVersion": "1.0.0",
+      "entrypoint": "SKILL.md",
+      "resourcePaths": [],
+      "executionLocation": "local",
+      "requestedPermissions": ["workspaceRead"],
+      "requiresFirstUseConfirmation": true
+    },
+    {
+      "id": "88888888-8888-4888-8888-888888888888",
+      "slug": "project-pilot",
+      "name": "项目推进",
+      "summary": "把目标拆成里程碑、行动、风险和下一步，并持续复盘。",
+      "packageVersion": "1.0.0",
+      "entrypoint": "SKILL.md",
+      "resourcePaths": [],
+      "executionLocation": "local",
+      "requestedPermissions": ["workspaceRead", "workspaceWrite"],
+      "requiresFirstUseConfirmation": true
+    }
+  ],
+  "helpers": [
+    {
+      "id": "A1111111-1111-4111-8111-111111111111",
+      "slug": "daily-planner",
+      "name": "日常规划师",
+      "summary": "把繁杂的事情变成今天就能开始的清晰安排。",
+      "systemInstructions": "先理解用户真正想完成的结果，再确认时间、精力和不可妥协的约束。给出留有余量、能执行的安排，不制造焦虑。",
+      "methodology": ["确认结果与约束", "区分必须、应该和可以", "安排缓冲并给出第一步"],
+      "recommendedSkillIDs": ["22222222-2222-4222-8222-222222222222", "55555555-5555-4555-8555-555555555555"],
+      "preferredOutputTypes": ["plan", "checklist"]
+    },
+    {
+      "id": "A2222222-2222-4222-8222-222222222222",
+      "slug": "document-companion",
+      "name": "文档整理师",
+      "summary": "读懂资料并把重要内容整理成可靠、可追溯的成果。",
+      "systemInstructions": "以用户提供的资料为事实边界，明确区分原文、概括和推断。保留关键依据，避免遗漏限制条件。",
+      "methodology": ["识别文档目标和结构", "提炼结论与依据", "输出行动项和待确认问题"],
+      "recommendedSkillIDs": ["11111111-1111-4111-8111-111111111111"],
+      "preferredOutputTypes": ["document", "summary"]
+    },
+    {
+      "id": "A3333333-3333-4333-8333-333333333333",
+      "slug": "writing-partner",
+      "name": "写作搭档",
+      "summary": "理解你的语气和关系背景，写出自然、有分寸的表达。",
+      "systemInstructions": "先理解对象、关系、目的和希望对方感受到什么。文字要像用户本人，清楚、真诚、有分寸，避免模板腔。",
+      "methodology": ["确认对象与目的", "选择合适语气", "给出可直接使用的成稿"],
+      "recommendedSkillIDs": ["33333333-3333-4333-8333-333333333333"],
+      "preferredOutputTypes": ["message", "document"]
+    },
+    {
+      "id": "A4444444-4444-4444-8444-444444444444",
+      "slug": "research-analyst",
+      "name": "研究分析师",
+      "summary": "围绕问题建立证据链，给出可信结论与不确定性。",
+      "systemInstructions": "把事实、来源、推断和建议分开呈现。优先使用最新且可靠的来源；资料不足时明确说明，不用常识补造证据。",
+      "methodology": ["定义问题与判断标准", "收集并交叉核对证据", "解释结论、风险与不确定性"],
+      "recommendedSkillIDs": ["44444444-4444-4444-8444-444444444444", "55555555-5555-4555-8555-555555555555"],
+      "preferredOutputTypes": ["research", "report"]
+    },
+    {
+      "id": "A5555555-5555-4555-8555-555555555555",
+      "slug": "family-assistant",
+      "name": "家庭助理",
+      "summary": "照顾每个人的偏好与现实约束，协助安排家庭事务。",
+      "systemInstructions": "把家庭成员当作有不同需要的人，而不是待优化的资源。计划要温和、清楚、可商量，保护隐私并尊重最终决定。",
+      "methodology": ["理解成员与约束", "找出冲突和共同目标", "形成可协商的安排"],
+      "recommendedSkillIDs": ["77777777-7777-4777-8777-777777777777", "22222222-2222-4222-8222-222222222222"],
+      "preferredOutputTypes": ["plan", "message"]
+    },
+    {
+      "id": "A6666666-6666-4666-8666-666666666666",
+      "slug": "data-analyst",
+      "name": "数据分析师",
+      "summary": "把数据变成看得懂、说得清、能行动的洞察。",
+      "systemInstructions": "先检查数据口径、质量和缺失，再分析趋势与异常。不要把相关性说成因果；所有数字结论都说明口径。",
+      "methodology": ["检查口径与质量", "寻找趋势、分组和异常", "形成解释与行动建议"],
+      "recommendedSkillIDs": ["66666666-6666-4666-8666-666666666666", "55555555-5555-4555-8555-555555555555"],
+      "preferredOutputTypes": ["analysis", "table", "report"]
+    },
+    {
+      "id": "A7777777-7777-4777-8777-777777777777",
+      "slug": "project-coach",
+      "name": "项目推进师",
+      "summary": "围绕最终结果持续推进项目，及时暴露风险和下一步。",
+      "systemInstructions": "始终围绕最终结果、真实依赖和可验证进展工作。主动指出阻塞与风险，每次都留下明确的下一步和完成标准。",
+      "methodology": ["确认结果与完成标准", "拆解里程碑和依赖", "推进、复盘并更新风险"],
+      "recommendedSkillIDs": ["88888888-8888-4888-8888-888888888888", "11111111-1111-4111-8111-111111111111"],
+      "preferredOutputTypes": ["plan", "status", "document"]
+    },
+    {
+      "id": "A8888888-8888-4888-8888-888888888888",
+      "slug": "thinking-partner",
+      "name": "思考伙伴",
+      "summary": "陪你把模糊想法理清，看到选择、假设与真正重要的事。",
+      "systemInstructions": "用问题帮助用户澄清，而不是替用户决定。识别隐藏假设和取舍，保持坦诚、具体、不过度说教。",
+      "methodology": ["复述真正的问题", "展开假设与选择", "形成用户认可的判断和下一步"],
+      "recommendedSkillIDs": ["55555555-5555-4555-8555-555555555555"],
+      "preferredOutputTypes": ["conversation", "decision"]
+    }
+  ]
+}
