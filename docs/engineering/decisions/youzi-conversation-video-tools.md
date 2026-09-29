@@ -69,6 +69,59 @@ model policy, startup, settings, live audio callbacks and video workspaces. The
 eight Python video/policy suites passed **218 tests**. AST parsing and
 `git diff --check` passed. These are synthetic protocol/lifecycle tests, not real model inference. Actual
 LLM tool selection, video decoding/playback, generation latency and GUI consent
-need an unlocked attended run. Audio/image interpretation tools, same-lane audio
+need an attended run with the required models already serving. Audio/image interpretation tools, same-lane audio
 multi-residency, fully incremental ASR and acoustic full-duplex acceptance remain
 separate work. HTML storybooks still embed images/audio, not video.
+
+
+## Installed developer candidate — 2026-09-07
+
+The complete native + Python runtime from clean commit `8b11044e` was built,
+backed up, installed and restarted locally as **`candidate-8b11044e`** (marketing
+version 0.14.4 / build 174). This is not a new public Release. Whole-bundle strict
+signatures, the executable-relative Frameworks rpath, and the installed runtime's
+bytecode/import origins passed. Native executable SHA-256:
+`b3b77bcb96c0351b1d99bff248d4110965f12978660c8433d70a5091e0220459`.
+
+The offline package smoke is now repeatable without a checkout Python, weights,
+production endpoint, user approval action, microphone or speaker:
+
+```sh
+runtime="/Applications/Rapid-MLX Desktop.app/Contents/Resources/rapid-mlx"
+probe="$PWD/apps/rapid-mac/scripts/verify-youzi-model-bundle.py"
+env -i PATH=/usr/bin:/bin HOME="$HOME" \
+  PYTHONPATH="$runtime/site-packages" PYTHONNOUSERSITE=1 \
+  PYTHONDONTWRITEBYTECODE=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+  RAPID_DESKTOP_NO_PORT_SWEEP=1 \
+  "$runtime/python/bin/python3" -P -B "$probe" "$runtime/site-packages"
+```
+
+The probe asserts ten module origins inside the sourceless runtime, five
+text-route selection boundaries, authenticated live policy, explicit video
+capabilities beside primary chat, and synthetic LTX POST/GET/content identity.
+It also proves that queued-only cancellation of an already-completed video
+returns 409 without deleting its content. Synthetic MP4 bytes only exercise
+transport; they are not a playable video or evidence of actual generation.
+
+The old complete `candidate-a6bb13f8` was backed up and its file/symlink manifest
+compared before normal UI quit. Both its verified copy and untouched original
+are retained under the local Youzi Client Backups directory, in
+`0.14.4-before-chat-video-tools-20260907-214606`. Rollback requires a normal quit
+and restoring the **whole original application**, followed by strict signature
+verification and launch with the no-port-sweep flag. Do not patch signed contents,
+reset preferences or overwrite task/model files.
+
+Seven post-launch samples over 60.411 seconds retained the same app process,
+with no new Rapid crash report. The package's own Python child appeared during
+that observation; a subsequent read-only check returned `/health` 200/ready.
+Discovery then advertised resident image, video, STT and TTS models, but no chat
+model. Exact Wan video capabilities also returned 200 with its canonical model
+identity. These checks did not generate media or initiate model loading.
+
+The native UI was accessible, and user interaction was detected during read-only
+acceptance. UI actions were stopped rather than overriding the user's activity.
+The live-voice sheet showed microphone off and missing-model guidance. A missing
+chat model prevents conversational/voice acceptance; it is not another observed
+audio callback crash. Physical AEC/double-talk, actual model-generated video and
+LLM tool choice remain unverified. The inherited `audio_lanes` discovery-test
+failure documented in the model-policy handoff remains outside this change.
