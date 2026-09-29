@@ -756,40 +756,63 @@ struct YouziSimpleHelpersPage: View {
 
 struct YouziSimpleKnowMePage: View {
     @Environment(YouziI18nConfig.self) private var i18n
+    @Environment(MemoryStore.self) private var memoryStore
+    @Environment(SettingsRouter.self) private var settingsRouter: SettingsRouter?
+    @Environment(\.openWindow) private var openWindow
     let nodes: [YouziMemoryNode]
+    var assistantAlias = ""
+    @State private var newMemory = ""
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
                 YouziSimpleDomainPageHeader(
                     title: i18n.text(zh: "知我", en: "About Me"),
-                    subtitle: i18n.text(zh: "查看你已确认让柚子记住的事实、偏好和目标。", en: "View facts, preferences, and goals you have confirmed for Youzi to remember.")
+                    subtitle: i18n.text(zh: "告诉柚子你的偏好，核对待确认内容，查看已经记住的事实和目标。", en: "Share your preferences, review proposed memories, and see remembered facts and goals.")
                 )
 
-                if confirmedNodes.isEmpty {
-                    Text(i18n.text(zh: "还没有已确认的内容。柚子不会把未确认的推测当作了解你的事实。", en: "No confirmed memory yet. Youzi does not treat unconfirmed guesses as facts."))
+                collectionStatus
+
+                if let error = memoryStore.lastError ?? memoryStore.ingestion.lastError {
+                    Text(error)
+                        .font(RapidFont.body)
+                        .foregroundStyle(RapidTheme.statusError)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("YouziSimple.KnowMe.Error")
+                }
+
+                manualEntry
+
+                if !pendingNodes.isEmpty {
+                    VStack(alignment: .leading, spacing: RapidTheme.Space.md) {
+                        Text(i18n.text(zh: "待你确认（\(pendingNodes.count)）", en: "Awaiting your review (\(pendingNodes.count))"))
+                            .font(RapidFont.bodyEmphasis)
+                        Text(i18n.text(zh: "旧版记忆也保留在这里。请逐条核对后确认；新的候选内容确认后才会用于本地聊天。", en: "Imported memories are kept here too. Review each one; new proposals are only used in local chat after confirmation."))
+                            .font(RapidFont.secondary)
+                            .foregroundStyle(RapidTheme.textSecondary)
+                        ForEach(pendingNodes) { node in
+                            memoryCard(node, needsConfirmation: true)
+                        }
+                    }
+                    .accessibilityIdentifier("YouziSimple.KnowMe.Pending")
+                }
+
+                if !confirmedNodes.isEmpty {
+                    VStack(alignment: .leading, spacing: RapidTheme.Space.md) {
+                        Text(i18n.text(zh: "已记住（\(confirmedNodes.count)）", en: "Remembered (\(confirmedNodes.count))"))
+                            .font(RapidFont.bodyEmphasis)
+                        ForEach(confirmedNodes) { node in
+                            memoryCard(node, needsConfirmation: false)
+                        }
+                    }
+                    .accessibilityIdentifier("YouziSimple.KnowMe.Confirmed")
+                } else if pendingNodes.isEmpty && memoryStore.lastError == nil {
+                    Text(i18n.text(zh: "还没有记忆。可以先在上方告诉柚子一条偏好，例如你喜欢怎样的回答。", en: "No memories yet. Start by sharing a preference above, such as how you like answers to be written."))
                         .font(RapidFont.body)
                         .foregroundStyle(RapidTheme.textSecondary)
                         .padding(RapidTheme.Space.lg)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .youziSimpleCard()
-                } else {
-                    ForEach(confirmedNodes) { node in
-                        VStack(alignment: .leading, spacing: RapidTheme.Space.xs) {
-                            Label(node.label, systemImage: node.kind.systemImage)
-                                .font(RapidFont.bodyEmphasis)
-                            Text(node.content)
-                                .font(RapidFont.body)
-                                .textSelection(.enabled)
-                            Text(i18n.text(zh: "\(node.citationIDs.count) 条依据", en: "\(node.citationIDs.count) citations"))
-                                .font(RapidFont.caption)
-                                .foregroundStyle(RapidTheme.textSecondary)
-                        }
-                        .padding(RapidTheme.Space.lg)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .youziSimpleCard()
-                        .accessibilityIdentifier("YouziSimple.Memory.\(node.id.uuidString)")
-                    }
                 }
             }
             .frame(maxWidth: 760)
@@ -799,9 +822,102 @@ struct YouziSimpleKnowMePage: View {
         .accessibilityIdentifier("YouziSimple.Surface.knowMe")
     }
 
+    private var collectionStatus: some View {
+        HStack(alignment: .top, spacing: RapidTheme.Space.md) {
+            Text(collectionExplanation)
+                .font(RapidFont.secondary)
+                .foregroundStyle(RapidTheme.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(i18n.text(zh: "记忆设置", en: "Memory Settings")) {
+                settingsRouter?.requestedCategory = .memory
+                openWindow(id: "settings")
+            }
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("YouziSimple.KnowMe.Settings")
+        }
+    }
+
+    private var collectionExplanation: String {
+        if !memoryStore.isEnabled {
+            return i18n.text(zh: "自动记忆已关闭。仍可手动添加；聊天暂不引用记忆。", en: "Automatic memory is off. You can still add memories manually; chat will not use them.")
+        }
+        if RemoteModelEndpoint.isRemote(assistantAlias) {
+            return i18n.text(zh: "当前使用远程模型，不会自动收集或引用记忆。手动记录仍保存在这台 Mac 上。", en: "Remote chat does not collect or use memories. Manual entries are still saved on this Mac.")
+        }
+        return i18n.text(zh: "自动记忆已开启，仅在本地模型空闲时提取新消息。新的候选内容需要你确认。", en: "Automatic memory is on. New messages are reviewed only while the local model is idle; new proposals need your confirmation.")
+    }
+
+    private var manualEntry: some View {
+        VStack(alignment: .leading, spacing: RapidTheme.Space.sm) {
+            Text(i18n.text(zh: "主动告诉柚子", en: "Tell Youzi"))
+                .font(RapidFont.bodyEmphasis)
+            HStack {
+                TextField(i18n.text(zh: "例如：请用简洁的中文回答", en: "For example: I prefer concise answers"), text: $newMemory)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("YouziSimple.KnowMe.AddField")
+                Button(i18n.text(zh: "记住", en: "Remember")) {
+                    memoryStore.perform { _ = try memoryStore.service.addManual(content: newMemory) }
+                    if memoryStore.lastError == nil { newMemory = "" }
+                }
+                .buttonStyle(.bordered)
+                .tint(RapidTheme.brandPrimaryDeep)
+                .disabled(newMemory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("YouziSimple.KnowMe.Add")
+            }
+        }
+        .padding(RapidTheme.Space.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .youziSimpleCard()
+    }
+
+    private func memoryCard(_ node: YouziMemoryNode, needsConfirmation: Bool) -> some View {
+        VStack(alignment: .leading, spacing: RapidTheme.Space.sm) {
+            HStack {
+                Label(node.label, systemImage: node.kind.systemImage)
+                    .font(RapidFont.bodyEmphasis)
+                Spacer(minLength: RapidTheme.Space.sm)
+                if needsConfirmation {
+                    Text(node.contextAdmission == .legacyCompatible
+                         ? i18n.text(zh: "旧版记忆 · 待确认", en: "Imported · Review needed")
+                         : i18n.text(zh: "候选记忆 · 待确认", en: "Proposed · Review needed"))
+                        .font(RapidFont.caption)
+                        .foregroundStyle(RapidTheme.textSecondary)
+                }
+            }
+            Text(node.content)
+                .font(RapidFont.body)
+                .textSelection(.enabled)
+            HStack {
+                Text(i18n.text(zh: "\(node.citationIDs.count) 条依据", en: "\(node.citationIDs.count) citations"))
+                    .font(RapidFont.caption)
+                    .foregroundStyle(RapidTheme.textSecondary)
+                Spacer()
+                if needsConfirmation {
+                    Button(i18n.text(zh: "确认记住", en: "Confirm Memory")) {
+                        memoryStore.perform { try memoryStore.service.confirm(node.id) }
+                    }
+                    .accessibilityIdentifier("YouziSimple.KnowMe.Confirm.\(node.id.uuidString)")
+                }
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .tint(RapidTheme.brandPrimaryDeep)
+        .padding(RapidTheme.Space.lg)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .youziSimpleCard()
+        .accessibilityIdentifier("YouziSimple.Memory.\(node.id.uuidString)")
+    }
+
     private var confirmedNodes: [YouziMemoryNode] {
         nodes
             .filter { $0.state == .confirmed }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private var pendingNodes: [YouziMemoryNode] {
+        nodes
+            .filter { $0.state == .proposed || $0.state == .awaitingConfirmation }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 }

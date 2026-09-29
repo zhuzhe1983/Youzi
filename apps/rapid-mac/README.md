@@ -53,6 +53,10 @@ open it, and drag **Rapid-MLX Desktop** to Applications.
   export a conversation to a file via a save panel.
 - **Custom instructions.** A persistent system-prompt preface applied across
   conversations.
+- **About Me / 知我.** Review and confirm proposed or imported memories, or add
+  a preference manually. Automatic collection is opt-in and reviews only new
+  messages through an idle local model. Remote chat neither collects nor uses
+  this memory store. Memory Settings provides editing and forgetting controls.
 - **Per-model performance settings.** Per-alias runtime overrides (persisted
   across launches) resolved into the sidecar's `serve` arguments at spawn.
 - **Bundled engine.** The `rapid-mlx` engine ships inside the app as a

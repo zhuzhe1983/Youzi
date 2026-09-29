@@ -549,7 +549,7 @@ struct YouziSimpleShell: View {
                 onStartTask: startTask(with:)
             )
         case .knowMe:
-            YouziSimpleKnowMePage(nodes: productModel.document.memoryNodes)
+            YouziSimpleKnowMePage(nodes: productModel.document.memoryNodes, assistantAlias: assistantAlias)
         case .results:
             YouziSimpleResultsPage(
                 artifacts: productModel.artifacts,
