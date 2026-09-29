@@ -45,30 +45,31 @@ enum YouziModelAvailability {
     }
 }
 
-/// Equal-area color sectors, not a memory chart. Palette stays blue/yellow/green/purple
-/// regardless of the user's accent color. Shading adds depth without blurring the sectors.
+/// Equal-area readiness sectors in the composer's muted palette. A matte surface
+/// and the shared control outline keep this secondary picker below the primary action.
 struct YouziModelAvailabilityOrb: View {
     let lanes: [YouziModelLane]
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         ZStack {
-            Circle().fill(Color.secondary.opacity(0.35))
+            Circle().fill(RapidTheme.surfaceOverlay)
             ForEach(Array(lanes.enumerated()), id: \.element) { index, lane in
-                YouziOrbSector(index: index, count: lanes.count).fill(Self.color(lane))
+                YouziOrbSector(index: index, count: lanes.count)
+                    .fill(Self.color(lane).opacity(colorScheme == .dark ? 0.65 : 0.7))
             }
-            Circle().fill(RadialGradient(colors: [.white.opacity(0.5), .clear, .black.opacity(0.22)],
-                                        center: .init(x: 0.28, y: 0.22), startRadius: 0, endRadius: 30))
-            Circle().strokeBorder(.white.opacity(0.22), lineWidth: 0.6)
+            Circle().strokeBorder(RapidTheme.hairlineStrong, lineWidth: 1)
         }
-        .frame(width: 28, height: 28)
+        .frame(width: 24, height: 24)
         .accessibilityHidden(true)
     }
 
     static func color(_ lane: YouziModelLane) -> Color {
         switch lane {
-        case .chat: Color(red: 0.15, green: 0.48, blue: 0.96)
-        case .image: Color(red: 0.98, green: 0.76, blue: 0.18)
-        case .voice: Color(red: 0.17, green: 0.76, blue: 0.51)
-        case .video: Color(red: 0.65, green: 0.39, blue: 0.92)
+        case .chat: RapidTheme.brandSecondary
+        case .image: RapidTheme.brandPrimaryDeep
+        case .voice: RapidTheme.green
+        case .video: Color(red: 0.55, green: 0.46, blue: 0.67)
         }
     }
 }

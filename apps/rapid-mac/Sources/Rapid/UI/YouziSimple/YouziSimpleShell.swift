@@ -131,6 +131,7 @@ struct YouziSimpleShell: View {
                         }
                         .padding(.horizontal, RapidTheme.Space.sm)
                     }
+                    .modifier(YouziHoverScrollIndicators())
                     .accessibilityIdentifier("YouziSimple.Sidebar.Collections")
                     .onChange(of: isRecentTasksExpanded) { _, expanded in
                         if !expanded { scroll.scrollTo("tasks", anchor: .top) }
