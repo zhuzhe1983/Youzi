@@ -579,7 +579,9 @@ struct GoldenChatSurface {
         // Match the app's required environment without inheriting or writing
         // the developer's language preference. Golden journeys use English.
         let defaults = UserDefaults(suiteName: "golden-i18n-\(UUID().uuidString)")!
-        defaults.register(defaults: [YouziI18nConfig.storageKey: AppLanguage.en.rawValue])
+        // Registration defaults are shared between suites in this process.
+        // Persist only in this unique suite so parallel i18n tests stay isolated.
+        defaults.set(AppLanguage.en.rawValue, forKey: YouziI18nConfig.storageKey)
         return YouziI18nConfig(defaults: defaults)
     }
 
