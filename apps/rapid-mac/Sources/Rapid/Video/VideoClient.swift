@@ -304,9 +304,9 @@ struct VideoCapabilities: Decodable, Sendable, Hashable {
         case "fixed":
             let values = size.values ?? []
             var allValid = !values.isEmpty
-            // Keep the fixed-size validation explicit: Swift 6.4 whole-module
-            // optimization miscompiles the equivalent throwing-function path
-            // using allSatisfy + parseSize's optional tuple, corrupting ownership.
+            // Swift 6.4 whole-module optimization crashes on the equivalent
+            // allSatisfy + parseSize expression in this throwing validator.
+            // The explicit loop preserves every fixed-size validation check.
             for value in values {
                 if Self.parseSize(value) == nil { allValid = false; break }
             }

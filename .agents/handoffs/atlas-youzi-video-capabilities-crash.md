@@ -2,40 +2,56 @@
 
 Owner / receiver: Atlas. Host: Local Mac. Branch:
 `atlas/youzi-video-capabilities-crash-20260930`, based on `7d8e70ac`.
-Production fix: `53fe9055`.
+Final production fix: explicit fixed-size validation loop in
+`VideoCapabilities.validated()` (`6e4a4c84`, followed by comment clarification).
 
-The integration coordinator reproduced SIGSEGV with Swift 6.4 Release via
-`YouziLocalModelToolsTests.videoCapabilitiesDispatch()` using fake model
-providers and no actual model. The crash report shows `objc_retain` called by
-compiler-generated `YouziLocalModelTools.run(_:)` code, with an invalid object
-pointer `0x0032313578323135` containing the UTF-8 bytes of `512x512`. The aggregate
-failure similarly contained `768x512`. The original code constructed a nested
-`[String: Any]` dictionary and mapped capability presets in a large async frame.
+The coordinator reproduced SIGSEGV with Swift 6.4 Release via unchanged
+`YouziLocalModelToolsTests.videoCapabilitiesDispatch()`, using fake model
+providers. `objc_retain` received `0x0032313578323135`, the UTF-8 small-string
+bytes of `512x512`; an earlier failure contained `768x512`. The first hypothesis
+was heterogeneous JSON boxing in the async dispatcher. A typed synchronous
+response helper did not fix the minimal WMO failure and was reverted.
 
-The fix preserves exact JSON fields and value types but represents the response
-with `Encodable` structs and encodes it in a synchronous `@inline(never)` helper.
-This removes heterogeneous Objective-C bridging from that async expression and
-keeps the serialization lifetime outside the async frame. Encoding failures flow
-through the existing sanitized `generation_failed` handler. No admission,
-approval, model loading, validation or test assertions changed.
+## Reproduced cause boundary
 
-## Evidence and limits
+A standalone harness uses the actual `VideoCapabilities` implementation plus
+minimal non-network enum/constants seams. It decodes the same capability JSON,
+validates it, invokes the original async response expression, and repeats 1000
+times. Apple Swift 6.4 (`swiftlang-6.4.0.34.1`), arm64 macOS 27.0 (26A428):
 
-- Original full Release crash evidence belongs to the parent Butler run:
-  `jobs/logs/native-tools-isolated.log` and
-  `swiftpm-testing-helper-2026-09-30-024452.ips`.
-- Swift frontend parse and whitespace checks pass.
-- A small `swiftc -O -swift-version 6` harness using the actual production
-  `VideoCapabilities` source and original async dictionary expression completed
-  1000 calls without crashing. The expression alone is insufficient to reproduce
-  the failure; larger async-frame/optimization interactions remain an inference.
-- The actual typed helper, extracted unchanged, passed 1000 optimized comparisons
-  against the old JSON response using all three presets `512x512`, `768x512`, and
-  `512x768`. Parsed JSON objects were exactly equal.
-- This agent did not run full app builds. The parent owns decisive verification:
-  compile Release, rerun unchanged `videoCapabilitiesDispatch` and the complete
-  `YouziLocalModelToolsTests` suite, then the aggregate integration regression.
+| Build / change | Result |
+| --- | --- |
+| Original, `swiftc -O` | 1000 calls pass |
+| Original, `-O -whole-module-optimization` | SIGSEGV, exit -11 |
+| Typed synchronous JSON helper, WMO | SIGSEGV, exit -11 |
+| Validation replaced by equivalent explicit loop, WMO | 1000 calls pass |
+| Explicit loop, nine valid/invalid fixed-size cases, WMO | 9000 checks pass |
 
-Retain this typed boundary even if the compiler later fixes the interaction:
-it also expresses the fixed wire contract without `Any` boxing. Reassess the
-`@inline(never)` optimization workaround only with the Release regression intact.
+Additional bisection: moving validation before the async provider, discarding
+its returned copy, non-inlining `validated()`, or non-inlining `parseSize` still
+crash. Removing validation, disabling optimization for it, or moving its result
+to a Boolean helper avoid the crash. The final patch uses no compiler-specific
+attributes: a normal for-loop retains the nonempty requirement and rejects any
+unparseable size, leaving every remaining validation guard unchanged. These
+comparisons implicate the optimized `allSatisfy`/optional-tuple validation path;
+they do not prove the precise compiler-internal defect.
+
+## Reproduction artifacts and next action
+
+Parent Butler run evidence is under:
+`parallel/video-capabilities-wmo/` in run
+`20260930-010940-resolve-all-remaining-youzi-branch-and-worktree-changes-ver`.
+Run `python3 reproduce.py` there to regenerate original/typed/final comparisons.
+The directory contains the compact probes, extracted capability source,
+provenance, bisection results, and machine-readable `reproduction-results.json`.
+The runner creates/removes a temporary build directory and never invokes a
+model, production service, or desktop app. Deliberate original/typed crashes
+produce local diagnostic reports. This is forensic evidence, not a future CI
+requirement that compilers must continue to crash.
+
+The net production diff is only the fixed-size validation loop in
+`VideoClient.swift`; `YouziLocalModelTools.swift` is identical to the base.
+Existing tests and assertions are unchanged. Swift parsing and diff checks pass.
+Parent owns the decisive final gate: rebuild Release, run unchanged
+`videoCapabilitiesDispatch`, then all `YouziLocalModelToolsTests` and the full
+integration selection. No full app build was run by this agent.
