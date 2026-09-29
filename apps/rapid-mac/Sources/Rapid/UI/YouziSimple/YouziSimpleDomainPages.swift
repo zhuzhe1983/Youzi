@@ -761,7 +761,7 @@ struct YouziSimpleKnowMePage: View {
     @Environment(\.openWindow) private var openWindow
     let nodes: [YouziMemoryNode]
     var assistantAlias = ""
-    @State private var newMemory = ""
+    @State var newMemory = ""
 
     var body: some View {
         ScrollView {
@@ -794,6 +794,7 @@ struct YouziSimpleKnowMePage: View {
                             memoryCard(node, needsConfirmation: true)
                         }
                     }
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("YouziSimple.KnowMe.Pending")
                 }
 
@@ -805,6 +806,7 @@ struct YouziSimpleKnowMePage: View {
                             memoryCard(node, needsConfirmation: false)
                         }
                     }
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("YouziSimple.KnowMe.Confirmed")
                 } else if pendingNodes.isEmpty && memoryStore.lastError == nil {
                     Text(i18n.text(zh: "还没有记忆。可以先在上方告诉柚子一条偏好，例如你喜欢怎样的回答。", en: "No memories yet. Start by sharing a preference above, such as how you like answers to be written."))
@@ -906,6 +908,7 @@ struct YouziSimpleKnowMePage: View {
         .padding(RapidTheme.Space.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
         .youziSimpleCard()
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("YouziSimple.Memory.\(node.id.uuidString)")
     }
 

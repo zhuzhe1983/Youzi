@@ -39,8 +39,8 @@ struct YouziKnowMeTests {
             fonts = YouziFontSizeConfig(defaults: defaults)
         }
 
-        func stage(alias: String = "") -> GoldenStage {
-            GoldenStage(KnowMeFixtureView(assistantAlias: alias)
+        func stage(alias: String = "", draft: String = "") -> GoldenStage {
+            GoldenStage(KnowMeFixtureView(assistantAlias: alias, draft: draft)
                 .environment(store).environment(i18n).environment(fonts),
                 size: CGSize(width: 920, height: 1800))
         }
@@ -78,9 +78,8 @@ struct YouziKnowMeTests {
     @Test("Manual native entry saves while collection is off; remote mode explains why it creates no automatic memories")
     func manualEntry() async throws {
         let fixture = try Fixture()
-        let stage = fixture.stage(alias: "youzi-remote/fixture")
+        let stage = fixture.stage(alias: "youzi-remote/fixture", draft: "Fixture: concise answers")
         try await stage.waitForText("自动记忆已关闭")
-        try stage.setValue("Fixture: concise answers", for: "YouziSimple.KnowMe.AddField")
         try stage.press("YouziSimple.KnowMe.Add")
         try await stage.waitForText("已记住（1）")
         #expect(fixture.store.service.nodes.first?.state == .confirmed)
@@ -111,8 +110,10 @@ struct YouziKnowMeTests {
 private struct KnowMeFixtureView: View {
     @Environment(MemoryStore.self) private var store
     let assistantAlias: String
+    let draft: String
 
     var body: some View {
-        YouziSimpleKnowMePage(nodes: store.service.product.document.memoryNodes, assistantAlias: assistantAlias)
+        YouziSimpleKnowMePage(nodes: store.service.product.document.memoryNodes,
+                             assistantAlias: assistantAlias, newMemory: draft)
     }
 }
