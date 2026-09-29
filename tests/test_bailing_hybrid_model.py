@@ -100,7 +100,9 @@ def test_layer_schedule():
     assert sum(args.is_mla_layer(i) for i in range(24)) == 6
 
 
-def test_forward_and_cache_parity():
+@pytest.mark.parametrize("seed", [0, 7])
+def test_forward_and_cache_parity(seed):
+    mx.random.seed(seed)
     model = tiny_model()
     ids = mx.random.randint(0, TINY["vocab_size"], (1, 12))
     logits = model(ids)

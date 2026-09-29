@@ -164,7 +164,9 @@ def test_configs_without_both_layer_kinds():
         assert float(mx.abs(inc - no_cache).max()) < 2e-3
 
 
-def test_forward_softcap_and_cache_parity():
+@pytest.mark.parametrize("seed", [0, 7])
+def test_forward_softcap_and_cache_parity(seed):
+    mx.random.seed(seed)
     model = tiny_model()
     ids = mx.random.randint(0, TINY_TEXT["vocab_size"], (1, 24))
 

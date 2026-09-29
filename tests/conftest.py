@@ -8,6 +8,14 @@ import sys
 
 import pytest
 
+# Numerical parity tests compare float32 prefill (matrix-matrix) with decode
+# (matrix-vector). MLX may otherwise use reduced-precision tensor operations
+# for only the former on M5 GPUs, even though both outputs report float32.
+# Configure this before the first MLX import/operation: the backend caches the
+# setting. Keep an explicit override for runs investigating TF32 behavior.
+# https://ml-explore.github.io/mlx/build/html/usage/precision.html
+os.environ.setdefault("MLX_ENABLE_TF32", "0")
+
 # One-time, session-scoped availability probe for the Apple-only ``mlx``
 # runtime. This is the ONLY place conftest imports it (and even then under
 # try/except); nothing else here should import mlx at module scope, because
