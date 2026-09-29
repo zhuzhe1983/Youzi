@@ -24,6 +24,7 @@ struct YouziDomainDocument: Codable, Equatable, Sendable {
     var memoryNodes: [YouziMemoryNode]
     var memoryEdges: [YouziMemoryEdge]
     var memoryCitations: [YouziMemoryCitation]
+    var memoryControl: YouziMemoryControl?
     var voiceSessions: [YouziVoiceSession]
 
     init(
@@ -47,6 +48,7 @@ struct YouziDomainDocument: Codable, Equatable, Sendable {
         memoryNodes: [YouziMemoryNode] = [],
         memoryEdges: [YouziMemoryEdge] = [],
         memoryCitations: [YouziMemoryCitation] = [],
+        memoryControl: YouziMemoryControl? = nil,
         voiceSessions: [YouziVoiceSession] = []
     ) {
         self.permissions = permissions
@@ -69,6 +71,7 @@ struct YouziDomainDocument: Codable, Equatable, Sendable {
         self.memoryNodes = memoryNodes
         self.memoryEdges = memoryEdges
         self.memoryCitations = memoryCitations
+        self.memoryControl = memoryControl
         self.voiceSessions = voiceSessions
     }
 
@@ -140,6 +143,6 @@ struct YouziDomainDocument: Codable, Equatable, Sendable {
         case permissions, tasks, workspaces, projects, helpers, skills, skillPackages
         case connectors, connectionAccounts, connectorBindings, permissionGrants
         case files, artifacts, templates, automations, automationRuns
-        case executionAuditEvents, memoryNodes, memoryEdges, memoryCitations, voiceSessions
+        case executionAuditEvents, memoryNodes, memoryEdges, memoryCitations, memoryControl, voiceSessions
     }
 }

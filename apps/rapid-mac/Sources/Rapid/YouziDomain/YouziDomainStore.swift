@@ -3,7 +3,7 @@ import Foundation
 
 enum YouziDomainSchema {
     static let formatIdentifier = "com.rapidmlx.youzi.domain"
-    static let currentVersion = 3
+    static let currentVersion = 4
 }
 
 struct YouziDomainEnvelope: Codable, Equatable, Sendable {
@@ -41,9 +41,9 @@ extension YouziDomainStoreError: LocalizedError {
             return "Youzi data schema version \(found) is unsupported; this build supports version \(supported)."
         case let .corruptFile(originalURL, recoveryURL):
             if let recoveryURL {
-                return "Youzi data at \(originalURL.path) is corrupt and was preserved at \(recoveryURL.path)."
+                return "Youzi data at \(originalURL.path) is corrupt; a recovery copy was preserved at \(recoveryURL.path)."
             }
-            return "Youzi data at \(originalURL.path) is corrupt and could not be moved aside."
+            return "Youzi data at \(originalURL.path) is corrupt and could not be copied for recovery."
         case let .readFailed(url, description):
             return "Could not read Youzi data at \(url.path): \(description)"
         case let .writeFailed(url, description):
@@ -64,6 +64,7 @@ final class YouziDomainStore: @unchecked Sendable {
     let fileURL: URL
 
     private let lock = NSLock()
+    private var corruptionError: YouziDomainStoreError?
     private let fileManager: FileManager
     /// Test-only failure seam at the last point before the atomic temp write.
     /// Production leaves it nil; it lets lifecycle tests prove filesystem
@@ -97,6 +98,7 @@ final class YouziDomainStore: @unchecked Sendable {
     func save(_ document: YouziDomainDocument) throws {
         lock.lock()
         defer { lock.unlock() }
+        if fileManager.fileExists(atPath: fileURL.path) { _ = try loadUnlocked() }
         _ = try saveUnlocked(document)
     }
 
@@ -113,6 +115,7 @@ final class YouziDomainStore: @unchecked Sendable {
     }
 
     private func loadUnlocked() throws -> YouziDomainDocument {
+        if let corruptionError { throw corruptionError }
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return .empty
         }
@@ -150,7 +153,7 @@ final class YouziDomainStore: @unchecked Sendable {
             } catch {
                 throw quarantineCorruptFile()
             }
-            // Atomic replacement is the migration commit point. If writing v3
+            // Atomic replacement is the migration commit point. If writing the current schema
             // fails, the original v1 inode is still present and the next load
             // can retry the same deterministic conversion.
             return try saveUnlocked(migrated)
@@ -159,6 +162,17 @@ final class YouziDomainStore: @unchecked Sendable {
             let migrated: YouziDomainDocument
             do {
                 migrated = try YouziDomainV2Migration.decode(data, decoder: decoder)
+            } catch {
+                throw quarantineCorruptFile()
+            }
+            return try saveUnlocked(migrated)
+        }
+        if probe.schemaVersion == 3 {
+            // V4 only adds optional fields and makes confidence nullable. Decode
+            // existing nodes without assigning invented migration defaults.
+            let migrated: YouziDomainDocument
+            do {
+                migrated = try decoder.decode(YouziDomainEnvelope.self, from: data).document
             } catch {
                 throw quarantineCorruptFile()
             }
@@ -287,14 +301,20 @@ final class YouziDomainStore: @unchecked Sendable {
             isDirectory: false
         )
         do {
-            try fileManager.moveItem(at: fileURL, to: recoveryURL)
+            // Keep the unreadable source in place so later transactions and
+            // fresh launches fail closed until an explicit recovery replaces it.
+            try fileManager.copyItem(at: fileURL, to: recoveryURL)
             try? fileManager.setAttributes(
                 [.posixPermissions: 0o600],
                 ofItemAtPath: recoveryURL.path
             )
-            return .corruptFile(originalURL: fileURL, recoveryURL: recoveryURL)
+            let error = YouziDomainStoreError.corruptFile(originalURL: fileURL, recoveryURL: recoveryURL)
+            corruptionError = error
+            return error
         } catch {
-            return .corruptFile(originalURL: fileURL, recoveryURL: nil)
+            let error = YouziDomainStoreError.corruptFile(originalURL: fileURL, recoveryURL: nil)
+            corruptionError = error
+            return error
         }
     }
 }

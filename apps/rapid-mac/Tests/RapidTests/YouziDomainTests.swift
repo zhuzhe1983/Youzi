@@ -423,7 +423,7 @@ struct YouziDomainTests {
         #expect(try Data(contentsOf: fixture.store.fileURL) == data)
     }
 
-    @Test("Corrupt storage is quarantined, reported, and then loads empty")
+    @Test("Corrupt storage is preserved, reported, and remains read-only")
     func corruptFileIsRecoverable() throws {
         let fixture = try isolatedStore()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -446,10 +446,15 @@ struct YouziDomainTests {
         let recovered = try #require(recoveryURL)
         let recoveredAttributes = try FileManager.default.attributesOfItem(atPath: recovered.path)
         let recoveredMode = try #require(recoveredAttributes[.posixPermissions] as? NSNumber)
-        #expect(!FileManager.default.fileExists(atPath: fixture.store.fileURL.path))
+        #expect(try Data(contentsOf: fixture.store.fileURL) == corruptData)
         #expect(try Data(contentsOf: recovered) == corruptData)
         #expect(recoveredMode.intValue & 0o777 == 0o600)
-        #expect(try fixture.store.load() == .empty)
+        #expect(throws: YouziDomainStoreError.self) { try fixture.store.load() }
+        #expect(throws: YouziDomainStoreError.self) { try fixture.store.update { _ in } }
+        #expect(throws: YouziDomainStoreError.self) { try fixture.store.save(.empty) }
+        #expect(throws: YouziDomainStoreError.self) {
+            try YouziDomainStore(fileURL: fixture.store.fileURL).load()
+        }
     }
 
     @Test("Atomic saves leave owner-only storage and no temporary file")

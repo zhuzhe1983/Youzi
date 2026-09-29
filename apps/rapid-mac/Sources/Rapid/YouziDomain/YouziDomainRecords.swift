@@ -1233,7 +1233,8 @@ enum YouziMemoryScope: Codable, Equatable, Sendable {
     }
 }
 
-enum YouziMemoryNodeKind: String, Codable, Equatable, Sendable {
+enum YouziMemoryNodeKind: String, Codable, Equatable, CaseIterable, Sendable {
+    case fact
     case user
     case person
     case organization
@@ -1268,7 +1269,7 @@ struct YouziMemoryNode: Identifiable, Codable, Equatable, Sendable {
     var label: String
     var content: String
     var kind: YouziMemoryNodeKind
-    var confidence: Double
+    var confidence: Double?
     var scope: YouziMemoryScope
     var citationIDs: [UUID]
     var creationMethod: YouziMemoryCreationMethod
@@ -1278,13 +1279,15 @@ struct YouziMemoryNode: Identifiable, Codable, Equatable, Sendable {
     let createdAt: Date
     var updatedAt: Date
     var lastConfirmedAt: Date?
+    var legacy: YouziLegacyMemoryMetadata?
+    var contextAdmission: YouziMemoryContextAdmission?
 
     init(
         id: UUID = UUID(),
         label: String,
         content: String,
         kind: YouziMemoryNodeKind,
-        confidence: Double,
+        confidence: Double?,
         scope: YouziMemoryScope,
         citationIDs: [UUID] = [],
         creationMethod: YouziMemoryCreationMethod,
@@ -1293,7 +1296,9 @@ struct YouziMemoryNode: Identifiable, Codable, Equatable, Sendable {
         validUntil: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        lastConfirmedAt: Date? = nil
+        lastConfirmedAt: Date? = nil,
+        legacy: YouziLegacyMemoryMetadata? = nil,
+        contextAdmission: YouziMemoryContextAdmission? = nil
     ) {
         self.id = id
         self.label = label
@@ -1309,11 +1314,13 @@ struct YouziMemoryNode: Identifiable, Codable, Equatable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.lastConfirmedAt = lastConfirmedAt
+        self.legacy = legacy
+        self.contextAdmission = contextAdmission
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, label, content, kind, confidence, scope, citationIDs, creationMethod
-        case state, validFrom, validUntil, createdAt, updatedAt, lastConfirmedAt
+        case state, validFrom, validUntil, createdAt, updatedAt, lastConfirmedAt, legacy, contextAdmission
     }
 }
 

@@ -848,6 +848,7 @@ private extension YouziWorkspaceLocation {
 private extension YouziMemoryNodeKind {
     var systemImage: String {
         switch self {
+        case .fact: "text.quote"
         case .preference: "heart"
         case .goal: "target"
         case .habit: "repeat"

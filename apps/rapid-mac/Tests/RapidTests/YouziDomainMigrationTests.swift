@@ -235,7 +235,7 @@ struct YouziDomainMigrationTests {
         #expect(migrated.connectorBindings.isEmpty)
         #expect(migrated.permissionGrants.isEmpty)
         #expect(migrated.executionAuditEvents.isEmpty)
-        #expect(try schemaVersion(at: fileURL) == 3)
+        #expect(try schemaVersion(at: fileURL) == YouziDomainSchema.currentVersion)
     }
 
     @Test("Literal v2 migrates all trigger cases and adds only fail-closed v3 defaults")
@@ -279,7 +279,7 @@ struct YouziDomainMigrationTests {
             }
             return false
         })
-        #expect(try schemaVersion(at: fileURL) == 3)
+        #expect(try schemaVersion(at: fileURL) == YouziDomainSchema.currentVersion)
     }
 
     @Test("Frozen decoders are deterministic and failed migration writes preserve exact bytes")
@@ -354,15 +354,15 @@ struct YouziDomainMigrationTests {
             #expect(originalURL == fileURL)
             let recovered = try #require(recoveryURL)
             #expect(try Data(contentsOf: recovered) == corrupt)
-            #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+            #expect(try Data(contentsOf: fileURL) == corrupt)
         }
     }
 
-    @Test("Unsupported v4 remains byte-identical and is never quarantined")
+    @Test("Unsupported future schema remains byte-identical and is never quarantined")
     func unsupportedVersionPreservesBytes() throws {
         let unsupported = Data(
             String(decoding: Self.v2Fixture, as: UTF8.self)
-                .replacingOccurrences(of: "\"schemaVersion\":2", with: "\"schemaVersion\":4")
+                .replacingOccurrences(of: "\"schemaVersion\":2", with: "\"schemaVersion\":\(YouziDomainSchema.currentVersion + 1)")
                 .utf8
         )
         let (store, fileURL, cleanup) = try makeStore(with: unsupported)
@@ -376,8 +376,8 @@ struct YouziDomainMigrationTests {
                 Issue.record("Expected unsupportedSchemaVersion, got \(error)")
                 return
             }
-            #expect(found == 4)
-            #expect(supported == 3)
+            #expect(found == YouziDomainSchema.currentVersion + 1)
+            #expect(supported == YouziDomainSchema.currentVersion)
         }
         #expect(try Data(contentsOf: fileURL) == unsupported)
     }
