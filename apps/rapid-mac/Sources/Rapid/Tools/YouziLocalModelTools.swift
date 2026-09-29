@@ -150,7 +150,10 @@ final class YouziLocalModelTools {
                 guard YouziScenarioModels.isReady(entry, in: snapshot) else { throw Failure.model_not_ready }
                 let caps = try await dependencies.videoCapabilities(entry)
                 try Task.checkCancellation()
-                return try videoCapabilitiesResult(caps, model: entry.alias, id: call.id)
+                return success(["model": entry.alias, "modes": caps.modes.map(\.rawValue),
+                    "presets": caps.sizePresets.map { ["size": $0, "seconds": caps.durationPresets(for: $0)] as [String: Any] },
+                    "reference_image_supported": caps.supportsImageInput,
+                    "default_action": "Omit size/seconds for compatible configured defaults."], id: call.id)
             }
             if call.function.name == "youzi_speech_voices" {
                 try validateKeys(args, allowed: ["model"])
@@ -288,42 +291,6 @@ final class YouziLocalModelTools {
         success(["artifact_id": saved.artifactID.uuidString, "file_id": saved.fileID.uuidString,
                  "filename": saved.name, "location": "My Files / current task", "saved": true], id: id)
     }
-    private struct VideoCapabilitiesPayload: Encodable {
-        struct Preset: Encodable {
-            let size: String
-            let seconds: [Int]
-        }
-        let model: String
-        let modes: [String]
-        let presets: [Preset]
-        let referenceImageSupported: Bool
-        let defaultAction = "Omit size/seconds for compatible configured defaults."
-
-        enum CodingKeys: String, CodingKey {
-            case model, modes, presets
-            case referenceImageSupported = "reference_image_supported"
-            case defaultAction = "default_action"
-        }
-    }
-
-    // Swift 6.4 Release crashed retaining a size preset's small-string bytes
-    // while building nested Any dictionaries in run's async frame. Keep this
-    // response typed and encoded in a synchronous, non-inlined call boundary.
-    @inline(never)
-    private func videoCapabilitiesResult(_ caps: VideoCapabilities, model: String, id: String) throws -> ToolCallResult {
-        let payload = VideoCapabilitiesPayload(
-            model: model,
-            modes: caps.modes.map(\.rawValue),
-            presets: caps.sizePresets.map {
-                VideoCapabilitiesPayload.Preset(size: $0, seconds: caps.durationPresets(for: $0))
-            },
-            referenceImageSupported: caps.supportsImageInput
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        return ToolCallResult(toolCallID: id, content: String(decoding: try encoder.encode(payload), as: UTF8.self))
-    }
-
     private func success(_ object: [String: Any], id: String) -> ToolCallResult {
         let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
         return ToolCallResult(toolCallID: id, content: String(decoding: data, as: UTF8.self))
