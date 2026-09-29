@@ -36,7 +36,7 @@ enum IPPinnedHTTPTransport {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 reader.start { result in
-                    continuation.resume(with: result)
+                    continuation.resume(with: result.map { (data: $0.0, response: $0.1) })
                 }
             }
         } onCancel: {
