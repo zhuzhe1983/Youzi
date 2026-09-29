@@ -12,10 +12,10 @@ model inference, full MP4 decoding or physical audio acceptance.
 import importlib
 import json
 import os
-from pathlib import Path
 import sys
 import tempfile
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -39,6 +39,7 @@ def main():
     # Validate the interpreter and search paths before importing the application.
     from fastapi import FastAPI, HTTPException
     from fastapi.testclient import TestClient
+
     from vllm_mlx.config import get_config
     from vllm_mlx.runtime.model_loading_policy import resolve_request_model
     from vllm_mlx.runtime.model_registry import ModelEntry, ModelRegistry

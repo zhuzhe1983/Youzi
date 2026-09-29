@@ -6,11 +6,10 @@ and extraction sources. Only the unrelated chat history shape and HTTP URL
 builder have minimal seams; no test invokes the transport. Full application
 integration still needs the regular SwiftPM test/build gate.
 """
-from pathlib import Path
 import os
 import subprocess
 import tempfile
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ROOT / "Sources" / "Rapid"
