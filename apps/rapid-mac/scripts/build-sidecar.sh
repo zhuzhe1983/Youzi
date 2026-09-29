@@ -920,8 +920,10 @@ find "$STAGE/site-packages/numpy" -type d -name tests -prune -exec rm -rf {} + 2
 find "$STAGE/site-packages/scipy" -type d -name tests -prune -exec rm -rf {} + 2>/dev/null || true
 find "$STAGE/site-packages/mlx_audio" -type d -name tests -prune -exec rm -rf {} + 2>/dev/null || true
 
-# The desktop Audio surface uses scipy.signal for input resampling. Speech WAV
-# output uses the standard-library `wave` writer, so scipy.io is not required.
+# The desktop Audio surface uses scipy.signal for input/output resampling.
+# Speech WAV encoding uses the standard-library `wave` writer, but requested
+# music output conversion decodes the backend WAV through scipy.io.wavfile.
+# Keep scipy.io and exercise that conversion in the post-trim audio smoke.
 # SciPy's
 # signal import closure covers _lib/_external plus constants, fft, integrate,
 # interpolate, linalg, ndimage, optimize, sparse, spatial, special, and stats;
@@ -934,7 +936,6 @@ rm -rf \
     "$STAGE/site-packages/scipy/datasets" \
     "$STAGE/site-packages/scipy/differentiate" \
     "$STAGE/site-packages/scipy/fftpack" \
-    "$STAGE/site-packages/scipy/io" \
     "$STAGE/site-packages/scipy/misc" \
     "$STAGE/site-packages/scipy/odr"
 
@@ -1240,7 +1241,7 @@ print("mlx_vlm", mlx_vlm.__version__, "sentencepiece", sentencepiece.__version__
         PYTHONPATH="$STAGE/site-packages" \
         PYTHONNOUSERSITE=1 \
         "$STAGE/python/bin/python3.12" -s -c \
-        'from importlib.metadata import version; import numpy as np; import mlx_audio; from mlx_audio.stt.utils import load_model as load_stt_model; from transformers.models.whisper.feature_extraction_whisper import WhisperFeatureExtractor; from mlx_audio.tts.generate import load_model as load_tts_model; from mlx_audio.tts.models.qwen3_tts import Model as Qwen3TTSModel; from scipy import signal; import soundfile; from vllm_mlx.audio.tts import AudioOutput, TTSEngine; payload = TTSEngine.__new__(TTSEngine).to_bytes(AudioOutput(audio=np.zeros(8, dtype=np.float32), sample_rate=24000, duration=8/24000), format="wav"); assert payload.startswith(b"RIFF"); print("mlx_audio", version("mlx-audio"))' 2>&1)" || {
+        'from importlib.metadata import version; import numpy as np; import mlx_audio; from mlx_audio.stt.utils import load_model as load_stt_model; from transformers.models.whisper.feature_extraction_whisper import WhisperFeatureExtractor; from mlx_audio.tts.generate import load_model as load_tts_model; from mlx_audio.tts.models.qwen3_tts import Model as Qwen3TTSModel; from scipy import signal; import soundfile; from vllm_mlx.audio.tts import AudioOutput, TTSEngine; payload = TTSEngine.__new__(TTSEngine).to_bytes(AudioOutput(audio=np.zeros(8, dtype=np.float32), sample_rate=24000, duration=8/24000), format="wav"); assert payload.startswith(b"RIFF"); from vllm_mlx.routes.audio import _convert_music_wav; converted, output_rate, output_channels = _convert_music_wav(payload, 12000, 2); assert converted.startswith(b"RIFF") and (output_rate, output_channels) == (12000, 2); print("mlx_audio", version("mlx-audio"))' 2>&1)" || {
         echo "ERR: bundled audio runtime import failed — desktop Audio would be unusable:" >&2
         echo "$AUDIO_OUT" >&2
         exit 3

@@ -128,3 +128,39 @@ worktree cleanup. No services were restarted and no real-model inference,
 dependency upgrades, production deployment, or physical audio acceptance ran.
 Default reduced-precision production output differences are an upstream MLX
 behavior; these tests specifically verify full-float32 architectural parity.
+
+## Aggregate follow-up: music conversion packaging
+
+The integrated 150-file audit selection exposed a packaging defect while closing
+the previously recorded missing-mflux environment gap:
+
+- General delivery virtualenv: 3784 passed, 24 skipped, 11 deselected; one failure
+  because that environment has no mflux.
+- Paired installed-app interpreter/dependencies with current repository source:
+  image precision suite 22 passed, including the missing-mflux case.
+- The same full 150-file selection with packaged dependencies: 3798 passed,
+  10 skipped, 11 deselected; one failure because the app lacks `scipy.io`.
+
+`build-sidecar.sh` explicitly removed `scipy/io` under the assumption that WAV
+output only uses the standard-library speech writer. The music route's
+`_convert_music_wav` uses `scipy.io.wavfile` when a client requests a sample rate
+or channel conversion. This was a real build-recipe error, not a reason to skip
+the music assertion. The trim rule now retains `scipy.io`; the post-trim audio
+smoke converts a synthetic 24 kHz mono WAV to 12 kHz stereo and checks the WAV
+result plus reported sample rate/channel count. A static packaging regression
+pins retention and execution of that conversion after trimming.
+
+Verification for this addition: 22 tests passed across
+`test_audio_desktop_extra.py` and `test_audio_output_format.py`; Ruff and
+`bash -n apps/rapid-mac/scripts/build-sidecar.sh` passed. The exact updated audio
+smoke snippet was extracted and executed with the paired app interpreter,
+packaged dependencies, current source, and a dedicated full-SciPy overlay:
+passed (`mlx_audio 0.4.3`). It did not load weights or modify the installed app.
+
+The test overlay contains read-only symlink selections for `scipy` and
+`scipy-1.18.1.dist-info` from the existing test virtualenv. Search-path order is
+current source, SciPy overlay, complete-app dependencies, then pytest's test
+environment. Full aggregate follow-up results and import provenance are recorded
+under the integration Butler run's `jobs/` directory. The installed app remains
+unchanged and still lacks this module until a later authorized rebuild; package
+size/signing/release acceptance is not claimed by these synthetic checks.

@@ -57,3 +57,17 @@ def test_doctor_desktop_audio_contract_matches_the_extra() -> None:
     assert doctor_names == {
         _dependency_name(spec) for spec in _extras()["audio-desktop"]
     }
+
+
+def test_sidecar_keeps_music_wav_decoder_and_smokes_conversion_after_trim() -> None:
+    """Speech encoding alone misses the music decoder's scipy.io dependency."""
+    script = (
+        PYPROJECT_PATH.parent / "apps/rapid-mac/scripts/build-sidecar.sh"
+    ).read_text()
+    assert '"$STAGE/site-packages/scipy/io"' not in script
+    trim_start = script.index("# ----- step 3.5:")
+    smoke = script[script.index('AUDIO_OUT="', trim_start) :]
+    smoke = smoke[: smoke.index('echo "    audio import:')]
+    assert "from vllm_mlx.routes.audio import _convert_music_wav" in smoke
+    assert "_convert_music_wav(payload, 12000, 2)" in smoke
+    assert "(output_rate, output_channels) == (12000, 2)" in smoke
