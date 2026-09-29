@@ -36,9 +36,12 @@ struct YouziLiveVoicePresentation: ViewModifier {
             .sheet(isPresented: $isPresented) {
                 YouziLiveVoiceSheet(chat: chat, server: server, alias: alias, prepareTurn: prepareTurn)
             }
+            .onChange(of: isPresented, initial: true) { _, presented in
+                chat.memoryStore?.ingestion.voiceIsOpen = presented
+            }
             .onChange(of: chat.activeConversationID) { _, _ in isPresented = false }
             .onChange(of: alias) { _, _ in isPresented = false }
-            .onDisappear { isPresented = false }
+            .onDisappear { isPresented = false; chat.memoryStore?.ingestion.voiceIsOpen = false }
     }
 }
 

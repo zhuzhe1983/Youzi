@@ -5,9 +5,15 @@ import Testing
 @MainActor
 @Suite("Memory store")
 struct MemoryStoreTests {
+    private final class Storage {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("rapid-memory-test-\(UUID())")
+        deinit { try? FileManager.default.removeItem(at: root) }
+    }
+    private let storage = Storage()
+
     private func tempURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("rapid-memory-test-\(UUID().uuidString).json")
+        // Domain storage owns this directory; never chmod the system temp root.
+        storage.root.appendingPathComponent("memory-\(UUID()).json")
     }
 
     private func freshDefaults() -> (UserDefaults, String) {
@@ -45,9 +51,10 @@ struct MemoryStoreTests {
         store.upsert(content: "Prefers TypeScript over JavaScript", conversationID: UUID())
 
         let formatted = store.formattedForPrompt()
+        #expect(store.lastError == nil)
         #expect(formatted != nil)
-        #expect(formatted!.contains("Prefers TypeScript"))
-        #expect(formatted!.contains("<memory_context>"))
+        #expect(formatted?.contains("Prefers TypeScript") == true)
+        #expect(formatted?.contains("<memory_context>") == true)
     }
 
     @Test("Upsert deduplicates semantically identical content")
@@ -95,8 +102,8 @@ struct MemoryStoreTests {
         #expect(reloaded.entries[0].content == "Durable fact")
     }
 
-    @Test("Prune caps at maximum entries")
-    func prune() {
+    @Test("Unified graph preserves memories beyond the legacy cap")
+    func noLegacyCap() {
         let (defaults, domain) = freshDefaults()
         defer { defaults.removePersistentDomain(forName: domain) }
         let store = MemoryStore(fileURL: tempURL(), defaults: defaults)
@@ -104,7 +111,7 @@ struct MemoryStoreTests {
             let unique = String(format: "entry-%03d", index)
             store.upsert(content: unique, conversationID: UUID())
         }
-        #expect(store.entries.count == MemoryStore.maximumEntries)
+        #expect(store.entries.count == MemoryStore.maximumEntries + 10)
     }
 
     @Test("Formatted output respects character budget")
@@ -118,7 +125,7 @@ struct MemoryStoreTests {
         }
         let formatted = store.formattedForPrompt()
         #expect(formatted != nil)
-        #expect(formatted!.count <= MemoryStore.maximumInjectedCharacters + 50)
+        #expect((formatted?.count ?? Int.max) <= MemoryStore.maximumInjectedCharacters)
     }
 }
 

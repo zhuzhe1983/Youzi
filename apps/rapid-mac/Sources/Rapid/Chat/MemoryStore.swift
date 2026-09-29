@@ -36,174 +36,83 @@ struct MemoryLibrary: Codable, Sendable {
     var entries: [MemoryEntry] = []
 }
 
-/// Stores and manages persistent memory entries. The store is the single
-/// point of truth for what the assistant knows about the user; the
-/// extractor proposes entries, the user can edit or delete them in
-/// Settings, and the system prompt builder reads a formatted subset for
-/// injection.
-@MainActor
-@Observable
+/// Source-compatible facade over the unified graph. There is deliberately no
+/// independent entries array, legacy JSON writer, substring deletion or pruning.
+@MainActor @Observable
 final class MemoryStore {
-    /// Maximum entries kept on disk. Older entries beyond this cap are
-    /// dropped from the LOWEST ``evidenceCount`` first, then oldest
-    /// ``updatedAt``, so frequently-corroborated facts survive pruning.
+    /// Historical compatibility constant, NOT a graph retention policy.
     static let maximumEntries = 80
-
-    /// Maximum characters across all injected memories. Small models
-    /// (4B–9B) have limited context windows; the memory block must stay
-    /// well under the room the date context and instructions already use.
     static let maximumInjectedCharacters = 2_000
+    let service: YouziMemoryService
+    let ingestion = YouziMemoryIngestionQueue()
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private var collectionSessionStartedAt = Date()
+    private(set) var actionError: String?
+    var lastError: String? { actionError ?? service.lastError }
 
-    /// File layout lives next to ``ConversationStore``'s JSON under
-    /// Application Support/Rapid, keeping all user data in one directory.
-    private static let storageKey = "memory-library-v1"
-
-    private(set) var entries: [MemoryEntry] = []
-    private let fileURL: URL
-    private let defaults: UserDefaults
-
-    /// Whether automatic memory extraction is enabled. Persisted so the
-    /// user's choice survives relaunches. Defaults to off — memory is an
-    /// opt-in feature the user enables in Settings, not something that
-    /// silently collects data.
-    var isEnabled: Bool {
-        get { defaults.bool(forKey: "rapid.memory.enabled") }
-        set { defaults.set(newValue, forKey: "rapid.memory.enabled") }
-    }
-
-    init(fileURL: URL? = nil, defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-        if let fileURL {
-            self.fileURL = fileURL
-        } else {
-            self.fileURL = ApplicationSupportLocator.applicationSupportRoot()
-                .appendingPathComponent(Self.storageKey + ".json")
+    var entries: [MemoryEntry] {
+        service.nodes.map { node in
+            MemoryEntry(id: node.id, content: node.content,
+                evidenceCount: node.legacy?.evidenceCount ?? max(1, node.citationIDs.count),
+                sourceConversationIDs: node.legacy?.sourceConversationIDs ?? service.citations.compactMap {
+                    node.citationIDs.contains($0.id) ? YouziMemoryChatSource.reference($0.stableLocator)?.conversation : nil
+                }, createdAt: node.createdAt, updatedAt: node.updatedAt)
         }
-        load()
     }
 
-    // MARK: - CRUD
+    /// Preserve the existing opt-in AND prompt-use gate on upgrade.
+    var isEnabled: Bool {
+        didSet {
+            if isEnabled && !oldValue { collectionSessionStartedAt = Date() }
+            defaults.set(isEnabled, forKey: "rapid.memory.enabled")
+            if !isEnabled { ingestion.cancelAll(); service.resetContext() }
+        }
+    }
 
-    /// Adds a new memory entry or increments the evidence count on a
-    /// semantically identical one. Returns the affected entry.
+    init(fileURL: URL? = nil, defaults: UserDefaults = .standard,
+         product: YouziProductModel? = nil) {
+        self.defaults = defaults
+        self.isEnabled = defaults.bool(forKey: "rapid.memory.enabled")
+        let legacy = fileURL ?? ApplicationSupportLocator.applicationSupportRoot()
+            .appendingPathComponent("memory-library-v1.json")
+        // Explicit test URLs never open the user's real domain document.
+        let product = product ?? YouziProductModel(store: fileURL.map {
+            YouziDomainStore(fileURL: $0.appendingPathExtension("youzi-domain.json"))
+        } ?? YouziDomainStore())
+        service = YouziMemoryService(product: product, legacyURL: legacy)
+    }
+
+    func canAutomaticallyCollect(_ source: YouziMemoryChatSource) -> Bool {
+        isEnabled && source.createdAt >= collectionSessionStartedAt && service.mayCollect(source)
+    }
+
     @discardableResult
     func upsert(content: String, conversationID: UUID) -> MemoryEntry {
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            // Return a placeholder rather than force-unwrapping; callers
-            // check the returned entry's content before using it.
-            return MemoryEntry(content: "", createdAt: .distantPast, updatedAt: .distantPast)
-        }
-
-        // Case-insensitive substring match for dedup. A future NLP pass
-        // can improve this, but substring catches the common case of the
-        // same preference restated verbatim.
-        if let existingIndex = entries.firstIndex(where: {
-            $0.content.localizedCaseInsensitiveContains(trimmed)
-                || trimmed.localizedCaseInsensitiveContains($0.content)
-        }) {
-            entries[existingIndex].evidenceCount += 1
-            entries[existingIndex].updatedAt = Date()
-            if !entries[existingIndex].sourceConversationIDs.contains(conversationID) {
-                entries[existingIndex].sourceConversationIDs.append(conversationID)
-            }
-            persist()
-            return entries[existingIndex]
-        }
-
-        let entry = MemoryEntry(
-            content: trimmed,
-            sourceConversationIDs: [conversationID]
-        )
-        entries.insert(entry, at: 0)
-        prune()
-        persist()
-        return entry
+        do {
+            let id = try service.upsertLegacy(content: content, conversationID: conversationID)
+            actionError = nil
+            if let entry = entries.first(where: { $0.id == id }) { return entry }
+        } catch { actionError = error.localizedDescription }
+        return MemoryEntry(content: "", createdAt: .distantPast, updatedAt: .distantPast)
     }
 
-    func remove(id: UUID) {
-        entries.removeAll { $0.id == id }
-        persist()
+    func update(id: UUID, content: String) { perform { try service.correct(id, content: content) } }
+    func remove(id: UUID) { perform { try service.forget([id]) } }
+    func removeAll() { ingestion.cancelAll(); perform { try service.forgetAll() } }
+
+    func perform(_ action: () throws -> Void) {
+        do { try action(); actionError = nil } catch { actionError = error.localizedDescription }
     }
 
-    func update(id: UUID, content: String) {
-        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        entries[index].content = trimmed
-        entries[index].updatedAt = Date()
-        persist()
-    }
-
-    func removeAll() {
-        entries.removeAll()
-        persist()
-    }
-
-    // MARK: - Prompt Injection
-
-    /// Formatted memory block for system-prompt injection. Returns `nil`
-    /// when there are no entries or the store is disabled, so the caller
-    /// skips the block rather than emitting an empty tag.
     func formattedForPrompt() -> String? {
-        guard isEnabled, !entries.isEmpty else { return nil }
-
-        var lines: [String] = []
-        var characterBudget = Self.maximumInjectedCharacters
-        // Most-recently-updated first; small models benefit from seeing
-        // the freshest context closest to the prompt tail.
-        for entry in entries.sorted(by: { $0.updatedAt > $1.updatedAt }) {
-            let line = "- \(entry.content)"
-            guard line.count <= characterBudget else { break }
-            lines.append(line)
-            characterBudget -= line.count
-        }
-        guard !lines.isEmpty else { return nil }
-
-        return """
-        <memory_context>
-        Durable facts and preferences learned from previous conversations:
-        \(lines.joined(separator: "\n"))
-        </memory_context>
-        """
+        guard isEnabled else { service.resetContext(); return nil }
+        return service.context(.init())
     }
 
-    // MARK: - Persistence
-
-    private func load() {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
-        do {
-            let data = try Data(contentsOf: fileURL)
-            let library = try JSONDecoder().decode(MemoryLibrary.self, from: data)
-            entries = library.entries
-        } catch {
-            // A corrupted memory file should never prevent the app from
-            // launching; start fresh rather than crashing on read.
-            entries = []
+    func formattedForPrompt(query: String, conversationID: UUID) -> String? {
+        guard isEnabled, !service.control.excludedConversationIDs.contains(conversationID) else {
+            service.resetContext(); return nil
         }
-    }
-
-    private func persist() {
-        let library = MemoryLibrary(entries: entries)
-        do {
-            let directory = fileURL.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let data = try JSONEncoder().encode(library)
-            try data.write(to: fileURL, options: .atomic)
-        } catch {
-            // Persistence failure is non-fatal; the in-memory state is
-            // still usable for this session.
-        }
-    }
-
-    /// Drops entries beyond ``maximumEntries``, evicting the lowest-
-    /// evidence items first so corroboration acts as a retention signal.
-    private func prune() {
-        guard entries.count > Self.maximumEntries else { return }
-        let sorted = entries.sorted { a, b in
-            if a.evidenceCount != b.evidenceCount { return a.evidenceCount > b.evidenceCount }
-            return a.updatedAt > b.updatedAt
-        }
-        entries = Array(sorted.prefix(Self.maximumEntries))
+        return service.context(service.contextRequest(query: query, conversationID: conversationID))
     }
 }

@@ -9,6 +9,7 @@ struct SettingsMemoryPanel: View {
     @State private var editingEntry: MemoryEntry?
     @State private var editDraft = ""
     @State private var confirmingClear = false
+    @State private var newMemory = ""
 
     private var isZh: Bool { i18n.isChinese }
 
@@ -32,8 +33,8 @@ struct SettingsMemoryPanel: View {
                     Text(i18n.text(zh: "自动记忆", en: "Automatic memory"))
                         .font(.body)
                     Text(i18n.text(
-                        zh: "回顾已完成的对话并保存长期偏好。默认关闭。",
-                        en: "Review completed conversations and retain long-term preferences. Off by default."
+                        zh: "仅在本地模型空闲时提取新消息中的候选记忆，确认后用于本地聊天。默认关闭。",
+                        en: "Propose memories from new messages when the local model is idle. Confirm them for local chat. Off by default."
                     ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -42,7 +43,42 @@ struct SettingsMemoryPanel: View {
             .toggleStyle(.switch)
             .accessibilityIdentifier("Settings.Memory.EnableToggle")
 
-            if memoryStore.isEnabled && !memoryStore.entries.isEmpty {
+            if let error = memoryStore.lastError ?? memoryStore.ingestion.lastError {
+                Text(error)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("Settings.Memory.Error")
+            }
+
+            HStack {
+                TextField(i18n.text(zh: "手动添加记忆", en: "Add a memory"), text: $newMemory)
+                    .accessibilityIdentifier("Settings.Memory.AddField")
+                Button(i18n.text(zh: "记住", en: "Remember")) {
+                    memoryStore.perform { _ = try memoryStore.service.addManual(content: newMemory) }
+                    if memoryStore.lastError == nil { newMemory = "" }
+                }
+                .disabled(newMemory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("Settings.Memory.Add")
+            }
+
+            if memoryStore.isEnabled && !memoryStore.ingestion.jobs.isEmpty {
+                HStack {
+                    Text(i18n.text(zh: "待处理：\(memoryStore.ingestion.jobs.count)",
+                                   en: "Queued: \(memoryStore.ingestion.jobs.count)"))
+                    Spacer()
+                    Button(memoryStore.ingestion.isPaused
+                           ? i18n.text(zh: "继续", en: "Resume") : i18n.text(zh: "暂停", en: "Pause")) {
+                        memoryStore.ingestion.isPaused.toggle()
+                    }
+                    if memoryStore.ingestion.lastError != nil {
+                        Button(i18n.text(zh: "重试", en: "Retry")) { memoryStore.ingestion.retry() }
+                    }
+                }
+                .font(.caption)
+            }
+
+            if !memoryStore.entries.isEmpty {
                 HStack {
                     Text(isZh
                         ? "\(memoryStore.entries.count) 条已保存记忆"
@@ -66,10 +102,10 @@ struct SettingsMemoryPanel: View {
                     }
                 }
                 .frame(minHeight: 200)
-            } else if memoryStore.isEnabled {
+            } else {
                 Text(i18n.text(
-                    zh: "暂无记忆。助手完成对话后会在这里显示记忆项。",
-                    en: "No memories yet. They appear here after the assistant completes a conversation."
+                    zh: "暂无记忆。可手动添加，或启用自动记忆后确认新消息中的候选内容。",
+                    en: "No memories yet. Add one manually, or enable automatic memory to review proposals from new messages."
                 ))
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -112,6 +148,19 @@ struct SettingsMemoryPanel: View {
                     .foregroundStyle(.tertiary)
             }
             Spacer()
+            if let node = memoryStore.service.nodes.first(where: { $0.id == entry.id }), node.state != .confirmed {
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(node.contextAdmission == .legacyCompatible
+                         ? i18n.text(zh: "旧版记忆", en: "Imported memory")
+                         : i18n.text(zh: "待确认", en: "Awaiting confirmation"))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Button(i18n.text(zh: "确认", en: "Confirm")) {
+                        memoryStore.perform { try memoryStore.service.confirm(entry.id) }
+                    }
+                    .accessibilityIdentifier("Settings.Memory.Row.Confirm")
+                }
+            }
             Button(i18n.text(zh: "编辑", en: "Edit")) {
                 editDraft = entry.content
                 editingEntry = entry
@@ -147,7 +196,7 @@ struct SettingsMemoryPanel: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(i18n.text(zh: "保存", en: "Save")) {
                         memoryStore.update(id: entry.id, content: editDraft)
-                        editingEntry = nil
+                        if memoryStore.lastError == nil { editingEntry = nil }
                     }
                     .accessibilityIdentifier("Settings.Memory.EditSheet.Save")
                 }

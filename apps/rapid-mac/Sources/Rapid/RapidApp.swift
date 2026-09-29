@@ -190,7 +190,8 @@ struct RapidApp: App {
         let manager = ServerManager()
         let samplingConfig = SamplingConfig()
         let customInstructionsConfig = CustomInstructionsConfig()
-        let memoryStore = MemoryStore()
+        let productModel = YouziProductModel()
+        let memoryStore = MemoryStore(product: productModel)
         let appearanceConfig = AppearanceConfig()
         let experienceModeConfig = YouziExperienceModeConfig()
         let i18nConfig = YouziI18nConfig.shared
@@ -288,7 +289,6 @@ struct RapidApp: App {
                 starPromptCoordinator?.productValueDelivered(kind)
             }
         )
-        let productModel = YouziProductModel()
         chat.setConversationLifecycleObserver(productModel)
         // Deterministic AX fixture for the otherwise release-only state where
         // Sparkle is already downloading in the background. Requiring both
@@ -361,8 +361,15 @@ struct RapidApp: App {
             starPromptCoordinator?.productValueDelivered(kind)
         }
         _imageGen = State(initialValue: imageGenViewModel)
-        _audio = State(initialValue: AudioViewModel(server: manager))
-        _video = State(initialValue: VideoGenViewModel(server: manager))
+        let audioViewModel = AudioViewModel(server: manager)
+        let videoViewModel = VideoGenViewModel(server: manager)
+        _audio = State(initialValue: audioViewModel)
+        _video = State(initialValue: videoViewModel)
+        chat.configureMemoryIngestion { [weak imageGenViewModel, weak audioViewModel, weak videoViewModel, weak dictationController] in
+            imageGenViewModel?.isGenerating == true || audioViewModel?.isBusy == true
+                || videoViewModel?.isSubmitting == true || videoViewModel?.hasLiveActiveJobs == true
+                || dictationController?.phase == .recording || dictationController?.phase == .transcribing
+        }
         _dictation = State(initialValue: dictationController)
         _updater = State(initialValue: updateChecker)
         _sparkleUpdater = State(initialValue: sparkleUpdateController)

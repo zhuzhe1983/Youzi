@@ -148,6 +148,18 @@ final class YouziProductModel: ChatConversationLifecycleObserver {
         )
     }
 
+    /// The memory service publishes through the SAME observable document as
+    /// tasks/files. Do not save a stale in-memory document over other services.
+    func updateMemory(_ mutation: (inout YouziDomainDocument) throws -> Void) throws {
+        do {
+            document = try store.update(mutation)
+            lastPersistenceError = nil
+        } catch {
+            lastPersistenceError = error.localizedDescription
+            throw error
+        }
+    }
+
     func save(_ task: YouziTask) {
         capture { try store.update { $0.upsert(task) } }
     }

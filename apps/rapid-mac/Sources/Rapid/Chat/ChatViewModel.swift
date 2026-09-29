@@ -231,6 +231,7 @@ final class ChatViewModel {
 
     private(set) var isStreaming: Bool = false {
         didSet {
+            if isStreaming { memoryNavigation = nil; memoryStore?.ingestion.foregroundStarted() }
             // A turn just ended (stream finished, failed, or was stopped) —
             // snapshot the final exchange into history + disk. Covers every
             // completion path without hooking each one.
@@ -987,6 +988,9 @@ final class ChatViewModel {
     /// Delete a saved conversation. If it was the open one, drop to a fresh
     /// empty transcript.
     func deleteConversation(_ id: UUID) {
+        memoryStore?.ingestion.cancel(conversationID: id)
+        do { try memoryStore?.service.sourceConversationDeleted(id) }
+        catch { lastError = error.localizedDescription; return }
         // If deleting the OPEN conversation, tear down the live transcript
         // FIRST — otherwise the `isStreaming = false` below fires
         // persistActive() via didSet while the deleted messages + id are
@@ -1210,56 +1214,80 @@ final class ChatViewModel {
         return true
     }
 
-    /// Fires a detached background task to review the completed exchange
-    /// and upsert any durable facts into ``memoryStore``. Called from the
-    /// ``isStreaming`` didSet when a turn ends; never blocks the UI or
-    /// competes with an active stream because it runs on a separate task.
-    private func scheduleMemoryExtraction() {
-        guard !RemoteModelEndpoint.isRemote(lastTurnAlias ?? "") else { return }
-        guard let memoryStore, memoryStore.isEnabled else { return }
-        guard let alias = lastTurnAlias else { return }
-        guard messages.count >= 2 else { return }
-        let conversationID = activeConversationID
-        let turnMessages: [(role: String, content: String)] = messages
-            .filter { $0.role == .user || $0.role == .assistant }
-            .map { (role: $0.role.rawValue, content: $0.content) }
-        let baseURL = client.baseURL
-        let bearer = server?.activeBearer
-
-        Task { [weak self] in
-            // The network call hops off MainActor via URLSession's async
-            // implementation; we only return to the main actor for the
-            // store mutation below.
-            guard !Task.isCancelled else { return }
-            let extractor = MemoryExtractor(
-                baseURL: baseURL,
-                bearerToken: bearer
-            )
-            do {
-                let operations = try await extractor.extract(
-                    model: alias,
-                    messages: turnMessages
-                )
-                for operation in operations {
-                    switch operation {
-                    case .add(let content):
-                        memoryStore.upsert(content: content, conversationID: conversationID)
-                    case .remove(let content):
-                        let matching = memoryStore.entries.first {
-                            $0.content.localizedCaseInsensitiveContains(content)
-                                || content.localizedCaseInsensitiveContains($0.content)
-                        }
-                        if let match = matching {
-                            memoryStore.remove(id: match.id)
-                        }
-                    }
-                }
-            } catch {
-                // Memory extraction is best-effort; a failure here is
-                // invisible to the user and logged only if diagnostics
-                // capture it. The next completed turn gets another chance.
+    /// The app supplies all foreground lanes; the queue never loads a model.
+    func configureMemoryIngestion(isOtherWorkBusy: @escaping @MainActor () -> Bool) {
+        guard let memoryStore else { return }
+        memoryStore.ingestion.canRun = { [weak self, weak memoryStore] job in
+            guard let self, let memoryStore, memoryStore.isEnabled,
+                  !self.isStreaming, !isOtherWorkBusy(),
+                  !ProcessInfo.processInfo.isLowPowerModeEnabled,
+                  ProcessInfo.processInfo.thermalState == .nominal || ProcessInfo.processInfo.thermalState == .fair,
+                  let server = self.server, server.isModelResident(job.model),
+                  job.baseURL.port == server.activePort,
+                  ["127.0.0.1", "localhost", "::1", "[::1]"].contains(job.baseURL.host ?? "")
+            else { return false }
+            return memoryStore.canAutomaticallyCollect(job.source)
+        }
+        memoryStore.ingestion.process = { [weak self, weak memoryStore] job in
+            guard let self, let memoryStore, memoryStore.isEnabled else { throw CancellationError() }
+            let extractor = MemoryExtractor(baseURL: job.baseURL, bearerToken: self.server?.activeBearer)
+            let candidates = try await extractor.extractCandidates(model: job.model, source: job.source)
+            try Task.checkCancellation()
+            guard memoryStore.isEnabled, !self.isStreaming,
+                  memoryStore.ingestion.canRun(job), !memoryStore.ingestion.voiceIsOpen,
+                  memoryStore.service.scope(for: job.source.conversationID) == job.scope else {
+                throw CancellationError()
+            }
+            for candidate in candidates {
+                try memoryStore.service.propose(candidate, sources: [job.source], scope: job.scope)
             }
         }
+    }
+
+    private func scheduleMemoryExtraction() {
+        guard let memoryStore else { return }
+        memoryStore.ingestion.resumeWhenIdle()
+        guard memoryStore.isEnabled, let alias = lastTurnAlias,
+              !RemoteModelEndpoint.isRemote(alias),
+              messages.last?.role == .assistant, messages.last?.status == .complete,
+              lastError == nil, let message = messages.last(where: { $0.role == .user }),
+              !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let source = memorySource(for: message)
+        guard memoryStore.canAutomaticallyCollect(source) else { return }
+        memoryStore.ingestion.enqueue(.init(id: source.messageID, source: source,
+            scope: memoryStore.service.scope(for: activeConversationID), model: alias,
+            baseURL: client.baseURL))
+    }
+
+    func memorySource(for message: ChatMessage) -> YouziMemoryChatSource {
+        .init(conversationID: activeConversationID, messageID: message.id,
+              title: conversations.first(where: { $0.id == activeConversationID })?.title ?? "Chat",
+              text: String(message.content.prefix(MemoryExtractor.maximumMessageCharacters)),
+              createdAt: message.createdAt)
+    }
+
+    struct MemoryNavigation: Equatable {
+        let id = UUID()
+        let messageID: UUID
+    }
+    private(set) var memoryNavigation: MemoryNavigation?
+
+    /// Re-open the actual branch containing the cited message, not just its chat.
+    @discardableResult
+    func openMemorySource(conversationID: UUID, messageID: UUID?) -> Bool {
+        guard !isStreaming, conversations.contains(where: { $0.id == conversationID }) else { return false }
+        if let messageID,
+           conversations.first(where: { $0.id == conversationID })?.allMessages.contains(where: { $0.id == messageID }) != true {
+            return false
+        }
+        selectConversation(conversationID)
+        if let messageID {
+            let tree = liveTree()
+            let leaf = MessageTree.deepestLeaf(from: messageID, in: tree, preferring: branchChoices)
+            adoptTree(tree, activeLeafID: leaf)
+            memoryNavigation = MemoryNavigation(messageID: messageID)
+        } else { memoryNavigation = nil }
+        return true
     }
 
     /// Append the user message, open a placeholder assistant row, and
@@ -1347,7 +1375,9 @@ final class ChatViewModel {
         let globalInstruction = customInstructions.global
         let personalizationContext = customInstructions.personalizationContext
         let chatInstruction = conversationInstructions
-        let memoryContext = memoryStore?.formattedForPrompt()
+        let memoryContext = RemoteModelEndpoint.isRemote(alias) ? nil : memoryStore?.formattedForPrompt(
+            query: messages.last(where: { $0.role == .user })?.content ?? "",
+            conversationID: activeConversationID)
         inflight = Task { [weak self] in
             guard let self else { return }
 
@@ -2300,11 +2330,15 @@ final class ChatViewModel {
         let doomed = MessageTree.subtree(of: id, in: tree)
         let remaining = tree.filter { !doomed.contains($0.id) }
         guard !remaining.isEmpty else {
-            // Deleting the root clears the conversation rather than leaving
-            // an empty row behind.
-            deleteConversation(activeConversationID)
-            return true
+            // One conversation-level purge is enough for the entire root.
+            // Preserve the source and report failure if that commit fails.
+            let conversationID = activeConversationID
+            deleteConversation(conversationID)
+            return activeConversationID != conversationID
         }
+        memoryStore?.ingestion.cancel(conversationID: activeConversationID)
+        do { try memoryStore?.service.sourceMessagesDeleted(doomed) }
+        catch { lastError = error.localizedDescription; return false }
         // Land on the branch nearest the deletion — the parent's newest
         // surviving continuation — instead of jumping to an unrelated one.
         let parentID = tree.first(where: { $0.id == id })?.parentID
