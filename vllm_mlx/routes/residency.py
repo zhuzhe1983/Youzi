@@ -72,7 +72,9 @@ class ModelLoadingPolicy(BaseModel):
 @router.put("/v1/service/model-policy")
 async def update_model_policy(policy: ModelLoadingPolicy):
     """Authenticated policy-only update: no load, unload, download or key changes."""
-    get_config().automatic_model_pool = {key: list(values) for key, values in policy.automatic.items()}
+    get_config().automatic_model_pool = {
+        key: list(values) for key, values in policy.automatic.items()
+    }
     return policy.model_dump()
 
 

@@ -1419,9 +1419,7 @@ async def delete_video(video_id: str, pending_only: bool = False):
         # Check under the same state lock as generation transitions so cleanup
         # never turns into deletion of a completed/failed result.
         if pending_only and job is not None and job.status != "queued":
-            raise HTTPException(
-                status_code=409, detail="video job is no longer queued"
-            )
+            raise HTTPException(status_code=409, detail="video job is no longer queued")
         if job is not None and job.status == "in_progress":
             raise HTTPException(
                 status_code=409, detail="video generation is in progress"

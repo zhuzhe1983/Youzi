@@ -974,7 +974,9 @@ async def create_response(request: Request):
     if responses_request.model == "":
         _validate_model_name(responses_request.model)
     responses_request.model = resolve_request_model(responses_request.model, "chat")
-    if policy_enabled() or not (responses_request.model or "").startswith(("claude-", "gpt-")):
+    if policy_enabled() or not (responses_request.model or "").startswith(
+        ("claude-", "gpt-")
+    ):
         _validate_model_name(responses_request.model)
     engine = get_engine(responses_request.model)
 

@@ -183,8 +183,13 @@ class AudioWorkerDispatcher:
             state.active_requests = max(0, state.active_requests - 1)
             state.last_used_at = now
             if error is None:
-                state.state = ("busy" if state.active_requests else
-                               "registered" if operation == "unload" else "resident")
+                state.state = (
+                    "busy"
+                    if state.active_requests
+                    else "registered"
+                    if operation == "unload"
+                    else "resident"
+                )
                 state.last_error = None
                 if operation == "load":
                     state.loaded_at = now
@@ -308,6 +313,7 @@ class AudioWorkerDispatcher:
                 if iterator is not None:
                     close = getattr(iterator, "close", None)
                     if close is not None:
+
                         def close_owned():
                             nonlocal error
                             try:
@@ -317,6 +323,7 @@ class AudioWorkerDispatcher:
                                 # cancellation discards execute()'s exception.
                                 error = exc
                                 raise
+
                         await self.execute(lane, model, "infer", close_owned)
             except (GeneratorExit, asyncio.CancelledError):
                 raise

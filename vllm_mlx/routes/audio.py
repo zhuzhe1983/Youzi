@@ -2365,7 +2365,9 @@ async def create_transcription(
     else:
         from ..runtime.model_loading_policy import resolve_request_model
 
-        model = resolve_request_model(model_merged if model_provided else None, "transcription")
+        model = resolve_request_model(
+            model_merged if model_provided else None, "transcription"
+        )
         if model is None:
             model = DEFAULT_STT_ALIAS
 
@@ -2496,11 +2498,7 @@ async def create_translation(
     with a 400 ``invalid_model_for_translation`` so callers get a
     distinct, actionable error instead of mislabeled output.
     """
-    model = (
-        model_form
-        if model_form is not None
-        else model_query
-    )
+    model = model_form if model_form is not None else model_query
     response_format = (
         response_format_form
         if response_format_form is not None
@@ -3118,9 +3116,11 @@ async def _stream_speech_pcm(model_name, input_text, gen_kwargs, interval):
         if engine is None:
             raise RuntimeError("TTS model did not finish loading")
         iterator = audio_worker.iterate(
-            "tts", model_name,
-            lambda: engine.stream_generate(input_text, streaming_interval=interval,
-                                           **gen_kwargs),
+            "tts",
+            model_name,
+            lambda: engine.stream_generate(
+                input_text, streaming_interval=interval, **gen_kwargs
+            ),
         )
         try:
             async for audio in iterator:
@@ -3192,7 +3192,9 @@ async def create_speech(request: AudioSpeechRequest = Body(...)):
     # ``_resolve_tts_model(None)`` to :func:`_served_tts_default`.
     from ..runtime.model_loading_policy import resolve_request_model
 
-    model = resolve_request_model(request.model if "model" in request.model_fields_set else None, "speech")
+    model = resolve_request_model(
+        request.model if "model" in request.model_fields_set else None, "speech"
+    )
     input_text = request.input
     voice = request.voice
     speed = request.speed
@@ -3477,17 +3479,29 @@ async def create_speech(request: AudioSpeechRequest = Body(...)):
             # Refuse unsupported formats/families explicitly, never claim a
             # one-shot waveform is a real streaming backend. Resampling a
             # chunk independently would introduce discontinuities at joins.
-            if (response_format != "pcm" or sample_rate not in (None, 24000)
-                    or channels not in (None, 1) or ref_bytes is not None
-                    or not is_qwen3_tts_model(model_name) or len(input_text) > 4096):
-                raise HTTPException(status_code=400, detail={"error": {
-                    "message": "Streaming requires reference-free Qwen3-TTS, "
-                               "response_format=pcm, 24000 Hz mono, and input <=4096 characters",
-                    "type": "invalid_request_error", "code": "unsupported_speech_stream",
-                    "param": "stream",
-                }})
-            source = _stream_speech_pcm(model_name, input_text, gen_kwargs,
-                                        request.streaming_interval)
+            if (
+                response_format != "pcm"
+                or sample_rate not in (None, 24000)
+                or channels not in (None, 1)
+                or ref_bytes is not None
+                or not is_qwen3_tts_model(model_name)
+                or len(input_text) > 4096
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": {
+                            "message": "Streaming requires reference-free Qwen3-TTS, "
+                            "response_format=pcm, 24000 Hz mono, and input <=4096 characters",
+                            "type": "invalid_request_error",
+                            "code": "unsupported_speech_stream",
+                            "param": "stream",
+                        }
+                    },
+                )
+            source = _stream_speech_pcm(
+                model_name, input_text, gen_kwargs, request.streaming_interval
+            )
             try:
                 first = await anext(source)
                 return PCMStreamingResponse(source, first)

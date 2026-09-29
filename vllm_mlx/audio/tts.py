@@ -987,8 +987,14 @@ class TTSEngine:
             raise ValueError("streaming_interval must be between 0.08 and 1 second")
         if voice_seed is not None and not self._is_qwen3_voicedesign():
             raise ValueError("voice_seed is supported only by Qwen3-TTS VoiceDesign")
-        kwargs = dict(text=text, voice=voice, speed=speed, lang_code="auto",
-                      stream=True, streaming_interval=streaming_interval)
+        kwargs = dict(
+            text=text,
+            voice=voice,
+            speed=speed,
+            lang_code="auto",
+            stream=True,
+            streaming_interval=streaming_interval,
+        )
         if self._is_qwen3_voicedesign():
             kwargs["instruct"] = instruct or QWEN3_TTS_VOICEDESIGN_DEFAULT_INSTRUCT
         elif instruct:
@@ -999,14 +1005,19 @@ class TTSEngine:
                 for result in results:
                     # Materialize on the owning worker; no lazy MLX arrays may
                     # escape into the ASGI event loop or a different thread.
-                    audio = np.asarray(result.audio, dtype=np.float32).reshape(-1).copy()
+                    audio = (
+                        np.asarray(result.audio, dtype=np.float32).reshape(-1).copy()
+                    )
                     if not audio.size:
                         continue
                     if not np.isfinite(audio).all():
                         raise ValueError("TTS returned nonfinite audio")
                     sample_rate = int(getattr(result, "sample_rate", 24000))
-                    yield AudioOutput(audio=audio, sample_rate=sample_rate,
-                                      duration=len(audio) / sample_rate)
+                    yield AudioOutput(
+                        audio=audio,
+                        sample_rate=sample_rate,
+                        duration=len(audio) / sample_rate,
+                    )
             finally:
                 close = getattr(results, "close", None)
                 if close is not None:

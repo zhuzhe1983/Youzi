@@ -88,7 +88,9 @@ class ImageEngine:
         """Blocking adapter boundary; route cancellation drains this entire call."""
         with self._worker_lock:
             if self._closed:
-                raise ImageRuntimeError("Image model has been stopped. Load it again before generating.")
+                raise ImageRuntimeError(
+                    "Image model has been stopped. Load it again before generating."
+                )
             if self._worker is None:
                 self._worker = concurrent.futures.ThreadPoolExecutor(
                     max_workers=1, thread_name_prefix="mlx-image"

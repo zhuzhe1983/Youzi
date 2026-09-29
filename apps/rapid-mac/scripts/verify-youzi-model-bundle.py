@@ -32,7 +32,9 @@ def main():
     assert Path(sys.executable).resolve().is_relative_to(root.parent / "python")
     assert sys.flags.safe_path, "Use -P to exclude the source checkout from sys.path"
     assert os.environ.get("RAPID_DESKTOP_NO_PORT_SWEEP") == "1"
-    assert all(Path(p).resolve().is_relative_to(root.parent) for p in sys.path), sys.path
+    assert all(Path(p).resolve().is_relative_to(root.parent) for p in sys.path), (
+        sys.path
+    )
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
@@ -62,7 +64,9 @@ def main():
         assert path.is_relative_to(root), (name, path)
         if name != "vllm_mlx":
             assert path.suffix == ".pyc", (name, path)
-    assert all(Path(p).resolve().is_relative_to(root.parent) for p in sys.path), sys.path
+    assert all(Path(p).resolve().is_relative_to(root.parent) for p in sys.path), (
+        sys.path
+    )
 
     cfg = get_config()
     cfg.api_key = "ephemeral-bundle-probe"
@@ -73,9 +77,14 @@ def main():
         engine = SimpleNamespace(
             is_image_gen=False, is_video_gen=False, model_name=name
         )
-        registry.add(ModelEntry(
-            engine=engine, model_name=name, model_path=f"local/{name}", aliases=[name]
-        ))
+        registry.add(
+            ModelEntry(
+                engine=engine,
+                model_name=name,
+                model_path=f"local/{name}",
+                aliases=[name],
+            )
+        )
     cfg.model_registry = registry
     cfg.engine = registry.get_engine("primary")
     cfg.model_name = "primary"
@@ -99,7 +108,8 @@ def main():
         "/v1/completions": {"prompt": "hello"},
         "/v1/responses": {"input": "hello"},
         "/v1/messages": {
-            "messages": [{"role": "user", "content": "hello"}], "max_tokens": 4
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 4,
         },
         "/v1/messages/count_tokens": {
             "messages": [{"role": "user", "content": "hello"}]
@@ -120,27 +130,39 @@ def main():
         assert r.status_code == 401, r.text
         r = client.put(
             "/v1/service/model-policy",
-            json={"automatic": {"chat": ["primary"]}}, headers=headers,
+            json={"automatic": {"chat": ["primary"]}},
+            headers=headers,
         )
         assert r.status_code == 200, r.text
         assert resolve_request_model("default", "chat") == "primary"
         assert registry.list_model_names() == ["primary", "preferred"]
-        print(json.dumps({
-            "imports": len(modules), "text_routes": len(requests),
-            "exact_and_automatic": "passed", "authenticated_live_policy": "passed",
-            "weights_loaded": False,
-        }))
+        print(
+            json.dumps(
+                {
+                    "imports": len(modules),
+                    "text_routes": len(requests),
+                    "exact_and_automatic": "passed",
+                    "authenticated_live_policy": "passed",
+                    "weights_loaded": False,
+                }
+            )
+        )
 
         video_engine = SimpleNamespace(
             is_image_gen=False, is_video_gen=True, model_name="video-explicit"
         )
-        registry.add(ModelEntry(
-            engine=video_engine, model_name="video-explicit",
-            model_path="local/video-explicit", aliases=["video-explicit"],
-        ))
+        registry.add(
+            ModelEntry(
+                engine=video_engine,
+                model_name="video-explicit",
+                model_path="local/video-explicit",
+                aliases=["video-explicit"],
+            )
+        )
         cfg.automatic_model_pool["video"] = []
         r = client.get(
-            "/v1/videos/capabilities", params={"model": "video-explicit"},
+            "/v1/videos/capabilities",
+            params={"model": "video-explicit"},
             headers=headers,
         )
         assert r.status_code == 200 and r.json()["model"] == "video-explicit", r.text
@@ -148,10 +170,15 @@ def main():
         assert r.status_code == 409, r.text
         assert cfg.automatic_model_pool["video"] == []
         assert cfg.engine.model_name == "primary"
-        print(json.dumps({
-            "explicit_video_capabilities": "passed",
-            "empty_video_pool": "rejected_without_load", "primary_chat": "preserved",
-        }))
+        print(
+            json.dumps(
+                {
+                    "explicit_video_capabilities": "passed",
+                    "empty_video_pool": "rejected_without_load",
+                    "primary_chat": "preserved",
+                }
+            )
+        )
 
     # Exercise form/HTTP parsing and completed-job cancellation against the
     # bundled bytecode, but never construct an actual inference engine.
@@ -164,10 +191,14 @@ def main():
             output_path.write_bytes(bytes([0, 0, 0, 20]) + b"ftypisom0000")
 
     fake = FakeEngine()
-    registry.add(ModelEntry(
-        engine=fake, model_name=fake.model_name, model_path=fake.model_name,
-        aliases=["ltx-2.3-mlx-q4"],
-    ))
+    registry.add(
+        ModelEntry(
+            engine=fake,
+            model_name=fake.model_name,
+            model_path=fake.model_name,
+            aliases=["ltx-2.3-mlx-q4"],
+        )
+    )
     video_app = FastAPI()
     video_app.include_router(video.router)
     with (
@@ -178,8 +209,11 @@ def main():
     ):
         for requested in ("ltx-2.3-mlx-q4", fake.model_name):
             payload = {
-                "prompt": "synthetic moon", "model": requested,
-                "seconds": "1", "size": "512x512", "seed": "42",
+                "prompt": "synthetic moon",
+                "model": requested,
+                "seconds": "1",
+                "size": "512x512",
+                "seed": "42",
             }
             r = client.post("/v1/videos", data=payload)
             assert r.status_code == 401, r.text
@@ -205,11 +239,17 @@ def main():
             assert r.status_code == 200 and r.json()["deleted"], r.text
     assert cfg.engine.model_name == "primary"
     assert cfg.automatic_model_pool["video"] == []
-    print(json.dumps({
-        "video_post_get_content": "passed", "alias_and_hf_identity": "preserved",
-        "completed_cancellation_race": "preserved", "primary_chat": "preserved",
-        "weights_loaded": False,
-    }))
+    print(
+        json.dumps(
+            {
+                "video_post_get_content": "passed",
+                "alias_and_hf_identity": "preserved",
+                "completed_cancellation_race": "preserved",
+                "primary_chat": "preserved",
+                "weights_loaded": False,
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -629,7 +629,9 @@ async def create_anthropic_message(
     if anthropic_request.model == "":
         _validate_model_name(anthropic_request.model)
     anthropic_request.model = resolve_request_model(anthropic_request.model, "chat")
-    if policy_enabled() or not (anthropic_request.model or "").startswith(("claude-", "gpt-")):
+    if policy_enabled() or not (anthropic_request.model or "").startswith(
+        ("claude-", "gpt-")
+    ):
         _validate_model_name(anthropic_request.model)
     engine = get_engine(anthropic_request.model)
 

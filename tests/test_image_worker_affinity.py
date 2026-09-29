@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Image model load/render/release must not follow asyncio's rotating workers."""
+
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -70,8 +71,12 @@ def test_mode_reload_stays_on_owner(lane):
     engine, events = lane
     # The real dual-mode adapter reuses this boundary for each variant.
     with ThreadPoolExecutor(max_workers=2) as callers:
-        callers.submit(partial(engine.ensure_resident, mode="generation")).result(timeout=5)
-        callers.submit(partial(engine.ensure_resident, mode="editing")).result(timeout=5)
+        callers.submit(partial(engine.ensure_resident, mode="generation")).result(
+            timeout=5
+        )
+        callers.submit(partial(engine.ensure_resident, mode="editing")).result(
+            timeout=5
+        )
     asyncio.run(engine.stop())
     assert [name for name, _ in events] == ["load", "release", "load", "release"]
     assert len({thread for _, thread in events}) == 1
@@ -88,7 +93,9 @@ async def test_canceled_route_drains_real_worker_and_remains_usable(lane, monkey
         return original(**kwargs)
 
     monkeypatch.setattr(engine._engine, "generate", slow)
-    request = asyncio.create_task(run_to_completion(partial(engine.generate, prompt="a red square")))
+    request = asyncio.create_task(
+        run_to_completion(partial(engine.generate, prompt="a red square"))
+    )
     try:
         assert await asyncio.to_thread(began.wait, 5)
         request.cancel()
@@ -100,7 +107,9 @@ async def test_canceled_route_drains_real_worker_and_remains_usable(lane, monkey
         finish.set()
     with pytest.raises(asyncio.CancelledError):
         await request
-    assert (await asyncio.to_thread(engine.generate, prompt="next image")).startswith(b"\x89PNG")
+    assert (await asyncio.to_thread(engine.generate, prompt="next image")).startswith(
+        b"\x89PNG"
+    )
 
 
 async def test_canceled_stop_does_not_release_weights_during_render(lane, monkeypatch):

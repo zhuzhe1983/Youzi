@@ -6,6 +6,7 @@ and extraction sources. Only the unrelated chat history shape and HTTP URL
 builder have minimal seams; no test invokes the transport. Full application
 integration still needs the regular SwiftPM test/build gate.
 """
+
 import os
 import subprocess
 import tempfile
@@ -51,13 +52,19 @@ def main() -> int:
         source_target.mkdir(parents=True)
         test_target.mkdir(parents=True)
         production = [
-            path for path in (SOURCES / "YouziDomain").glob("*.swift")
+            path
+            for path in (SOURCES / "YouziDomain").glob("*.swift")
             if path.name not in {"YouziTaskActions.swift", "YouziShareHistory.swift"}
         ]
-        production += [SOURCES / path for path in [
-            "Chat/MemoryStore.swift", "Chat/MemoryExtractor.swift",
-            "Chat/YouziMemoryIngestionQueue.swift", "Server/ApplicationSupportLocator.swift",
-        ]]
+        production += [
+            SOURCES / path
+            for path in [
+                "Chat/MemoryStore.swift",
+                "Chat/MemoryExtractor.swift",
+                "Chat/YouziMemoryIngestionQueue.swift",
+                "Server/ApplicationSupportLocator.swift",
+            ]
+        ]
         for path in production:
             (source_target / path.name).symlink_to(path)
         for name in TESTS:
@@ -65,7 +72,9 @@ def main() -> int:
         (package / "Package.swift").write_text(MANIFEST)
         (source_target / "IsolationSeams.swift").write_text(SEAMS)
         environment = dict(os.environ, RAPID_DESKTOP_NO_PORT_SWEEP="1")
-        return subprocess.run(["swift", "test", "--jobs", "4"], cwd=package, env=environment).returncode
+        return subprocess.run(
+            ["swift", "test", "--jobs", "4"], cwd=package, env=environment
+        ).returncode
 
 
 if __name__ == "__main__":

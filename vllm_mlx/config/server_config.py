@@ -222,7 +222,9 @@ class ServerConfig:
     # --- Multi-model ---
     model_registry: Any = None
     # None preserves standalone CLI compatibility; {} explicitly disables fallback.
-    automatic_model_pool: dict[str, list[str]] | None = field(default_factory=initial_pool)
+    automatic_model_pool: dict[str, list[str]] | None = field(
+        default_factory=initial_pool
+    )
 
     # --- KV cache dtype (R15 #300) ---
     # Stashed by the CLI right after :func:`resolve_kv_cache_dtype` so

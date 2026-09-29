@@ -52,7 +52,10 @@ def main() -> None:
 
     if actual != expected:
         raise SystemExit("Archive file set differs from the manifest")
-    if len(expected) != manifest["file_count"] or total_bytes != manifest["total_bytes"]:
+    if (
+        len(expected) != manifest["file_count"]
+        or total_bytes != manifest["total_bytes"]
+    ):
         raise SystemExit("Manifest totals do not match")
     print(f"Verified {len(expected)} exact files, {total_bytes} bytes; no symlinks")
 

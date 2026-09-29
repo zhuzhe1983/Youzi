@@ -22,8 +22,12 @@ def validate_pools(pools):
         if not isinstance(aliases, list) or len(aliases) > 128:
             raise ValueError("Invalid preferred model list")
         if any(
-            not isinstance(a, str) or not a or a != a.strip() or len(a) > 256
-            or a == "default" or any(ord(c) < 32 for c in a)
+            not isinstance(a, str)
+            or not a
+            or a != a.strip()
+            or len(a) > 256
+            or a == "default"
+            or any(ord(c) < 32 for c in a)
             for a in aliases
         ):
             raise ValueError("Preferred models must have explicit, nonempty aliases")
@@ -75,8 +79,10 @@ def is_ready(alias: str, scene: Scene) -> bool:
 
         lane = "stt" if scene == "transcription" else "tts"
         return any(
-            item["lane"] == lane and item["state"] in ("resident", "busy")
-            and isinstance(item["model"], str) and _same_model(alias, item["model"])
+            item["lane"] == lane
+            and item["state"] in ("resident", "busy")
+            and isinstance(item["model"], str)
+            and _same_model(alias, item["model"])
             for item in audio_worker.snapshot()
         )
     registry = getattr(cfg, "model_registry", None)
@@ -91,8 +97,13 @@ def is_ready(alias: str, scene: Scene) -> bool:
             return False
         engine = entry.engine
     else:
-        names = [getattr(cfg, key, None) for key in ("model_name", "model_alias", "model_path")]
-        if not any(isinstance(name, str) and _same_model(alias, name) for name in names):
+        names = [
+            getattr(cfg, key, None)
+            for key in ("model_name", "model_alias", "model_path")
+        ]
+        if not any(
+            isinstance(name, str) and _same_model(alias, name) for name in names
+        ):
             return False
         engine = getattr(cfg, "engine", None)
     if engine is None:
@@ -105,13 +116,22 @@ def is_ready(alias: str, scene: Scene) -> bool:
         return video
     from ..audio.registry import is_audio_name
 
-    return not image and not video and not is_audio_name(alias) and not any(
-        getattr(engine, flag, False) is True for flag in ("is_audio", "is_embedding", "is_reranker")
+    return (
+        not image
+        and not video
+        and not is_audio_name(alias)
+        and not any(
+            getattr(engine, flag, False) is True
+            for flag in ("is_audio", "is_embedding", "is_reranker")
+        )
     )
 
 
 def resolve_request_model(
-    requested: str | None, scene: Scene, *, require_explicit_ready: bool = True,
+    requested: str | None,
+    scene: Scene,
+    *,
+    require_explicit_ready: bool = True,
 ) -> str | None:
     """Reuse ready pool members in saved order; explicit requests never substitute.
 
@@ -136,16 +156,21 @@ def resolve_request_model(
     message = (
         "No preferred model is ready for this scene. "
         "Configure/load a downloaded model in Youzi Model Settings."
-        if automatic else
-        "The requested model is not ready for this scene. Load that exact model "
+        if automatic
+        else "The requested model is not ready for this scene. Load that exact model "
         "in Youzi Model Settings or the authenticated model-load API."
     )
-    raise HTTPException(status_code=409, detail={"error": {
-        "message": message,
-        "type": "invalid_request_error",
-        "code": "automatic_model_not_ready" if automatic else "model_not_ready",
-        "param": "model",
-    }})
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": {
+                "message": message,
+                "type": "invalid_request_error",
+                "code": "automatic_model_not_ready" if automatic else "model_not_ready",
+                "param": "model",
+            }
+        },
+    )
 
 
 def reported_model_name(requested: str, configured: str | None) -> str:

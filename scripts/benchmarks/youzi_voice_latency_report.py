@@ -2,6 +2,7 @@
 No invented timings. WAV is synthesized PCM replay, not acoustic capture.
 Usage: python youzi_voice_latency_report.py /tmp/youzi-voice-latency
 """
+
 import base64
 import io
 import json
@@ -12,53 +13,80 @@ from pathlib import Path
 
 def validate_run(run):
     """Reject invented/missing/causally impossible playback milestones."""
-    events = run['events']
+    events = run["events"]
+
     def at(name, segment=None):
-        found = [e['seconds'] for e in events if e['event'] == name
-                 and (segment is None or e.get('segment') == segment)]
+        found = [
+            e["seconds"]
+            for e in events
+            if e["event"] == name and (segment is None or e.get("segment") == segment)
+        ]
         if not found:
-            raise ValueError(f'Missing {name} segment={segment}')
+            raise ValueError(f"Missing {name} segment={segment}")
         return found[0]
-    if not (0 <= at('llm_request') <= at('first_text') <= at('llm_done')):
-        raise ValueError('Invalid LLM event ordering')
-    for segment in range(1, run['sentence_count'] + 1):
-        ordered = [at(n, segment) for n in ('sentence_ready', 'tts_request', 'first_pcm_byte',
-                   'pcm_enqueued', 'first_nonsilent_render', 'playback_drained')]
+
+    if not (0 <= at("llm_request") <= at("first_text") <= at("llm_done")):
+        raise ValueError("Invalid LLM event ordering")
+    for segment in range(1, run["sentence_count"] + 1):
+        ordered = [
+            at(n, segment)
+            for n in (
+                "sentence_ready",
+                "tts_request",
+                "first_pcm_byte",
+                "pcm_enqueued",
+                "first_nonsilent_render",
+                "playback_drained",
+            )
+        ]
         if ordered != sorted(ordered):
-            raise ValueError(f'Invalid output/tap ordering segment={segment}')
-        if run.get('tts_transport_mode') == 'buffered_legacy' and at('tts_eof', segment) > at('pcm_enqueued', segment):
-            raise ValueError('Legacy buffered measurement must receive all PCM before enqueue')
-        if segment > 1 and at('tts_request', segment) < at('playback_drained', segment - 1):
-            raise ValueError('Probe does not follow serial sentence playback policy')
+            raise ValueError(f"Invalid output/tap ordering segment={segment}")
+        if run.get("tts_transport_mode") == "buffered_legacy" and at(
+            "tts_eof", segment
+        ) > at("pcm_enqueued", segment):
+            raise ValueError(
+                "Legacy buffered measurement must receive all PCM before enqueue"
+            )
+        if segment > 1 and at("tts_request", segment) < at(
+            "playback_drained", segment - 1
+        ):
+            raise ValueError("Probe does not follow serial sentence playback policy")
 
 
 def collect(folder):
     runs = []
-    for path in sorted(folder.glob('run-*/results.json')):
+    for path in sorted(folder.glob("run-*/results.json")):
         run = json.loads(path.read_text())
-        run['artifact'] = str(path)
+        run["artifact"] = str(path)
         parts = []
-        for pcm in sorted(path.parent.glob('sentence-*.pcm'), key=lambda p: int(p.stem.split('-')[1])):
+        for pcm in sorted(
+            path.parent.glob("sentence-*.pcm"), key=lambda p: int(p.stem.split("-")[1])
+        ):
             parts.append(pcm.read_bytes())
-        if parts and run.get('status') == 'completed':
+        if parts and run.get("status") == "completed":
             out = io.BytesIO()
-            with wave.open(out, 'wb') as wav:
+            with wave.open(out, "wb") as wav:
                 wav.setnchannels(1)
                 wav.setsampwidth(2)
                 wav.setframerate(24000)
-                wav.writeframes(b''.join(parts))
-            path.with_name('reply.wav').write_bytes(out.getvalue())
-            run['audio_data_uri'] = 'data:audio/wav;base64,' + base64.b64encode(out.getvalue()).decode()
-        if run.get('status') == 'completed':
+                wav.writeframes(b"".join(parts))
+            path.with_name("reply.wav").write_bytes(out.getvalue())
+            run["audio_data_uri"] = (
+                "data:audio/wav;base64," + base64.b64encode(out.getvalue()).decode()
+            )
+        if run.get("status") == "completed":
             validate_run(run)
         runs.append(run)
-    preload = folder / 'preload.json'
-    evidence = folder / 'runtime-evidence.json'
-    return {'runs': runs, 'preload': json.loads(preload.read_text()) if preload.exists() else None,
-            'runtime': json.loads(evidence.read_text()) if evidence.exists() else None}
+    preload = folder / "preload.json"
+    evidence = folder / "runtime-evidence.json"
+    return {
+        "runs": runs,
+        "preload": json.loads(preload.read_text()) if preload.exists() else None,
+        "runtime": json.loads(evidence.read_text()) if evidence.exists() else None,
+    }
 
 
-TEMPLATE = r'''<!doctype html>
+TEMPLATE = r"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>柚子 · 语音链路实测</title><link rel="icon" href="data:,">
 <style>
@@ -130,18 +158,23 @@ $('zoom').textContent=zoom?'查看完整时间线':'聚焦首句';
 }
 $('download').onclick=()=>{const clean={...data,runs:data.runs.map(({audio_data_uri,...r})=>r)},blob=new Blob([JSON.stringify(clean,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='youzi-voice-latency-events.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)};
 render();
-</script></body></html>'''
+</script></body></html>"""
 
 
 def make_report(folder):
     data = collect(folder)
-    if not data['runs']:
-        raise ValueError('No actual probe results; refusing to fabricate a report')
-    payload = json.dumps(data, ensure_ascii=False).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
-    out = folder / 'index.html'
-    out.write_text(TEMPLATE.replace('__DATA__', payload))
+    if not data["runs"]:
+        raise ValueError("No actual probe results; refusing to fabricate a report")
+    payload = (
+        json.dumps(data, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+    out = folder / "index.html"
+    out.write_text(TEMPLATE.replace("__DATA__", payload))
     return out
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print(make_report(Path(sys.argv[1])))
