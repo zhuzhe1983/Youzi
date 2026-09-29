@@ -134,12 +134,20 @@ def _mount_audio_app() -> tuple[TestClient, callable]:
     return TestClient(app), _restore
 
 
-def _mount_models_app() -> tuple[TestClient, callable]:
-    """Mount the models router on a bare FastAPI app, bypassing auth."""
+def _mount_models_app(monkeypatch, *, enable_audio=True) -> tuple[TestClient, callable]:
+    """Mount an isolated server app with explicit audio registration state."""
+    from vllm_mlx import server
     from vllm_mlx.config import get_config
     from vllm_mlx.routes import models as models_route
+    from vllm_mlx.routes.audio import register_audio_routes
 
     app = FastAPI()
+    # Model discovery inspects server.app's canonical registration sentinel.
+    # A separate bare models app otherwise depends on earlier tests having
+    # mounted audio on the process-global app, and fails in isolation.
+    monkeypatch.setattr(server, "app", app)
+    if enable_audio:
+        register_audio_routes(app)
     app.include_router(models_route.router)
     cfg = get_config()
     # Capability checks require a loaded engine; restore every changed field.
@@ -1049,17 +1057,18 @@ class TestDeepProbeSurfacesDegradedLane:
         assert status["status"] == "ok", status
         assert status["reason"] is None
 
+    @pytest.mark.parametrize("enable_audio", [False, True])
     def test_models_endpoint_surfaces_lane_status(
-        self, monkeypatch, _reset_audio_probe
+        self, monkeypatch, _reset_audio_probe, enable_audio
     ):
         """/v1/models entries carry ``audio_lanes`` once the deep probe
-        has recorded a verdict — pre-fix this was invisible."""
+        has recorded a verdict and the canonical routes are mounted."""
         from vllm_mlx.audio import probe
 
         probe._record_lane_status("stt", "degraded", "simulated")
         probe._record_lane_status("tts", "ok", None)
 
-        client, restore = _mount_models_app()
+        client, restore = _mount_models_app(monkeypatch, enable_audio=enable_audio)
         try:
             r = client.get("/v1/models")
         finally:
@@ -1070,14 +1079,15 @@ class TestDeepProbeSurfacesDegradedLane:
         assert body["data"], body
         entry = body["data"][0]
         assert "audio_lanes" in entry, entry
-        assert entry["audio_lanes"] == {"stt": "degraded", "tts": "ok"}, entry
+        expected = {"stt": "degraded", "tts": "ok"} if enable_audio else None
+        assert entry["audio_lanes"] == expected, entry
 
     def test_models_endpoint_omits_lane_status_when_probe_never_ran(
-        self, _reset_audio_probe
+        self, monkeypatch, _reset_audio_probe
     ):
         """When the deep probe is disabled (default), the field is
         ``None`` so the wire shape is unchanged for existing clients."""
-        client, restore = _mount_models_app()
+        client, restore = _mount_models_app(monkeypatch)
         try:
             r = client.get("/v1/models")
         finally:
