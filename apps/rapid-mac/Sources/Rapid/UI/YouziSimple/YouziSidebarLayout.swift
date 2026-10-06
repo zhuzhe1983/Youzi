@@ -39,9 +39,8 @@ struct YouziSidebarSection<Rows: View>: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(minHeight: metrics.bodyHeight, alignment: .topLeading)
                 } else {
-                    ScrollView(.vertical) { rows() }
+                    YouziSidebarScrollView { rows() }
                         .frame(height: metrics.listHeight)
-                        .modifier(YouziHoverScrollIndicators())
                         .accessibilityIdentifier("\(id).List")
                         .frame(height: metrics.bodyHeight, alignment: .topLeading)
                 }
@@ -78,18 +77,6 @@ struct YouziSidebarSection<Rows: View>: View {
             .background(RapidTheme.surfaceSidebar)
             .accessibilityIdentifier("\(id).Header")
         }
-    }
-}
-
-/// Each sidebar viewport reveals its own native indicators on hover. Hidden
-/// indicators keep their layout space, so rows do not shift when the pointer enters.
-struct YouziHoverScrollIndicators: ViewModifier {
-    @State private var hovering = false
-
-    func body(content: Content) -> some View {
-        content
-            .scrollIndicators(hovering ? .visible : .hidden, axes: .vertical)
-            .onHover { hovering = $0 }
     }
 }
 

@@ -101,7 +101,7 @@ struct YouziSimpleShell: View {
                 .padding(.bottom, metrics.gap)
 
                 ScrollViewReader { scroll in
-                    ScrollView(.vertical) {
+                    YouziSidebarScrollView {
                         LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                             YouziSidebarSection(
                                 title: i18n.text(zh: "任务", en: "Tasks"),
@@ -131,7 +131,6 @@ struct YouziSimpleShell: View {
                         }
                         .padding(.horizontal, RapidTheme.Space.sm)
                     }
-                    .modifier(YouziHoverScrollIndicators())
                     .accessibilityIdentifier("YouziSimple.Sidebar.Collections")
                     .onChange(of: isRecentTasksExpanded) { _, expanded in
                         if !expanded { scroll.scrollTo("tasks", anchor: .top) }
