@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 @testable import Rapid
 
@@ -88,5 +89,35 @@ import Testing
         fixture.coordinator.detach()
         try await Task.sleep(for: .milliseconds(1400))
         #expect(!scroller.isHidden && scroller.alphaValue == 1)
+    }
+
+    @Test("The production SwiftUI wrapper actually attaches to its native viewport")
+    func swiftUIAttachment() async throws {
+        _ = NSApplication.shared
+        let host = NSHostingView(rootView: YouziSidebarScrollView {
+            VStack(alignment: .leading) {
+                ForEach(0..<30) { Text("Synthetic row \($0)").frame(height: 30) }
+            }
+        }.frame(width: 220, height: 140))
+        let window = NSWindow(contentRect: NSRect(x: 10000, y: 10000, width: 220, height: 140),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+        try await Task.sleep(for: .milliseconds(250))
+        host.layoutSubtreeIfNeeded()
+        func viewport(in view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView { return scroll }
+            return view.subviews.lazy.compactMap { viewport(in: $0) }.first
+        }
+        let scroll = try #require(viewport(in: host))
+        let scroller = try #require(scroll.verticalScroller)
+        #expect(scroller.isHidden && scroller.alphaValue == 0)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 80))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        #expect(scroller.alphaValue == 1)
+        try await Task.sleep(for: .milliseconds(1400))
+        #expect(scroller.isHidden && scroller.alphaValue == 0)
     }
 }

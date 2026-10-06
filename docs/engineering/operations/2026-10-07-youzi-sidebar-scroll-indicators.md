@@ -28,8 +28,14 @@ is required. The source is compatible with the macOS 14 target.
 Verification: four native AppKit regression journeys passed in an isolated package
 using the production probe: idle/hover with stable content frame; scrolling from
 hidden state and deadline refresh; nested independence and persistent hover;
-detachment with cancellation. Full release desktop regression and visible-window
-acceptance are pending at this checkpoint. Existing About Me tests use isolated
+detachment with cancellation. Release desktop regression passed 27 tests in six suites. An additional isolated
+SwiftUI-hosting journey proves that the production wrapper attaches to the actual
+native viewport and follows its idle/scroll visibility. Visible user-window
+acceptance remains pending at this checkpoint: the preview main thread is blocked
+in `SecItemCopyMatching` while macOS SecurityAgent waits on Keychain confirmation.
+The automation provider forbids controlling SecurityAgent for safety reasons; the
+user must handle that OS confirmation. No password or Keychain ACL is changed by
+this task. Existing About Me tests use isolated
 fixtures; no real memory fact is confirmed or saved for acceptance.
 
 Reproduce the scoped desktop verification with:
