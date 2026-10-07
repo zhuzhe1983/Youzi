@@ -187,12 +187,12 @@ struct YouziSimpleTaskView: View {
 
     private var welcome: some View {
         YouziCenteredWelcome {
-            VStack(spacing: RapidTheme.Space.xl) {
-                YouziLogo(size: 80)
+            VStack(spacing: RapidTheme.Space.xxl) {
+                YouziLogo(size: 48)
 
                 VStack(spacing: RapidTheme.Space.xs) {
                     Text(i18n.text(zh: "今天想让我帮你做什么？", en: "What would you like to do today?"))
-                        .font(RapidFont.displayTitle)
+                        .font(.system(size: max(20, round(28 * RapidFont.fontScale)), weight: .semibold))
                         .tracking(RapidFont.displayTitleTracking)
                         .multilineTextAlignment(.center)
                     Text(i18n.text(zh: "告诉柚子你想完成什么。你的内容会留在这台 Mac 上。", en: "Tell Youzi what you'd like to do. Your content stays on this Mac."))
@@ -202,7 +202,7 @@ struct YouziSimpleTaskView: View {
                 }
 
                 composer
-                    .frame(maxWidth: 680)
+                    .frame(maxWidth: 960)
 
             }
             .accessibilityIdentifier("YouziSimple.Welcome.Content")
@@ -326,7 +326,8 @@ struct YouziSimpleTaskView: View {
     }
 
     private var composer: some View {
-        VStack(spacing: RapidTheme.Space.sm) {
+        let contentWidth: CGFloat = chat.messages.isEmpty ? 960 : RapidTheme.Layout.contentMaxWidth
+        return VStack(spacing: RapidTheme.Space.sm) {
             if needsAttention {
                 HStack(spacing: RapidTheme.Space.sm) {
                     Image(systemName: "exclamationmark.circle")
@@ -338,11 +339,11 @@ struct YouziSimpleTaskView: View {
                 }
                 .font(RapidFont.secondary)
                 .foregroundStyle(RapidTheme.textSecondary)
-                .frame(maxWidth: RapidTheme.Layout.contentMaxWidth)
+                .frame(maxWidth: contentWidth)
             }
 
             YouziSimpleSkillBar(draft: $draft)
-                .frame(maxWidth: RapidTheme.Layout.contentMaxWidth)
+                .frame(maxWidth: contentWidth)
 
             VStack(spacing: RapidTheme.Space.sm) {
                 ComposeField(
@@ -508,7 +509,7 @@ struct YouziSimpleTaskView: View {
                 RoundedRectangle(cornerRadius: RapidTheme.Radius.input, style: .continuous)
                     .strokeBorder(RapidTheme.hairlineStrong, lineWidth: 1)
             )
-            .frame(maxWidth: RapidTheme.Layout.contentMaxWidth)
+            .frame(maxWidth: contentWidth)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, RapidTheme.Space.xl)

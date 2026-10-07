@@ -9,7 +9,7 @@ struct YouziSimpleWorkbenchTests {
         let source = try sourceFile("YouziSimpleShell.swift")
         let sidebar = try #require(source.components(separatedBy: "private var sidebar: some View {").last)
             .components(separatedBy: "private var brand: some View {")[0]
-        #expect(sidebar.components(separatedBy: "Divider()").count - 1 == 2)
+        #expect(sidebar.components(separatedBy: "Divider()").count - 1 == 1)
         #expect(sidebar.contains(".padding(.bottom, metrics.gap)"))
         #expect(sidebar.contains("bottomSpacing: metrics.gap"))
         #expect(sidebar.contains("pinnedViews: [.sectionHeaders]"))

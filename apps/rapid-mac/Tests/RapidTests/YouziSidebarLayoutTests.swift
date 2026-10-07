@@ -9,10 +9,14 @@ struct YouziSidebarLayoutTests {
     @MainActor func budgets(height: CGFloat) {
         for scale: CGFloat in [0.88, 1, 1.12, 1.25] {
             let m = YouziSidebarMetrics(height: height, scale: scale)
-            #expect((0...5).contains(m.visibleRows))
-            #expect(m.listHeight <= m.bodyHeight)
-            #expect(abs(m.brandHeight + m.footerHeight + 2 + m.sectionHeight + m.gap + m.listsHeight - height) < 0.01)
+            #expect((1...5).contains(m.visibleRows))
+            #expect(m.listHeight <= max(m.rowHeight, m.bodyHeight))
+            #expect(abs(m.brandHeight + m.footerHeight + 1 + m.navigationHeight + m.gap + m.listsHeight - height) < 0.01)
             #expect(m.footerHeight >= 44)
+            #expect(m.navigationHeight == YouziSidebarMetrics(height: 1800, scale: scale).navigationHeight)
+            #expect(m.brandHeight == YouziSidebarMetrics(height: 1800, scale: scale).brandHeight)
+            #expect(m.listHeight(rowCount: 1) == m.rowHeight)
+            #expect(m.listHeight(rowCount: 2) <= 2 * m.rowHeight + m.rowSpacing)
         }
         #expect(YouziSidebarMetrics(height: 600, scale: 1).visibleRows < 5)
         #expect(YouziSidebarMetrics(height: 1200, scale: 1).visibleRows == 5)
@@ -85,19 +89,19 @@ private struct SidebarLayoutFixture: View {
                 let m = YouziSidebarMetrics(height: proxy.size.height, scale: RapidFont.fontScale)
                 VStack(spacing: 0) {
                     Text("柚子").frame(height: m.brandHeight)
-                    Divider()
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: m.rowSpacing) {
                         ForEach(YouziSimpleDestination.primaryNavigation) { d in
                             Label(d.localizedTitle(isChinese: i18n.isChinese), systemImage: d.systemImage)
+                                .frame(height: m.navigationRowHeight)
                         }
-                    }.frame(height: m.sectionHeight).padding(.bottom, m.gap)
-                    ScrollView {
+                    }.frame(height: m.navigationHeight).padding(.bottom, m.gap)
+                    YouziSidebarScrollView {
                         LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                            YouziSidebarSection(title: i18n.text(zh: "任务", en: "Tasks"), id: "Tasks", metrics: m,
+                            YouziSidebarSection(title: i18n.text(zh: "任务", en: "Tasks"), id: "Tasks", metrics: m, rowCount: 22,
                                 expanded: $expanded, onMore: {}, bottomSpacing: m.gap) {
                                     rows("Task", m: m)
                                 }
-                            YouziSidebarSection(title: i18n.text(zh: "工作空间与项目", en: "Workspaces & Projects"), id: "Workspaces", metrics: m,
+                            YouziSidebarSection(title: i18n.text(zh: "工作空间与项目", en: "Workspaces & Projects"), id: "Workspaces", metrics: m, rowCount: 22,
                                 expanded: $workspacesExpanded, onMore: {}) { rows("Workspace", m: m) }
                         }.padding(.horizontal, 8)
                     }.frame(height: m.listsHeight)

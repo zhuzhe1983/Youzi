@@ -34,7 +34,7 @@ struct YouziSimpleShell: View {
         NavigationSplitView {
             sidebar
                 .background(RapidTheme.surfaceSidebar)
-                .navigationSplitViewColumnWidth(min: 210, ideal: 240, max: 280)
+                .navigationSplitViewColumnWidth(min: 240, ideal: 264, max: 320)
         } detail: {
             destination
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -87,7 +87,6 @@ struct YouziSimpleShell: View {
                 brand
                     .frame(height: metrics.brandHeight)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Divider()
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: RapidTheme.Space.xxs) {
                         ForEach(YouziSimpleDestination.primaryNavigation) { destination in
@@ -97,7 +96,7 @@ struct YouziSimpleShell: View {
                     .padding(.horizontal, RapidTheme.Space.sm)
                     .padding(.vertical, RapidTheme.Space.xs)
                 }
-                .frame(height: metrics.sectionHeight)
+                .frame(height: metrics.navigationHeight)
                 .padding(.bottom, metrics.gap)
 
                 ScrollViewReader { scroll in
@@ -105,7 +104,7 @@ struct YouziSimpleShell: View {
                         LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                             YouziSidebarSection(
                                 title: i18n.text(zh: "任务", en: "Tasks"),
-                                id: "YouziSimple.RecentTasks", metrics: metrics,
+                                id: "YouziSimple.RecentTasks", metrics: metrics, rowCount: recentTasks.count,
                                 expanded: $isRecentTasksExpanded,
                                 onMore: { selection = .tasks }, bottomSpacing: metrics.gap
                             ) { recentTaskRows }
@@ -113,6 +112,7 @@ struct YouziSimpleShell: View {
                             YouziSidebarSection(
                                 title: i18n.text(zh: "工作空间与项目", en: "Workspaces & Projects"),
                                 id: "YouziSimple.Workspaces", metrics: metrics,
+                                rowCount: activeWorkspaces.count + unplacedProjects.count + chat.folders.count,
                                 expanded: $isWorkspacesExpanded,
                                 onMore: { selection = .workspaces }
                             ) {
@@ -152,7 +152,7 @@ struct YouziSimpleShell: View {
 
     private var brand: some View {
         HStack(spacing: RapidTheme.Space.sm) {
-            YouziLogo(size: 26)
+            YouziLogo(size: 22)
             Text("柚子")
                 .font(RapidFont.windowTitle)
             Spacer(minLength: 0)
@@ -497,7 +497,7 @@ struct YouziSimpleShell: View {
             }
             .foregroundStyle(RapidTheme.textPrimary)
             .padding(.horizontal, RapidTheme.Space.sm)
-            .frame(minHeight: 44)
+            .frame(minHeight: YouziSidebarMetrics(height: 0, scale: RapidFont.fontScale).navigationRowHeight)
             .background(
                 RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
                     .fill(isSelected ? RapidTheme.selectionFill : .clear)
