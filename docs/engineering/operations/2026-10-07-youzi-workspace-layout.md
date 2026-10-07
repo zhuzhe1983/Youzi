@@ -51,7 +51,12 @@ homepage with both lists bounded and left the preview open for user review.
 The preview is in the integration checkout's ignored `apps/rapid-mac/build/`
 directory and does not require the source task worktree.
 
-The source and verification notes are ready for main integration. Once pushed
-and inclusion is verified, retire the task worktree through system Trash,
-preserve its branch, and save registration/recovery details in the local audit.
+Source and verification notes were fast-forwarded into main and pushed.
+Merge inclusion, clean status, and absence of open files were verified before
+moving `Youzi-workspace-layout-20261007` to system Trash. The task branch is
+preserved; only the integration checkout remains registered. Original/Trash
+paths, commit, registration backup, and recovery steps are in the local
+`.youzi-launch/20261007-workspace-layout/worktree-trash-record.json` audit.
+Restore the Trash directory and registration backup into their recorded vacant
+locations, then use `git worktree repair` and verify HEAD/status to recover it.
 This is a local preview, not a production release or deployment.
