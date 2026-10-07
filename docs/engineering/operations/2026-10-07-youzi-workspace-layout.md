@@ -38,5 +38,20 @@ and resources from the previously verified sidebar preview and replaces the
 newly built native binary, then checks a deep strict ad-hoc signature. No model
 inference or real memory writes are part of these UI checks.
 
-Validation and live review results will be recorded before delivery. This is a
-local preview, not a production release or deployment.
+Release verification passed: **25 tests in five suites**, including the six
+layout-rendering states and five native indicator tests. The first run used a
+stale compiled assertion for the removed brand divider; rebuilding the updated
+existing workbench test passed. No production change was needed after the native
+preview was assembled.
+
+Live preview `candidate-47a058a4` opened successfully. Checked both list
+expand/collapse controls, both More routes, the fixed account footer, the wider
+welcome composition, and visually absent idle scrollbar tracks. Restored the
+homepage with both lists bounded and left the preview open for user review.
+The preview is in the integration checkout's ignored `apps/rapid-mac/build/`
+directory and does not require the source task worktree.
+
+The source and verification notes are ready for main integration. Once pushed
+and inclusion is verified, retire the task worktree through system Trash,
+preserve its branch, and save registration/recovery details in the local audit.
+This is a local preview, not a production release or deployment.
