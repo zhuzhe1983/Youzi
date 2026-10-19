@@ -462,6 +462,7 @@ enum VideoClientError: Error, LocalizedError, Equatable {
 
 protocol VideoClientProtocol: Sendable {
     func retrieve(id: String, port: Int, bearer: String?) async throws -> VideoJob
+    func poll(_ job: VideoJob, port: Int, bearer: String?) async throws -> VideoJob
     func capabilities(model: String?, port: Int, bearer: String?) async throws -> VideoCapabilities
     func create(_ request: VideoCreateRequest, port: Int, bearer: String?) async throws -> VideoJob
     func list(port: Int, bearer: String?, limit: Int) async throws -> [VideoJob]
@@ -470,6 +471,9 @@ protocol VideoClientProtocol: Sendable {
 }
 
 extension VideoClientProtocol {
+    func poll(_ job: VideoJob, port: Int, bearer: String?) async throws -> VideoJob {
+        try await retrieve(id: job.id, port: port, bearer: bearer)
+    }
     func retrieve(id: String, port: Int, bearer: String?) async throws -> VideoJob {
         guard let job = try await list(port: port, bearer: bearer, limit: 100).first(where: { $0.id == id }) else { throw VideoClientError.invalidResponse }
         return job
@@ -527,6 +531,23 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
         var request = request(path: "v1/videos", port: port, bearer: bearer)
         request.httpMethod = "POST"
         request.timeoutInterval = Self.requestTimeout
+        if remoteEndpoint?.configuration.usesCLIProxyVideo == true {
+            // CLIProxyAPI's OpenAI compatibility route accepts JSON image URLs,
+            // but its multipart parser ignores uploaded input_reference files.
+            var body: [String: Any] = ["model": remoteEndpoint!.modelID, "prompt": value.prompt,
+                                       "seconds": value.seconds, "size": value.size]
+            if let reference = value.reference {
+                let mime = value.referenceMIMEType ?? "image/png"
+                guard !reference.isEmpty, reference.count <= Self.maxReferenceBytes,
+                      ["image/png", "image/jpeg", "image/webp"].contains(mime) else { throw RemoteModelError.invalidVideo }
+                body["input_reference"] = ["image_url": "data:\(mime);base64,\(reference.base64EncodedString())"]
+            }
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let job: VideoJob = try await decode(request)
+            guard Self.isValidJobID(job.id) else { throw VideoClientError.invalidJobID }
+            return job
+        }
         let boundary = "rapid-video-\(UUID().uuidString)"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.httpBody = Self.multipartBody(
@@ -552,6 +573,8 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
     }
 
     func list(port: Int, bearer: String?, limit: Int = 30) async throws -> [VideoJob] {
+        // CLIProxyAPI declares create/retrieve/content, but no history endpoint.
+        if remoteEndpoint?.configuration.usesCLIProxyVideo == true { return [] }
         var components = URLComponents(
             url: remoteEndpoint?.url("videos") ?? Self.loopbackURL(port: port).appendingPathComponent("v1/videos"),
             resolvingAgainstBaseURL: false
@@ -568,6 +591,7 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
     }
 
     func delete(id: String, port: Int, bearer: String?) async throws {
+        guard remoteEndpoint?.configuration.usesCLIProxyVideo != true else { throw RemoteModelError.unavailable }
         let cached = try cacheURL(for: id)
         var request = request(path: "v1/videos/\(id)", port: port, bearer: bearer)
         request.httpMethod = "DELETE"
@@ -713,7 +737,12 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
     }
 
     private func request(path: String, port: Int, bearer: String?) -> URLRequest {
-        var request = URLRequest(url: remoteEndpoint?.url(path) ?? Self.loopbackURL(port: port).appendingPathComponent(path))
+        let url: URL
+        if let endpoint = remoteEndpoint, endpoint.configuration.usesCLIProxyVideo {
+            let relative = path.hasPrefix("v1/") ? String(path.dropFirst(3)) : path
+            url = endpoint.baseURL.deletingLastPathComponent().appendingPathComponent("openai/v1").appendingPathComponent(relative)
+        } else { url = remoteEndpoint?.url(path) ?? Self.loopbackURL(port: port).appendingPathComponent(path) }
+        var request = URLRequest(url: url)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         applyBearer(&request, bearer)
         return request
@@ -764,7 +793,8 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
 
     private func cacheURL(for id: String) throws -> URL {
         if let remoteEndpoint {
-            let digest = SHA256.hash(data: Data((remoteEndpoint.configuration.id.uuidString + remoteEndpoint.baseURL.absoluteString).utf8)).map { String(format: "%02x", $0) }.joined()
+            let protocolSuffix = remoteEndpoint.configuration.usesCLIProxyVideo ? "/cliproxy-video" : ""
+            let digest = SHA256.hash(data: Data((remoteEndpoint.configuration.id.uuidString + remoteEndpoint.baseURL.absoluteString + protocolSuffix).utf8)).map { String(format: "%02x", $0) }.joined()
             return cacheDirectory.appendingPathComponent(digest + "-" + (try Self.cacheFileName(for: id)))
         }
         return cacheDirectory.appendingPathComponent(try Self.cacheFileName(for: id))
@@ -772,6 +802,28 @@ struct VideoClient: VideoClientProtocol, @unchecked Sendable {
 }
 
 extension VideoClient: YouziVideoToolClient {
+    func poll(_ job: VideoJob, port: Int, bearer: String?) async throws -> VideoJob {
+        guard remoteEndpoint?.configuration.usesCLIProxyVideo == true else {
+            return try await retrieve(id: job.id, port: port, bearer: bearer)
+        }
+        _ = try Self.cacheFileName(for: job.id)
+        let data = try await send(request(path: "v1/videos/\(job.id)", port: port, bearer: bearer))
+        guard let update = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              update["id"] as? String == job.id,
+              let status = update["status"] as? String, VideoJobStatus(rawValue: status) != nil,
+              var merged = try JSONSerialization.jsonObject(with: JSONEncoder().encode(job)) as? [String: Any]
+        else { throw VideoClientError.invalidResponse }
+        // Poll replies can omit creation metadata. Retain the actual submitted
+        // size/duration/time, rather than guessing from today's preset defaults.
+        for field in ["model", "prompt", "size", "created_at", "completed_at", "error", "status"] {
+            if let value = update[field], !(value is NSNull) { merged[field] = value }
+        }
+        if let seconds = update["seconds"] as? String { merged["seconds"] = seconds }
+        else if let seconds = update["seconds"] as? Int { merged["seconds"] = String(seconds) }
+        merged["progress"] = update["progress"] ?? (status == "completed" ? 100 : job.progress)
+        do { return try JSONDecoder().decode(VideoJob.self, from: JSONSerialization.data(withJSONObject: merged)) }
+        catch { throw VideoClientError.invalidResponse }
+    }
     /// Separate transport for conversational tools: no redirects, credentials
     /// cannot leave loopback, no shared cookies/cache, finite network timeouts.
     static let toolSession: URLSession = {

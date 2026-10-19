@@ -361,6 +361,72 @@ struct RemoteModelTests {
     }
 
     private var jobJSON: String { #"{"id":"video_fixture","model":"provider-video","prompt":null,"seconds":"4","size":"720x1280","status":"queued","progress":0,"created_at":1}"# }
+    @Test("CLIProxyAPI uses its explicit video compatibility route and preserves job metadata")
+    func cliProxyVideo() async throws {
+        var value = model(.video); value.modelID = "grok-imagine-video-1.5"
+        value.videoAPI = .cliProxyAPI; value.supportsVideoImageInput = true
+        value.baseURL = "https://provider.example/gateway/v1"
+        let endpoint = try RemoteModelEndpoint(configuration: value, apiKey: "fixture-video")
+        let transport = session(); defer { transport.invalidateAndCancel() }
+        var client = VideoClient(remoteEndpoint: endpoint); client.remoteSession = transport
+        RemoteFixtureProtocol.reset(jobJSON.replacingOccurrences(of: "provider-video", with: value.modelID))
+        let job = try await client.create(.init(prompt: "fixture", model: value.alias, seconds: 4, size: "720x1280", seed: 42,
+                                               reference: Data([1,2,3]), referenceFileName: "fixture.png", referenceMIMEType: "image/png"), port: 1, bearer: "local-only")
+        let sent = try #require(RemoteFixtureProtocol.records.last)
+        #expect(sent.request.url?.path == "/gateway/openai/v1/videos")
+        #expect(sent.request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-video")
+        #expect(sent.request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+        let body = try jsonBody()
+        #expect(body["seed"] == nil && body["model"] as? String == value.modelID)
+        #expect((body["input_reference"] as? [String: String])?["image_url"] == "data:image/png;base64,AQID")
+        let count = RemoteFixtureProtocol.records.count
+        #expect(try await client.list(port: 1, bearer: nil).isEmpty)
+        do { try await client.delete(id: job.id, port: 1, bearer: nil); Issue.record("Unsupported delete must not send") } catch {}
+        #expect(RemoteFixtureProtocol.records.count == count)
+        RemoteFixtureProtocol.reset(#"{"id":"video_fixture","model":"grok-imagine-video-1.5","status":"completed","seconds":4}"#)
+        let completed = try await client.poll(job, port: 1, bearer: nil)
+        #expect(completed.status == .completed && completed.progress == 100)
+        #expect(completed.size == job.size && completed.createdAt == job.createdAt && completed.seconds == job.seconds)
+        #expect(RemoteFixtureProtocol.records.last?.request.url?.path == "/gateway/openai/v1/videos/video_fixture")
+        RemoteFixtureProtocol.reset(#"{"id":"another_job","status":"completed"}"#)
+        do { _ = try await client.poll(job, port: 1, bearer: nil); Issue.record("Wrong job must fail") } catch {}
+        value.modelID = "MiniMax-H3"
+        #expect(throws: (any Error).self) { try value.validated() }
+        value.modelID = "grok-imagine-video-1.5-lite"
+        #expect(throws: (any Error).self) { try value.validated() }
+        value.modelID = "grok-imagine-video"; value.baseURL = "https://provider.example/custom"
+        #expect(throws: (any Error).self) { try value.validated() }
+        var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(model(.video))) as? [String: Any])
+        legacy.removeValue(forKey: "videoAPI")
+        #expect(try JSONDecoder().decode(RemoteModelConfiguration.self, from: JSONSerialization.data(withJSONObject: legacy)).videoAPI == nil)
+    }
+
+    @Test("CLIProxyAPI refresh retains session jobs without calling unavailable history/delete routes")
+    func cliProxySession() async throws {
+        let (settings, defaults, name, _) = fixture()
+        defer { defaults.removePersistentDomain(forName: name) }
+        var value = model(.video); value.modelID = "grok-imagine-video"; value.videoAPI = .cliProxyAPI
+        try settings.save(value, key: "fixture-video")
+        let server = ServerManager(testingState: .stopped, sessionDefaults: defaults); server.remoteModelSettings = settings
+        let transport = session(); defer { transport.invalidateAndCancel() }
+        let vm = VideoGenViewModel(server: server, generationDefaults: ModelGenerationDefaults(defaults: defaults), pollingInterval: .seconds(3600), catalogLoader: { _ in [] })
+        vm.remoteSettings = settings
+        vm.remoteClientFactory = { endpoint in var client = VideoClient(remoteEndpoint: endpoint); client.remoteSession = transport; return client }
+        vm.selectedAlias = value.alias
+        RemoteFixtureProtocol.reset("{}", status: 404)
+        await vm.prepareSelectedModel()
+        #expect(RemoteFixtureProtocol.records.isEmpty && vm.isServerReady && !vm.canDeleteProviderVideos)
+        vm.prompt = "fixture"; #expect(vm.canSubmit)
+        RemoteFixtureProtocol.reset(jobJSON.replacingOccurrences(of: "provider-video", with: value.modelID))
+        await vm.submit()
+        #expect(vm.jobs.count == 1 && vm.hasLiveActiveJobs)
+        RemoteFixtureProtocol.reset(#"{"id":"video_fixture","status":"failed","error":{"message":"fixture failure"}}"#)
+        await vm.pollJobs()
+        #expect(!vm.hasLiveActiveJobs && vm.jobs.first?.status == .failed)
+        let count = RemoteFixtureProtocol.records.count
+        await vm.refreshServerData()
+        #expect(vm.jobs.count == 1 && RemoteFixtureProtocol.records.count == count)
+    }
     @Test("Video create/poll use OpenAI fields, not local seed/capabilities/cancel extensions")
     func video() async throws {
         let value = model(.video)

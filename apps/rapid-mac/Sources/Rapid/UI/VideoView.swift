@@ -347,7 +347,7 @@ struct VideoView: View {
                 .help("Save video")
                 .accessibilityLabel("Save video")
                 .accessibilityIdentifier("Video.Job.Save")
-            if let job = viewModel.selectedJob {
+            if let job = viewModel.selectedJob, viewModel.canDeleteProviderVideos {
                 Button(role: .destructive) { pendingDeletion = job } label: {
                     Image(systemName: "trash")
                 }

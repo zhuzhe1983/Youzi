@@ -169,7 +169,7 @@ struct RemoteModelEditor: View {
                     if model.slot == .image || model.slot == .video {
                         Text(model.slot == .image
                              ? i18n.text(zh: "需要兼容 /images/generations；图片理解能力不等于图片生成。", en: "Requires /images/generations compatibility; image input alone is not image generation.")
-                             : i18n.text(zh: "需要兼容 /videos 的创建、任务查询和内容下载；仅有视频模型名称不能确认可用。", en: "Requires /videos creation, job polling and content download. A video model name alone does not confirm compatibility."))
+                             : i18n.text(zh: "请选择服务商的视频协议；仅有视频模型名称不能确认可用。", en: "Choose your provider's video protocol. A video model name alone does not confirm compatibility."))
                             .font(RapidFont.caption).foregroundStyle(.secondary)
                     }
                     if model.slot == .chat { Toggle(i18n.text(zh: "支持图片理解", en: "Supports image input"), isOn: $model.supportsVision) }
@@ -182,6 +182,14 @@ struct RemoteModelEditor: View {
                     }
                     if model.slot == .speech { TextField(i18n.text(zh: "可用音色（逗号分隔）", en: "Available voices (comma separated)"), text: $model.voices) }
                     if model.slot == .video {
+                        Picker(i18n.text(zh: "视频接口", en: "Video API"), selection: Binding(get: { model.videoAPI ?? .openAI }, set: { model.videoAPI = $0 })) {
+                            Text("OpenAI /videos").tag(RemoteVideoAPI.openAI)
+                            Text("CLIProxyAPI /openai/v1/videos").tag(RemoteVideoAPI.cliProxyAPI)
+                        }
+                        if model.usesCLIProxyVideo {
+                            Text(i18n.text(zh: "沿用上方常规 /v1 地址。支持 Grok Imagine Video、1.5、1.5-preview；仅保留本次连接的任务记录，不支持服务端历史列表、删除或取消。MiniMax-H3 需要其他服务接口。", en: "Keep the regular /v1 base above. Supports Grok Imagine Video, 1.5 and 1.5-preview. Session jobs only: no server history, deletion or cancellation. MiniMax-H3 needs another provider API."))
+                                .font(RapidFont.caption).foregroundStyle(.secondary)
+                        }
                         Toggle(i18n.text(zh: "支持参考图片", en: "Supports reference images"), isOn: $model.supportsVideoImageInput)
                         TextField(i18n.text(zh: "支持尺寸（逗号分隔）", en: "Supported sizes (comma separated)"), text: $model.videoSizes)
                         TextField(i18n.text(zh: "支持秒数（逗号分隔）", en: "Supported durations in seconds"), text: $model.videoSeconds)

@@ -40,6 +40,31 @@ Gemini 原生生成接口或其他视频协议的服务需要网关转换。不�
 编辑、参考图或修改时长/尺寸，也不会为了探测能力发起收费生成。
 更换地址、密钥或认证方式会清除旧发现结果并取消旧请求。
 
+### CLIProxyAPI / Management Center
+
+管理面板本身不转发推理，实际协议取决于 CLIProxyAPI 后端。经检查其源码
+[`2422c6b0` 路由定义](https://github.com/router-for-me/CLIProxyAPI/blob/2422c6b0f5fe16495320fa29456493874c1977a0/internal/api/server_routes.go)：
+
+- 图片使用 `/v1/images/generations`、`/v1/images/edits`，仍选择普通图片场景。
+  GPT Image、Grok Imagine Image 有专用路由；自定义上游图片模型需要网关将其
+  配置为图片类型，不能只看 `/models` 的名称。
+- `/v1/videos` 是原生 xAI JSON 协议；Youzi 的「视频接口」应选
+  **CLIProxyAPI /openai/v1/videos**，由兼容路由转换任务格式。
+  Base URL 沿用原来的常规 `/v1` 地址，Youzi 在同一服务下选择兼容路径。
+  仅启用已确认的 `grok-imagine-video`、`grok-imagine-video-1.5` 和
+  `grok-imagine-video-1.5-preview`；不将 Sora 别名暗中映射成 Grok。
+- 后端没有视频列表和删除接口。Youzi 保留当前连接的任务记录，按 ID 查询和
+  下载，隐藏不支持的删除操作；重启客户端后不会从服务端恢复历史。
+  查询响应缺少尺寸/时长等字段时沿用该任务创建时的实际值。
+  参考图通过 JSON data URL 传入，避免网关 multipart 解析器忽略文件附件。
+- MiniMax-H3、Grok 的 lite 别名不能仅凭出现在目录中就加入此适配器。
+  它们需另行确认上游协议和网关转发能力。
+
+真实部署已通过无推理的路由检查：向以上图片、原生视频和兼容视频路由发送
+不合法 JSON，均返回 400 参数错误；不会选择模型或执行生成。
+`GET /v1/videos` 返回 404 是缺少列表路由，**不能据此认定不能生成视频**。
+尚未调用真实收费生成，账号权限、配额和产物质量仍未验收。
+
 列表支持编辑、启用/停用、设为该场景的远程首选，以及移除配置。
 移除会删除本地配置与对应钥匙串项目，**不会删除服务商的模型或文件**。
 编辑时默认保留已有密钥；勾选替换并留空表示清除认证。更换地址后必须明确填写新

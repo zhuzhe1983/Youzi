@@ -49,6 +49,7 @@ final class VideoGenViewModel {
 
     private var remoteSessionContext: ServerRequestContext?
     var remoteSettings = RemoteModelSettings.shared
+    var canDeleteProviderVideos: Bool { currentServerContext?.remote?.configuration.usesCLIProxyVideo != true }
     var remoteClientFactory: (RemoteModelEndpoint) -> any VideoClientProtocol = { VideoClient(remoteEndpoint: $0) }
     private var localVideoModels: [ModelEntry] = []
     var videoModels: [ModelEntry] {
@@ -336,9 +337,12 @@ final class VideoGenViewModel {
             reconcileControls()
             errorMessage = nil
             do {
-                let newJobs = try await client(for: context).list(
-                    port: context.port, bearer: context.bearer, limit: 30
-                )
+                let newJobs: [VideoJob]
+                if context.remote?.configuration.usesCLIProxyVideo == true {
+                    newJobs = jobsServerContext == context ? jobs : []
+                } else {
+                    newJobs = try await client(for: context).list(port: context.port, bearer: context.bearer, limit: 30)
+                }
                 guard requestIsCurrent(
                     context,
                     contextGeneration: contextGeneration,
@@ -380,7 +384,7 @@ final class VideoGenViewModel {
                 var updated: [VideoJob] = []
                 for job in jobs {
                     if job.status == .queued || job.status == .inProgress {
-                        updated.append(try await client(for: context).retrieve(id: job.id, port: context.port, bearer: context.bearer))
+                        updated.append(try await client(for: context).poll(job, port: context.port, bearer: context.bearer))
                     } else { updated.append(job) }
                 }
                 newJobs = updated
@@ -500,6 +504,7 @@ final class VideoGenViewModel {
     }
 
     func delete(_ job: VideoJob) async {
+        guard canDeleteProviderVideos else { return }
         guard let context = currentServerContext,
               (jobsServerContext == context || pendingCacheCleanupJobIDs.contains(job.id)),
               job.status != .inProgress,

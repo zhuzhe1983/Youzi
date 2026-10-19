@@ -25,6 +25,9 @@ enum ModelSourcePriority: String, Codable, CaseIterable, Sendable {
         self == .localFirst ? (chinese ? "本地优先（推荐）" : "Local first (recommended)") : (chinese ? "远程优先" : "Remote first")
     }
 }
+enum RemoteVideoAPI: String, Codable, CaseIterable, Sendable {
+    case openAI, cliProxyAPI
+}
 struct RemoteModelConfiguration: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var name = ""
@@ -40,6 +43,9 @@ struct RemoteModelConfiguration: Codable, Equatable, Identifiable, Sendable {
     var voices = "alloy"
     var videoSizes = "720x1280,1280x720"
     var videoSeconds = "4,8,12"
+    // Optional so pre-existing version-1 documents continue to decode unchanged.
+    var videoAPI: RemoteVideoAPI? = nil
+    var usesCLIProxyVideo: Bool { slot == .video && videoAPI == .cliProxyAPI }
     var alias: String { "youzi-remote/" + id.uuidString.lowercased() }
     var displayName: String { name.isEmpty ? modelID : name }
     var voiceNames: [String] { Self.items(voices) }
@@ -59,6 +65,13 @@ struct RemoteModelConfiguration: Codable, Equatable, Identifiable, Sendable {
         guard ["auto", "b64_json"].contains(imageResponseFormat) else { throw RemoteModelError.invalidResponse }
         if slot == .speech && voiceNames.isEmpty { throw RemoteModelError.invalidVoice }
         if slot == .video && (sizes.isEmpty || durations.isEmpty || sizes.contains(where: { $0.range(of: #"^\d{2,5}x\d{2,5}$"#, options: .regularExpression) == nil })) { throw RemoteModelError.invalidVideo }
+        if copy.usesCLIProxyVideo {
+            let parts = copy.modelID.lowercased().split(separator: "/")
+            guard URL(string: copy.baseURL)?.path.hasSuffix("/v1") == true,
+                  parts.count == 1 || (parts.count == 2 && ["xai", "x-ai", "grok"].contains(String(parts[0]))),
+                  ["grok-imagine-video", "grok-imagine-video-1.5", "grok-imagine-video-1.5-preview"].contains(String(parts.last ?? ""))
+            else { throw RemoteModelError.unsupportedVideoAPI }
+        }
         return copy
     }
     var entry: ModelEntry {
@@ -97,9 +110,10 @@ struct RemoteModelDocument: Codable, Equatable, Sendable {
 }
 
 enum RemoteModelError: Error, LocalizedError {
-    case invalidURL, insecureHTTP, invalidModel, invalidVoice, invalidVideo, unavailable, corruptSettings, changedEndpointKey, invalidKey, keychain(OSStatus), http(Int), invalidResponse, transport
+    case invalidURL, insecureHTTP, invalidModel, invalidVoice, invalidVideo, unsupportedVideoAPI, unavailable, corruptSettings, changedEndpointKey, invalidKey, keychain(OSStatus), http(Int), invalidResponse, transport
     var errorDescription: String? {
         switch self {
+        case .unsupportedVideoAPI: "CLIProxyAPI 视频模式需使用以 /v1 结尾的常规地址，模型限 grok-imagine-video、1.5 或 1.5-preview。 / CLIProxyAPI video requires the regular /v1 base and a supported Grok Imagine Video model."
         case .invalidURL: "请填写 API Base URL，不含用户名、密码、查询参数或接口名。 / Enter an API base URL without credentials, query, fragment, or endpoint."
         case .insecureHTTP: "HTTP 会明文传输数据和密钥；请使用 HTTPS，或明确允许 HTTP。 / Use HTTPS or explicitly allow unencrypted HTTP."
         case .invalidModel: "请填写有效的模型 ID。 / Enter a valid model ID."
