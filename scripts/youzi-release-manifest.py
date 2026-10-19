@@ -46,7 +46,7 @@ def build_manifest(root: Path, out: Path) -> dict:
         "tag_name": tag,
         "html_url": release + "/tag/" + tag,
         "published_at": datetime.now(timezone.utc).isoformat(),
-        "notes": "Youzi: TTS voice validation, multimodal video service, square media gallery. Apple Silicon only. Ad-hoc signed, not notarized.",
+        "notes": "Youzi 0.14.5: unified model settings, artifact generation details and reroll, inline voice calls, and Qwen-Image 2.1. Apple Silicon only. Ad-hoc signed, not notarized.",
         "dmg_url": release + "/download/" + tag + "/" + dmg.name,
         "dmg_sha256": sha256(dmg),
         "dmg_size": dmg.stat().st_size,

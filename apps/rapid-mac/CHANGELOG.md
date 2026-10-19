@@ -17,6 +17,16 @@ can actually understand.
 
 ## [Unreleased]
 
+## [0.14.5] — 2026-10-20
+
+- Unified local and remote model preferences across chat, audio, images and video, with direct file-category navigation and accurate file actions.
+- Added artifact generation details, PNG/WAV/MP4 metadata embedding and source-preserving reroll.
+- Moved voice calls into the chat composer, with mute, status, duration and explicit compatible-mode recovery for system echo-cancellation failures.
+- Recommended Qwen-Image 2.1, exposed local image controls and adjusted unsupported dimensions with visible receipts.
+- Improved remote media discovery, CLIProxyAPI video adaptation, task creation, artifact previews and recoverable deletion.
+
+See `docs/release-notes/youzi-v0.14.5.md` for installation requirements and known limitations.
+
 ## [0.13.4] — 2026-09-02
 
 Rapid-MLX 0.13.4 makes qualified local models faster under concurrent work,
