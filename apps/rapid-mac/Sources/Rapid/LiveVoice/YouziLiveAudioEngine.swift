@@ -45,7 +45,7 @@ final class YouziLiveAudioEngine {
                 // SDK AVAudioIONode.h: enable only while stopped; setting either
                 // I/O node enables both. Do this BEFORE obtaining tap formats.
                 do { try input.setVoiceProcessingEnabled(true) }
-                catch { throw YouziLiveAudioError.voiceProcessingUnavailable }
+                catch { throw YouziLiveAudioError.voiceProcessingInitialization((error as NSError).code) }
                 guard input.isVoiceProcessingEnabled,
                       resources.engine.outputNode.isVoiceProcessingEnabled else {
                     throw YouziLiveAudioError.voiceProcessingUnavailable
@@ -80,7 +80,11 @@ final class YouziLiveAudioEngine {
             try resources.observeDefaultDevices(onChange: deviceChanged)
             resources.engine.prepare()
             try Task.checkCancellation()
-            try resources.engine.start()
+            do { try resources.engine.start() }
+            catch {
+                if voiceProcessing { throw YouziLiveAudioError.voiceProcessingInitialization((error as NSError).code) }
+                throw error
+            }
             try Task.checkCancellation()
             isVoiceProcessingEnabled = input.isVoiceProcessingEnabled
             inputTask = Task { @MainActor [weak self] in
@@ -175,13 +179,19 @@ final class YouziLiveAudioEngine {
 
 enum YouziLiveAudioError: Error, LocalizedError, Equatable {
     case microphoneUsageMissing, microphoneDenied, voiceProcessingUnavailable
+    case voiceProcessingInitialization(Int)
     case deviceUnavailable, deviceChanged, notRunning, invalidPCM
     case playbackQueueFull, captureQueueFull, captureConversionFailed
 
+    var startupCode: Int? {
+        if case .voiceProcessingInitialization(let code) = self { return code }
+        return nil
+    }
     var errorDescription: String? {
         switch self {
         case .microphoneUsageMissing: return "Microphone access requires the app's microphone usage description."
         case .microphoneDenied: return "Microphone access was denied. Enable it in System Settings to start voice."
+        case .voiceProcessingInitialization(let code): return "System echo cancellation could not initialize (\(code)). Try compatible mode."
         case .voiceProcessingUnavailable: return "Echo cancellation is unavailable. Restart explicitly in half-duplex mode."
         case .deviceUnavailable: return "No compatible audio input/output device is available."
         case .deviceChanged: return "The audio device changed. Voice stopped; restart to use the new device."

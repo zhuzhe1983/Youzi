@@ -732,6 +732,7 @@ struct ChatView: View {
 
     private var composeBar: some View {
         VStack(spacing: RapidTheme.Space.sm) {
+            if showsLiveVoice { YouziLiveVoiceInlineControls(isPresented: $showsLiveVoice) }
             // Exactly one notice slot. While the model is not ready the
             // readiness banner owns it — it already folds the failure
             // message in, so rendering the raw error underneath would be

@@ -8,7 +8,7 @@ final class YouziLiveVoiceController {
     enum Phase: Equatable { case stopped, preparing, listening, transcribing, responding }
     enum ReplyStage: Equatable { case waitingForText, waitingForSentence, synthesizing, speaking }
     enum Problem: Equatable {
-        case modelsMissing, chatBusy, microphone, voiceProcessing, recognition, speech
+        case modelsMissing, chatBusy, microphone, microphonePermission, audioDevice, voiceProcessing, recognition, speech
         case deviceChanged, replyChanged, replyTooLong, preparation, chatFailed
         case unsupportedSpeechModel, utteranceTooLong
     }
@@ -16,6 +16,11 @@ final class YouziLiveVoiceController {
     private(set) var problem: Problem?
     private(set) var isMicrophoneOn = false
     private(set) var isStarting = false
+    private(set) var isMuted = false
+    private(set) var startedAt: Date?
+    private(set) var inputLevel: Double = 0
+    private(set) var audioErrorCode: Int?
+    @ObservationIgnored private var startupTask: Task<Void, Never>?
     private(set) var isHalfDuplex = false
     private(set) var recognizedText = ""
     private(set) var assistantPreview = ""
@@ -29,7 +34,7 @@ final class YouziLiveVoiceController {
     private(set) var selectedModels: LiveVoiceModels?
     private(set) var isUserSpeaking = false
     var isActive: Bool { lifetime.isActive }
-    var canFinishUtterance: Bool { isMicrophoneOn && isUserSpeaking }
+    var canFinishUtterance: Bool { isMicrophoneOn && !isMuted && isUserSpeaking }
 
     @ObservationIgnored private let audio: any LiveVoiceAudioIO
     @ObservationIgnored private let transport: any LiveVoiceTransport
@@ -64,6 +69,31 @@ final class YouziLiveVoiceController {
         self.readiness = readiness; self.defaults = defaults
     }
 
+    func begin(halfDuplex: Bool = false) {
+        guard !isStarting, !isActive, startupTask == nil else { return }
+        startupTask = Task { [weak self] in
+            guard let self else { return }
+            defer { startupTask = nil }
+            await start(halfDuplex: halfDuplex)
+        }
+    }
+
+    func setMuted(_ muted: Bool) {
+        guard isActive else { return }
+        isMuted = muted
+        detector.reset(); isUserSpeaking = false; inputLevel = 0
+    }
+
+    static func startupProblem(_ error: Error) -> Problem {
+        guard let error = error as? YouziLiveAudioError else { return .microphone }
+        switch error {
+        case .microphoneDenied, .microphoneUsageMissing: return .microphonePermission
+        case .deviceUnavailable, .deviceChanged: return .audioDevice
+        case .voiceProcessingUnavailable, .voiceProcessingInitialization: return .voiceProcessing
+        default: return .microphone
+        }
+    }
+
     /// Called by an explicit user gesture only. Reading residency/voice metadata
     /// does not load weights. A failed AEC start NEVER silently retries without it.
     func start(halfDuplex: Bool = false) async {
@@ -71,7 +101,7 @@ final class YouziLiveVoiceController {
         guard !chat.isStreaming else { problem = .chatBusy; return }
         isStarting = true
         defer { isStarting = false }
-        problem = nil
+        problem = nil; audioErrorCode = nil; isMuted = false; startedAt = nil
         phase = .preparing
         let epoch = lifetime.start()
         observedTurn = chat.currentTurn
@@ -101,7 +131,7 @@ final class YouziLiveVoiceController {
             return
         }
         audio.onInputFrame = { [weak self] samples in
-            guard let self, self.captureID == id, self.isMicrophoneOn else { return }
+            guard let self, self.captureID == id, self.isMicrophoneOn, !self.isMuted else { return }
             self.receive(samples)
         }
         audio.onFailure = { [weak self] _ in
@@ -121,11 +151,14 @@ final class YouziLiveVoiceController {
                 fail(.voiceProcessing); return
             }
         } catch {
-            if lifetime.accepts(epoch) { fail(halfDuplex ? .microphone : .voiceProcessing) }
+            if lifetime.accepts(epoch) {
+                audioErrorCode = (error as? YouziLiveAudioError)?.startupCode ?? (error as NSError).code
+                fail(Self.startupProblem(error))
+            }
             return
         }
         isHalfDuplex = halfDuplex
-        isMicrophoneOn = true
+        isMicrophoneOn = true; startedAt = Date()
         detector.reset()
         phase = .listening
         monitorTask = Task { [weak self] in
@@ -141,6 +174,7 @@ final class YouziLiveVoiceController {
     /// one explicit exception: stop capture/playback but leave chat's original
     /// human confirmation continuation and persistence machinery in charge.
     func stop(cancelOwnedChat: Bool = true) {
+        startupTask?.cancel()
         let target = lifetime.invalidate(currentTurn: chat.currentTurn,
             isStreaming: chat.isStreaming, stopping: true)
         if cancelOwnedChat, let target { chat.stopOwnedTurn(target) }
@@ -155,7 +189,7 @@ final class YouziLiveVoiceController {
         playbackPacing.drained()
         detector.reset()
         isUserSpeaking = false
-        isMicrophoneOn = false
+        isMicrophoneOn = false; isMuted = false; inputLevel = 0; startedAt = nil
         phase = .stopped
     }
 
@@ -186,7 +220,11 @@ final class YouziLiveVoiceController {
     }
 
     private func receive(_ samples: [Float]) {
-        guard checkContext() else { return }
+        guard checkContext(), !isMuted else { return }
+        if !samples.isEmpty {
+            let power = samples.reduce(0.0) { $0 + Double($1) * Double($1) } / Double(samples.count)
+            inputLevel = min(1, sqrt(power) * 8)
+        }
         if isHalfDuplex && phase != .listening { detector.reset(); return }
         for event in detector.append(samples) {
             switch event {

@@ -353,6 +353,7 @@ struct YouziSimpleTaskView: View {
     private var composer: some View {
         let contentWidth: CGFloat = chat.messages.isEmpty ? 860 : RapidTheme.Layout.contentMaxWidth
         return VStack(spacing: RapidTheme.Space.sm) {
+            if showsLiveVoice { YouziLiveVoiceInlineControls(isPresented: $showsLiveVoice) }
             if needsAttention {
                 HStack(spacing: RapidTheme.Space.sm) {
                     Image(systemName: "exclamationmark.circle")

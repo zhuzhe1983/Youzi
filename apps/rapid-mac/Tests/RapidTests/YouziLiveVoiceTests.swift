@@ -1,3 +1,5 @@
+import AppKit
+import SwiftUI
 import Foundation
 import Testing
 @testable import Rapid
@@ -207,7 +209,7 @@ private final class VoiceTestAudio: LiveVoiceAudioIO {
     var autoDrain = true
     func start(voiceProcessing: Bool) async throws {
         starts.append(voiceProcessing)
-        if voiceProcessing && failAEC { throw VoiceTestFailure.injected }
+        if voiceProcessing && failAEC { throw YouziLiveAudioError.voiceProcessingInitialization(-10875) }
         isVoiceProcessingEnabled = voiceProcessing
     }
     func enqueuePCM(_ data: Data, sampleRate: Double) throws {
@@ -699,6 +701,36 @@ struct LiveVoiceOrchestrationTests {
         #expect(await transport.speechVoices == ["Ryan"])
     }
 
+    @Test("Startup failures distinguish permission, devices and echo cancellation")
+    func classifiedStartupFailures() {
+        #expect(YouziLiveVoiceController.startupProblem(YouziLiveAudioError.microphoneDenied) == .microphonePermission)
+        #expect(YouziLiveVoiceController.startupProblem(YouziLiveAudioError.deviceUnavailable) == .audioDevice)
+        #expect(YouziLiveVoiceController.startupProblem(YouziLiveAudioError.voiceProcessingInitialization(-10875)) == .voiceProcessing)
+        #expect(YouziLiveVoiceController.startupProblem(VoiceTestFailure.injected) == .microphone)
+    }
+
+    @Test("Mute discards partial capture and unmute does not submit old speech")
+    func muteLifecycle() async throws {
+        let rig = VoiceTestRig()
+        defer { rig.controller.stop() }
+        await rig.controller.start()
+        rig.audio.voice()
+        #expect(rig.controller.isUserSpeaking && rig.controller.inputLevel > 0)
+        rig.controller.setMuted(true)
+        #expect(!rig.controller.canFinishUtterance && rig.controller.isMuted && rig.controller.inputLevel == 0)
+        rig.audio.utterance()
+        for _ in 0..<10 { await Task.yield() }
+        #expect(await rig.transport.recognitionRequests.isEmpty)
+        #expect(rig.controller.isActive && rig.controller.isMicrophoneOn)
+        rig.controller.setMuted(false)
+        rig.audio.silence()
+        #expect(await rig.transport.recognitionRequests.isEmpty)
+        rig.audio.utterance()
+        try await voiceEventually { rig.chat.sent.count == 1 }
+        rig.controller.stop()
+        #expect(!rig.controller.isMuted && rig.controller.startedAt == nil && !rig.controller.isMicrophoneOn)
+    }
+
     @Test("AEC failure never silently falls back; explicit half duplex can restart")
     func explicitFallback() async {
         let rig = VoiceTestRig()
@@ -707,6 +739,7 @@ struct LiveVoiceOrchestrationTests {
         await rig.controller.start()
         #expect(rig.audio.starts == [true])
         #expect(rig.controller.problem == .voiceProcessing)
+        #expect(rig.controller.audioErrorCode == -10875)
         #expect(!rig.controller.isMicrophoneOn)
         await rig.controller.start(halfDuplex: true)
         #expect(rig.audio.starts == [true, false])
@@ -921,3 +954,46 @@ struct LiveVoiceNativeChatRouteTests {
     }
 }
 #endif
+
+@MainActor @Suite("Inline voice UI", .serialized)
+struct YouziInlineVoiceRenderTests {
+    @Test("Call controls remain inline and errors wrap at compact widths", .enabled(if:ProcessInfo.processInfo.environment["YOUZI_VOICE_RENDER"] == "1"))
+    func render() async throws {
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent("youzi-inline-voice-qa")
+        try FileManager.default.createDirectory(at:output,withIntermediateDirectories:true)
+        for dark in [false,true] {
+            for failure in [false,true] {
+                let rig = VoiceTestRig()
+                rig.audio.failAEC = failure
+                if failure { await rig.controller.start() }
+                let suite = "voice-render-\(UUID())"
+                let defaults = UserDefaults(suiteName:suite)!
+                defer { defaults.removePersistentDomain(forName:suite); rig.controller.stop() }
+                let i18n = YouziI18nConfig(defaults:defaults); i18n.language = .zhHans
+                let chat = ChatViewModel(persistsConversations:false)
+                let view = VStack(spacing:0) {
+                    Text("对话记录保持可见").frame(maxWidth:.infinity,alignment:.leading).padding(20)
+                    Spacer(minLength:20)
+                    YouziLiveVoiceInlineControls(isPresented:.constant(true))
+                    Text("想让柚子帮你做什么？").foregroundStyle(.secondary).frame(maxWidth:.infinity,alignment:.leading).padding(20)
+                        .background(RapidTheme.surfaceRaised,in:RoundedRectangle(cornerRadius:16)).padding(16)
+                }
+                .frame(width:620,height:640)
+                .environment(\.youziVoiceController,rig.controller).environment(chat).environment(i18n)
+                .environment(\.colorScheme,dark ? .dark : .light).background(RapidTheme.surfaceCanvas)
+                let host = NSHostingView(rootView:view); host.sizingOptions = []; host.frame = CGRect(x:0,y:0,width:620,height:640)
+                let window = NSWindow(contentRect:host.frame,styleMask:[.borderless],backing:.buffered,defer:false)
+                window.isReleasedWhenClosed = false; window.appearance = NSAppearance(named:dark ? .darkAqua : .aqua)
+                window.contentView = host; window.orderBack(nil)
+                defer { window.orderOut(nil); window.contentView = nil; window.close() }
+                try await Task.sleep(for:.milliseconds(90))
+                host.layoutSubtreeIfNeeded(); host.displayIfNeeded()
+                #expect(host.fittingSize.width <= 621)
+                let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in:host.bounds))
+                host.cacheDisplay(in:host.bounds,to:bitmap)
+                try #require(bitmap.representation(using:.png,properties:[:])).write(to:output.appendingPathComponent("\(dark ? "dark" : "light")-\(failure ? "error" : "idle").png"))
+                #expect(rig.audio.starts == (failure ? [true] : []))
+            }
+        }
+    }
+}
