@@ -189,9 +189,7 @@ struct YouziScenarioModelPicker: View {
                 defer { loadingAlias = nil }
                 let success: Bool
                 if ready { success = true }
-                else if server.servingAlias != nil { success = await server.loadStartupModel(entry) }
-                else if entry.kind == .chat { success = await server.ensureServing(alias: entry.alias, hfPath: entry.hfRepo) }
-                else { success = false }
+                else { success = await server.loadModelManually(entry) }
                 if success, let slot = YouziModelAvailability.slot(for: entry) {
                     // Video selection validates against its own catalog; populate it before selecting.
                     if slot == .video && !videos.videoModels.contains(where: { $0.alias == entry.alias }) { await videos.refreshCatalog() }

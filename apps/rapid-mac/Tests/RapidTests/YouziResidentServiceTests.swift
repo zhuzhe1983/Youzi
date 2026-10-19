@@ -70,11 +70,45 @@ struct YouziResidentServiceTests {
         YouziResidentServicePreference.setAliases(["automatic"], for: .chat, in: defaults)
         #expect(YouziResidentServicePreference.startupChatAlias(entries: entries, in: defaults) == "automatic")
         defaults.set(false, forKey: YouziResidentServicePreference.enabledKey)
-        #expect(YouziResidentServicePreference.startupChatAlias(entries: entries, in: defaults) == nil)
+        #expect(YouziResidentServicePreference.startupChatAlias(entries: entries, in: defaults) == "automatic")
         #expect(YouziResidentServicePreference.automaticAlias(for: .chat, entries: entries, snapshot: nil, in: defaults) == "automatic")
         defaults.set(true, forKey: YouziResidentServicePreference.enabledKey)
         #expect(YouziResidentServicePreference.startupChatAlias(entries: [manual], in: defaults) == nil)
         #expect(defaults.string(forKey: SessionModelRestore.chatAliasStorageKey) == "manual")
+    }
+
+    @Test("Automatic media can own startup without chat; old global switches cannot suppress it")
+    func mediaOnlyStartup() throws {
+        let suite = "YouziMediaStartup." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(false, forKey: YouziResidentServicePreference.enabledKey)
+        defaults.set(false, forKey: AutoStartPreference.storageKey)
+        let image = ModelEntry(alias: "image", hfRepo: nil, sizeOnDisk: nil, cached: true, kind: .image, imageCapability: .generation)
+        YouziResidentServicePreference.setLoadingPolicy(.automatic, for: image.alias, slot: .image, in: defaults)
+        #expect(YouziResidentServicePreference.enabled(in: defaults))
+        #expect(YouziResidentServicePreference.startupEntry(entries: [image], in: defaults)?.alias == image.alias)
+        let server = ServerManager(testingState: .idle, binaryPath: nil, sessionDefaults: defaults)
+        #expect(server.permitsInferencePreparation(for: image.alias))
+        #expect(!server.permitsInferencePreparation(for: "manual"))
+        YouziResidentServicePreference.setLoadingPolicy(.onDemand, for: image.alias, slot: .image, in: defaults)
+        #expect(!YouziResidentServicePreference.enabled(in: defaults))
+        #expect(YouziResidentServicePreference.startupEntry(entries: [image], in: defaults) == nil)
+        #expect(!server.permitsInferencePreparation(for: image.alias))
+    }
+
+    @Test("Sending to an unloaded manual model never starts it; a loaded manual model stays usable")
+    func manualInferenceIsResidentOnly() async throws {
+        let suite = "YouziManualInference." + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let cold = ServerManager(testingState: .idle, binaryPath: nil, sessionDefaults: defaults)
+        #expect(await cold.ensureServing(alias: "manual", hfPath: nil, estimatedMemoryGB: nil, forInference: true) == false)
+        #expect(cold.state == .idle)
+        #expect(await cold.ensureVoiceLane(alias: "manual", hfPath: "fixture/manual") == false)
+        let warm = ServerManager(testingState: .ready(alias: "manual"), sessionDefaults: defaults)
+        #expect(warm.permitsInferencePreparation(for: "manual"))
+        #expect(!warm.permitsInferencePreparation(for: "another"))
     }
 
     @Test("Only cached models with a supported capability are offered")
@@ -213,7 +247,7 @@ struct YouziUnifiedModelChoiceTests {
         #expect(!YouziResidentServicePreference.Slot.chat.accepts(video))
     }
 
-    @Test("Manual load processes the list with auto-restore disabled")
+    @Test("Per-model automatic policy restores without a second global switch")
     func manualLoad() async throws {
         let name = "YouziManualStartup." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: name))
@@ -224,11 +258,11 @@ struct YouziUnifiedModelChoiceTests {
         defer { server._testClearChild() }
         server.residentServiceCatalogProvider = { _ in [] }
         await server.restoreResidentServices()
-        #expect(server.residentLoadFailures.isEmpty)
+        #expect(server.residentLoadFailures["missing"] != nil)
         await server.restoreResidentServices(manually: true)
         #expect(server.residentLoadFailures["missing"] != nil)
         #expect(server.servingAlias == "chat")
-        #expect(!YouziResidentServicePreference.enabled(in: defaults))
+        #expect(YouziResidentServicePreference.enabled(in: defaults))
     }
 }
 

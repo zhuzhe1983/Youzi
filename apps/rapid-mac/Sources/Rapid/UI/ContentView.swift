@@ -145,8 +145,8 @@ struct ContentView: View {
     @State private var catalogLoaded: Bool = false
     /// Cache generation represented by ``catalogEntries``.
     @State private var catalogGeneration: UInt = 0
-    /// FU-1: persisted opt-out for the launch-time auto-start path.
-    @AppStorage(AutoStartPreference.storageKey) private var autoStartOnLaunch: Bool = AutoStartPreference.defaultValue
+    /// Per-model automatic selections directly authorize launch-time loading.
+    private var autoStartOnLaunch: Bool { YouziResidentServicePreference.enabled() }
     @State private var campaign: Campaign? = Campaign.previewFromEnvironment(ProcessInfo.processInfo.environment)
     /// The rc2 key predates lane ownership. A non-empty value cannot decide
     /// onboarding until catalog metadata proves it is a chat model; keeping an
@@ -1769,12 +1769,20 @@ struct ContentView: View {
         launchPlan: SessionModelRestore.LaunchPlan
     ) async -> LaunchAutoStartOutcome {
         guard launchPlan.shouldAutoStart,
-              let automaticAlias = YouziResidentServicePreference.startupChatAlias(entries: catalogEntries) else {
+              let automaticEntry = YouziResidentServicePreference.startupEntry(entries: catalogEntries) else {
             autoStartPendingDownload = nil
             return .noPrimaryLaunch
         }
         guard case .idle = server.state else { return .noPrimaryLaunch }
 
+        if automaticEntry.kind != .chat {
+            await server.startAutomaticPrimary(automaticEntry, generation: catalogGeneration)
+            switch server.state {
+            case .idle, .starting: return .primaryLaunchPending
+            case .ready, .crashed, .stopped, .missing: return .noPrimaryLaunch
+            }
+        }
+        let automaticAlias = automaticEntry.alias
         let aliasAtEntry = alias
         let userSelectionRevisionAtEntry = userSelectionRevision
         let cachedAliases = Set(catalogEntries.filter { $0.cached }.map(\.alias))

@@ -428,8 +428,8 @@ final class AudioViewModel {
     /// contract. Returns false only when no server can be brought up at all
     /// (e.g. the voice model's weights couldn't start), mirroring the old swap
     /// contract so call sites can keep their error messaging.
-    func ensureVoiceLane(alias: String, hfPath: String?) async -> Bool {
-        await server.ensureVoiceLane(alias: alias, hfPath: hfPath)
+    func ensureVoiceLane(alias: String, hfPath: String?, explicitLoad: Bool = false) async -> Bool {
+        await server.ensureVoiceLane(alias: alias, hfPath: hfPath, explicitLoad: explicitLoad)
     }
 
     func resolveSelections() {

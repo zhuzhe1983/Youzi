@@ -7,7 +7,6 @@ struct SettingsModelsPanel: View {
     @Environment(YouziI18nConfig.self) private var i18n
     @Environment(ServerManager.self) private var server
     @State private var generation = ModelGenerationSettings.shared
-    @AppStorage(AutoStartPreference.storageKey) private var autoStart = AutoStartPreference.defaultValue
     @AppStorage(ModelSwitchConfirmationPreference.storageKey) private var confirmSwitch = ModelSwitchConfirmationPreference.defaultValue
     @State private var remote = RemoteModelSettings.shared
     @State private var priorityError: String?
@@ -57,8 +56,6 @@ struct SettingsModelsPanel: View {
             .id(selection)
             SettingsSection(i18n.text(zh: "通用加载选项", en: "Shared loading options")) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle(i18n.text(zh: "打开应用时自动启动聊天模型", en: "Auto-start chat model on launch"), isOn: $autoStart)
-                        .accessibilityIdentifier("Settings.Models.AutoStartOnLaunchToggle")
                     Toggle(i18n.text(zh: "中断正在处理的请求前先确认", en: "Confirm before interrupting active requests"), isOn: $confirmSwitch)
                         .accessibilityIdentifier("Settings.Models.ConfirmActiveRequestSwitchToggle")
                     Picker(i18n.text(zh: "全局模型来源优先级", en: "Global model source priority"), selection: Binding(

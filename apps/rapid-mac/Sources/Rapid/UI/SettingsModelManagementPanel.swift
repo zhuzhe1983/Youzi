@@ -214,13 +214,7 @@ struct SettingsModelManagementPanel: View {
         loadingTableAliases.insert(entry.alias)
         defer { loadingTableAliases.remove(entry.alias) }
         lastError = nil
-        let success: Bool
-        if server.servingAlias != nil { success = await server.loadStartupModel(entry) }
-        else if entry.kind == .chat { success = await server.ensureServing(alias: entry.alias, hfPath: entry.hfRepo) }
-        else {
-            lastError = i18n.text(zh: "请先启动聊天服务，再加载图片、语音或视频模型。", en: "Start the chat service before loading an image, audio or video model.")
-            return
-        }
+        let success = await server.loadModelManually(entry)
         if !success {
             lastError = server.residentLoadFailures[entry.alias]?.message
                 ?? i18n.text(zh: "模型未能加载，请检查模型设置或服务日志。", en: "Model could not load. Check model settings or service logs.")

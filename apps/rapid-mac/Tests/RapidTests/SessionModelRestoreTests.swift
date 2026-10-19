@@ -197,7 +197,8 @@ struct SessionModelRestoreTests {
         // → start(audio alias) → /healthz → .ready(audio alias).
         let ready = await server.ensureVoiceLane(
             alias: stt.alias,
-            hfPath: stt.hfRepo
+            hfPath: stt.hfRepo,
+            explicitLoad: true
         )
 
         #expect(ready)

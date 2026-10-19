@@ -1406,7 +1406,8 @@ final class ChatViewModel {
                         alias: alias,
                         hfPath: startupHFPath,
                         estimatedMemoryGB: nil,
-                        replacementGroup: .assistant
+                        replacementGroup: .assistant,
+                        forInference: true
                     )
                 }
                 // A user Stop during the (possibly cold, multi-second)
@@ -2372,7 +2373,8 @@ final class ChatViewModel {
                 alias: trimmed,
                 hfPath: nil,
                 estimatedMemoryGB: nil,
-                replacementGroup: .assistant
+                replacementGroup: .assistant,
+                        forInference: true
             )
             guard ok else {
                 lastFailureKind = .modelLoadFailed

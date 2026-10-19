@@ -7,7 +7,7 @@ import Foundation
 enum YouziResidentServicePreference {
     static let enabledKey = "youzi.models.residentService.enabled.v1"
     static func enabled(in defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: enabledKey)
+        !selected(in: defaults).isEmpty
     }
 
     enum Slot: String, CaseIterable, Identifiable {
@@ -76,7 +76,7 @@ enum YouziResidentServicePreference {
 
     /// Only compatible, downloaded members of the explicit pool are candidates.
     /// Prefer a ready member to avoid a second allocation; ties use saved order,
-    /// never catalog order. The global switch pauses startup, not pool membership.
+    /// never catalog order. Each model’s policy is the only startup switch.
     static func automaticAlias(
         for slot: Slot, entries: [ModelEntry], snapshot: ModelResidencySnapshot? = nil,
         in defaults: UserDefaults = .standard
@@ -125,6 +125,14 @@ enum YouziResidentServicePreference {
     static func startupChatAlias(entries: [ModelEntry], in defaults: UserDefaults = .standard) -> String? {
         guard enabled(in: defaults) else { return nil }
         return automaticAlias(for: .chat, entries: entries, snapshot: nil, in: defaults)
+    }
+
+    /// The first compatible automatic model can own the service, including an
+    /// image/audio/video-only setup. Remote priority never suppresses local startup.
+    static func startupEntry(entries: [ModelEntry], in defaults: UserDefaults = .standard) -> ModelEntry? {
+        selected(in: defaults).lazy.compactMap { slot, alias in
+            entries.first { $0.alias == alias && slot.accepts($0) && !$0.isRemote }
+        }.first
     }
 
     static func setLoadingPolicy(_ policy: LoadingPolicy, for alias: String, slot: Slot, in defaults: UserDefaults = .standard) {

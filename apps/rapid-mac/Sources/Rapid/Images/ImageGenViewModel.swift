@@ -389,7 +389,8 @@ final class ImageGenViewModel {
                 estimatedMemoryGB: target.estimatedMemoryGB,
                 imageMode: .generation,
                 residencyEligible: true,
-                requestIsMedia: true
+                requestIsMedia: true,
+                forInference: true
             ) else {
                 throw ImageClientError.notReady
             }
@@ -425,7 +426,8 @@ final class ImageGenViewModel {
                 estimatedMemoryGB: target.estimatedMemoryGB,
                 imageMode: .editing,
                 residencyEligible: true,
-                requestIsMedia: true
+                requestIsMedia: true,
+                forInference: true
             ) else {
                 throw ImageClientError.notReady
             }

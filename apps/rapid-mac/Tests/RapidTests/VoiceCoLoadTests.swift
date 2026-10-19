@@ -133,9 +133,13 @@ struct VoiceCoLoadTests {
 
     @Test("co-loaded primary is reused without spawning a replacement")
     func ensureVoiceLaneReusesPrimary() async {
+        let suite = "VoiceAutomatic." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        YouziResidentServicePreference.setAliases(["whisper-tiny"], for: .transcription, in: defaults)
         let server = ServerManager(
             testingState: .ready(alias: "qwen3.6-27b-4bit"),
-            activeBearer: "test-bearer"
+            activeBearer: "test-bearer", sessionDefaults: defaults
         )
         // Must succeed immediately (reuse) even though no voice model binary
         // could ever be spawned in this test harness — proving we are NOT

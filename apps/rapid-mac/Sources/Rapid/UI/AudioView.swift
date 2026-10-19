@@ -637,7 +637,8 @@ struct AudioView: View {
         // server — see AudioViewModel.ensureVoiceLane for the branch.
         _ = await viewModel.ensureVoiceLane(
             alias: alias,
-            hfPath: entry?.hfRepo
+            hfPath: entry?.hfRepo,
+            explicitLoad: true
         )
         await viewModel.refreshCatalog()
     }

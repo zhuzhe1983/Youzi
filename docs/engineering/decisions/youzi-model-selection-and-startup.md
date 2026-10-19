@@ -9,7 +9,7 @@ A model has independent download, loading-policy and runtime states:
 
 1. **Not downloaded**: offered by Model Files, never selected for auto-load.
 2. **Downloaded / automatic**: belongs to a scene's ordered preferred pool.
-3. **Downloaded / on-demand**: not in that pool; can be explicitly selected.
+3. **Downloaded / manual**: loads through an explicit Load action, not an inference request.
 4. **Ready / busy / stopped / failed**: observed runtime state, not a preference.
 
 “Default” and “recommended” describe a scenario's selection, not a second model
@@ -45,26 +45,36 @@ Only loaded local models are exposed. Loading, registered, evicting and remote
 models do not become advertised just because they have saved settings. Errors
 clear the displayed snapshot rather than claiming stale models are still available.
 The API remains loaded-only; this UI change does not alter Python routing.
-Each downloaded row exposes **Automatic / On demand**. Automatic members show
+Each downloaded row exposes **Automatic / Manual**. Automatic members show
 priority; promoting one reorders the same list rather than creating a default.
 The quick picker shows a bolt for membership and a check for actual readiness.
 Missing saved entries remain visible and explicitly removable.
 
-The global automatic-load switch pauses startup without erasing membership.
-App-launch startup additionally requires chat auto-start and a compatible,
-downloaded automatic chat model. Session history and bundled recommendations
-cannot authorize loading an on-demand model at launch. History is retained for
-explicit session restoration and onboarding, not used as an auto-load fallback.
+Each model's loading policy is the only startup switch. The former global
+“Load preferred pool on startup”, “Load pool now” and chat auto-start controls
+are removed. Their persisted keys remain for rollback but no longer gate launch.
+The first compatible downloaded automatic model owns the service; an image,
+audio or video model can start without an automatic chat model. Remaining
+automatic models load sequentially while preserving siblings.
 
-“Load preferred pool now” explicitly restores the saved list on a running chat
-service even while automatic startup is paused. Loads are sequential and preserve
-siblings on capable runtimes. Capacity refusals are visible per model, never a
-reason to silently stop chat. Changing policy itself does not load or unload.
+An explicit Load action works in settings or the composer picker, including a
+media-only cold start. Inference in chat/image/video/audio does not implicitly
+load a manual model. Already-loaded manual models remain usable. Native model
+tools retain their explicit interactive approval before loading. Capacity and
+occupied audio-lane refusals remain visible; no silent replacement or download.
+Changing policy saves intent immediately without unloading existing models;
+it takes effect on next launch. API routing sync still uses Settings Save.
+
+Remote discovery automatically opens a searchable list after a successful
+non-empty response. No model is silently selected. The result shows total and
+workflow candidate counts; if no workflow matches, all models are shown.
+Selecting a row fills the provider ID and follows the existing display-name
+rule. Endpoint/credential changes cancel and clear stale discovery.
 
 Existing valid workspace/task model selections remain explicit overrides. A
 media workspace may show an initial catalog recommendation when no pool member
-is available; generating with that visible selection is an explicit scenario
-request, not an omitted-model fallback. It does not enroll the model. New chat
+is available; generating with that visible selection remains exact and does not enroll the
+model. A manual model must first be loaded. New chat
 without a usable pool requires selection instead of redirecting to initialization.
 Voice/size/context/MTP defaults remain separate generation parameters.
 
@@ -122,7 +132,7 @@ GPU weights. Simultaneous readiness is not unlimited concurrent GPU throughput.
 `youzi.models.startup.<scene>.v2` remains the ordered alias array. Absent v2 falls
 back to legacy `youzi.models.residentService.<scene>.v1`; explicitly empty v2 wins.
 `youzi.models.default.<scene>.v1` is retained only for rollback and no longer read
-for routing. The global enable key remains unchanged. No automatic migration
+for routing. Legacy global enable keys are retained but ignored by the new startup policy. No automatic migration
 adds independent defaults/history/recommendations to the pool. Existing users
 with only a legacy default must explicitly choose automatic membership or select
 a model for the current scenario.
@@ -135,7 +145,7 @@ read retained legacy values again, but v2 remains for forward recovery.
 ## Verification and remaining boundaries
 
 Use `RAPID_DESKTOP_NO_PORT_SWEEP=1` for every native build/test/probe/launch.
-Regression coverage includes ordered/empty pools, exact requests, paused launch,
+Regression coverage includes ordered/empty pools, exact requests, direct per-model startup,
 legacy defaults ignored, approval denial, ready reuse, live authenticated Save,
 spawn ownership, audio queue races, standalone compatibility and Responses model
 metadata. Visual QA is synthetic, uses isolated preferences, and requires actual

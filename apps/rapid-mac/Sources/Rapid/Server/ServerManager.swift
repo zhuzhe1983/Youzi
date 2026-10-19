@@ -410,8 +410,15 @@ final class ServerManager {
     /// (the pre-existing audio-sidecar behaviour), which a caller exercises
     /// when no primary model is running at all.
     @discardableResult
-    func ensureVoiceLane(alias: String, hfPath: String?) async -> Bool {
+    func ensureVoiceLane(alias: String, hfPath: String?, explicitLoad: Bool = false) async -> Bool {
         if RemoteModelEndpoint.isRemote(alias) { return remoteModelSettings.document.model(alias: alias)?.slot.kind == .audio }
+        guard explicitLoad || permitsInferencePreparation(for: alias) || isVoiceLaneResident(for: alias, modelPath: hfPath) else { return false }
+        if explicitLoad, voiceCoLoadsOnPrimary {
+            guard let binary = binaryPath else { return false }
+            let catalog = await residentServiceCatalogProvider(binary)
+            guard let entry = catalog.first(where: { $0.alias == alias && $0.kind == .audio && $0.cached }) else { return false }
+            return await loadStartupModel(entry)
+        }
         if voiceCoLoadsOnPrimary {
             return true
         }
@@ -429,9 +436,11 @@ final class ServerManager {
     func ensureVideoServing(
         alias: String,
         hfPath: String?,
-        minimumMemoryGB: Double?
+        minimumMemoryGB: Double?,
+        explicitLoad: Bool = false
     ) async -> Bool {
         if RemoteModelEndpoint.isRemote(alias) { return remoteModelSettings.document.model(alias: alias)?.slot == .video }
+        guard explicitLoad || permitsInferencePreparation(for: alias) else { return false }
         let memorySnapshot = memorySnapshotProvider()
         let estimatedFootprintGB = Self.videoEstimatedFootprintGB(
             minimumMemoryGB: minimumMemoryGB
@@ -494,6 +503,43 @@ final class ServerManager {
         )
         guard let remoteSlot = RemoteModelSlot(rawValue: slot.rawValue) else { return local }
         return remoteModelSettings.document.automatic(for: remoteSlot, local: local)
+    }
+
+    /// Start a configured media model without changing the chat selection.
+    func startAutomaticPrimary(_ entry: ModelEntry, generation: UInt) async {
+        guard case .idle = state, entry.cached, !entry.isRemote,
+              YouziResidentServicePreference.selected(in: sessionDefaults ?? .standard).contains(where: { $0.1 == entry.alias }) else { return }
+        var output: String?
+        if entry.kind == .video {
+            let directory = videoArtifactsDirectoryProvider()
+            do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
+            catch { appendLogLines(["Could not prepare the video output directory: \(error.localizedDescription)"]); return }
+            output = directory.path
+        }
+        await start(alias: entry.alias, isLaunchAutoStart: true,
+                    catalogEntryHint: CatalogEntryHint(entry: entry, generation: generation),
+                    videoOutputDirectory: output)
+    }
+
+    /// One explicit Load action for settings and the composer, including a
+    /// media-only cold start. No unrelated chat model is required as a bootstrap.
+    func loadModelManually(_ entry: ModelEntry) async -> Bool {
+        guard entry.cached, !entry.isRemote else { return false }
+        if servingAlias != nil { return await loadStartupModel(entry) }
+        if entry.kind == .video {
+            return await ensureVideoServing(alias: entry.alias, hfPath: entry.hfRepo,
+                                            minimumMemoryGB: entry.minimumMemoryGB, explicitLoad: true)
+        }
+        return await ensureServing(alias: entry.alias, hfPath: entry.hfRepo,
+                                   estimatedMemoryGB: nil, requestIsMedia: entry.kind != .chat,
+                                   mediaKind: entry.kind)
+    }
+
+    /// An inference request must not implicitly load a model set to Manual.
+    /// Explicit Load buttons continue through ensureServing/loadStartupModel.
+    func permitsInferencePreparation(for alias: String) -> Bool {
+        if RemoteModelEndpoint.isRemote(alias) || isModelResident(alias) { return true }
+        return YouziResidentServicePreference.selected(in: sessionDefaults ?? .standard).contains { $0.1 == alias }
     }
 
     /// Restore the explicitly selected media set after the primary is healthy.
@@ -1873,9 +1919,14 @@ final class ServerManager {
         catalogEntryHint: CatalogEntryHint? = nil,
         videoOutputDirectory: String? = nil,
         requestIsMedia: Bool = false,
-        mediaKind: ModelKind? = nil
+        mediaKind: ModelKind? = nil,
+        forInference: Bool = false
     ) async -> Bool {
         if RemoteModelEndpoint.isRemote(alias) { return remoteModelSettings.document.model(alias: alias) != nil }
+        guard !forInference || permitsInferencePreparation(for: alias) else {
+            appendLogLines(["This model uses manual loading. Click Load in Model Settings before sending a request."])
+            return false
+        }
         guard !communityBenchmarkReserved else { return false }
         let trimmed = alias.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }

@@ -92,6 +92,7 @@ struct RemoteModelEditor: View {
     @State private var sourceID: UUID?
     @State private var search = ""
     @State private var showAll = false
+    @State private var showsDiscoveredModels = false
     @State private var discoveryRevision = UUID()
     @State private var result: String?
     @State private var failure: String?
@@ -144,15 +145,20 @@ struct RemoteModelEditor: View {
                     TextField(i18n.text(zh: "远程模型名称 / ID", en: "Remote model name / ID"), text: modelIDBinding)
                         .accessibilityIdentifier("Settings.Remote.ModelID")
                     if !discovered.isEmpty {
-                        TextField(i18n.text(zh: "搜索模型", en: "Search models"), text: $search)
-                        Toggle(i18n.text(zh: "显示全部场景及未识别模型", en: "Show all workflows and unknown models"), isOn: $showAll)
                         Text(i18n.text(zh: "\(discovered.count) 个模型 · 当前场景 \(discovered.filter { $0.slots.contains(model.slot) }.count) 个候选 · 显示 \(filteredModels.count) 个", en: "\(discovered.count) models · \(discovered.filter { $0.slots.contains(model.slot) }.count) workflow candidates · \(filteredModels.count) shown"))
                             .font(RapidFont.caption).foregroundStyle(.secondary)
-                        Picker(i18n.text(zh: "从列表选择", en: "Choose discovered model"), selection: modelIDBinding) {
-                            if !filteredModels.contains(where: { $0.id == model.modelID }) { Text(model.modelID.isEmpty ? "—" : model.modelID).tag(model.modelID) }
-                            ForEach(filteredModels) { Text("\($0.id) · \($0.label(chinese: i18n.isChinese))").tag($0.id) }
+                        Button { showsDiscoveredModels.toggle() } label: {
+                            HStack {
+                                Text(model.modelID.isEmpty ? i18n.text(zh: "请选择一个模型", en: "Choose a model") : model.modelID)
+                                    .lineLimit(1).truncationMode(.middle)
+                                Spacer()
+                                Image(systemName: "chevron.down")
+                            }.frame(maxWidth: .infinity)
                         }
                         .accessibilityIdentifier("Settings.Remote.DiscoveredModels")
+                        .popover(isPresented: $showsDiscoveredModels, arrowEdge: .bottom) {
+                            discoveredModelList
+                        }
                         if filteredModels.isEmpty {
                             Text(i18n.text(zh: "没有匹配项。可显示全部模型，或手动填写模型 ID。", en: "No matches. Show all models or enter a model ID manually."))
                                 .font(RapidFont.caption).foregroundStyle(.secondary)
@@ -221,9 +227,47 @@ struct RemoteModelEditor: View {
     private var modelIDBinding: Binding<String> {
         Binding(get: { model.modelID }, set: { model.selectModelID($0) })
     }
+    private var discoveredModelList: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(i18n.text(zh: "选择远程模型", en: "Choose a remote model")).font(RapidFont.bodyEmphasis)
+            Text(i18n.text(zh: "已读取 \(discovered.count) 个 · 当前场景 \(discovered.filter { $0.slots.contains(model.slot) }.count) 个候选", en: "\(discovered.count) found · \(discovered.filter { $0.slots.contains(model.slot) }.count) workflow candidates"))
+                .font(RapidFont.caption).foregroundStyle(.secondary)
+            TextField(i18n.text(zh: "搜索模型", en: "Search models"), text: $search)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("Settings.Remote.ModelSearch")
+            Toggle(i18n.text(zh: "显示全部场景及未识别模型", en: "Show all workflows and unknown models"), isOn: $showAll)
+                .font(RapidFont.caption)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(filteredModels) { candidate in
+                        Button {
+                            model.selectModelID(candidate.id)
+                            showsDiscoveredModels = false
+                        } label: {
+                            HStack(spacing: 10) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(candidate.id).font(RapidFont.secondary).lineLimit(2)
+                                    Text(candidate.label(chinese: i18n.isChinese)).font(RapidFont.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                                if model.modelID == candidate.id { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+                            }.padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                            .accessibilityIdentifier("Settings.Remote.ModelCandidate.\(candidate.id)")
+                    }
+                    if filteredModels.isEmpty {
+                        Text(i18n.text(zh: "没有匹配项，请调整搜索或显示全部模型。", en: "No matches. Change the search or show all models."))
+                            .foregroundStyle(.secondary).padding(8)
+                    }
+                }
+            }.frame(height: 250)
+        }.padding(16).frame(width: 420)
+            .accessibilityIdentifier("Settings.Remote.DiscoveryResults")
+    }
     private func invalidateDiscovery() {
         checkTask?.cancel(); discoveryRevision = UUID(); checking = false
-        discovered = []; result = nil; failure = nil
+        discovered = []; result = nil; failure = nil; showsDiscoveredModels = false
     }
     private func discover() {
         checking = true; failure = nil; result = nil
@@ -240,6 +284,9 @@ struct RemoteModelEditor: View {
                 let models = try await endpoint.discoverModels()
                 guard !Task.isCancelled, discoveryRevision == revision else { return }
                 discovered = models
+                search = ""
+                showAll = !models.contains { $0.slots.contains(model.slot) }
+                showsDiscoveredModels = !models.isEmpty
                 result = i18n.text(zh: "连接成功，读取到 \(models.count) 个模型。场景能力尚未验证。", en: "Connected: \(models.count) models. Workflow capabilities are not verified by discovery.")
             } catch { if !Task.isCancelled, discoveryRevision == revision { failure = error.localizedDescription } }
         }

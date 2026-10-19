@@ -6,7 +6,6 @@ struct SettingsResidentServicePanel: View {
     var showsLaunchGuidance = true
     @Environment(ServerManager.self) private var server
     @Environment(YouziI18nConfig.self) private var i18n
-    @AppStorage(YouziResidentServicePreference.enabledKey) private var enabled = false
     @State private var entries: [ModelEntry] = []
     @State private var loadingCatalog = false
     @State private var selectedSlot = YouziResidentServicePreference.Slot.chat
@@ -18,8 +17,6 @@ struct SettingsResidentServicePanel: View {
     var body: some View {
         SettingsSection(i18n.text(zh: "可用模型", en: "Available models")) {
             VStack(alignment: .leading, spacing: 12) {
-                Toggle(i18n.text(zh: "服务启动时加载优选清单", en: "Load the preferred pool when the service starts"), isOn: $enabled)
-                    .accessibilityIdentifier("Settings.Models.Resident.Enabled")
                 if slots.count > 1 {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
@@ -40,11 +37,6 @@ struct SettingsResidentServicePanel: View {
                 Text(i18n.text(zh: "本地模型", en: "Local models")).font(RapidFont.bodyEmphasis)
                 ResidentServiceSlotList(slot: slot, entries: entries).id(slot)
                 HStack {
-                    Button(i18n.text(zh: "立即加载优选清单", en: "Load preferred pool now")) {
-                        Task { await server.restoreResidentServices(manually: true) }
-                    }
-                    .disabled(server.servingAlias == nil || server.isRestoringResidentServices || loadingCatalog)
-                    .accessibilityIdentifier("Settings.Models.Resident.Load")
                     if server.isRestoringResidentServices || loadingCatalog { ProgressView().controlSize(.small) }
                     Spacer()
                     Button(i18n.text(zh: "刷新列表", en: "Refresh")) { Task { await refreshCatalog() } }
@@ -52,12 +44,12 @@ struct SettingsResidentServicePanel: View {
                         .accessibilityIdentifier("Settings.Models.Selection.Refresh")
                 }
                 Text(i18n.text(
-                    zh: "未指定模型时，优先复用自动加载清单中已就绪的模型，同等状态按清单顺序选择。在客户端指定模型时按需加载，不会自动下载；外部 API 只接受已加载的本地模型。修改策略不会立即加载或卸载模型；点击右下角“保存”同步到运行中的 API。",
-                    en: "Unspecified requests reuse a ready model in the automatic pool, in saved priority order. The app can load an explicitly selected model on demand, without downloading. External API calls only use loaded local models. Policy changes do not load or unload models. Click Save to apply them to the running API."
+                    zh: "自动加载：每次打开 Youzi 时加载。手动加载：点击模型旁的“加载”后使用。修改策略不会立即卸载已加载模型；策略即时保存，下次启动生效。对外 API 只提供已加载的本地模型。",
+                    en: "Automatic models load when Youzi opens. Manual models load when you click Load. Changing the policy never unloads a running model. Policies are saved immediately and apply at the next launch. The external API only serves loaded local models."
                 )).font(RapidFont.caption).foregroundStyle(.secondary)
                 SettingsRemoteModelsPanel(kind: RemoteModelSlot(rawValue: slot.rawValue)?.kind, slot: RemoteModelSlot(rawValue: slot.rawValue))
                 if showsLaunchGuidance {
-                    Text(i18n.text(zh: "打开客户端后自动加载，还需开启下方的“打开应用时自动启动聊天模型”。视频就绪表示服务可用，不代表权重持续驻留内存。", en: "To load on app launch, also enable chat auto-start below. Video ready means service availability, not permanent weight residency."))
+                    Text(i18n.text(zh: "视频就绪表示服务可用，不代表权重持续驻留内存。", en: "Video ready means service availability, not permanent weight residency."))
                         .font(RapidFont.caption).foregroundStyle(.secondary)
                 }
             }.padding(16)
@@ -109,11 +101,11 @@ struct ResidentServiceSlotList: View {
 
             }
             if !slot.allowsMultiple {
-                Text(i18n.text(zh: "语音识别与语音合成各支持一个已加载模型；每个场景只能选一个自动加载模型。其他模型可按需使用，切换时需先明确卸载原模型。", en: "Transcription and speech each support one loaded model and one automatic selection. Other models remain on demand; switching requires explicitly unloading the occupied lane."))
+                Text(i18n.text(zh: "语音识别与语音合成各支持一个已加载模型；每个场景只能选一个自动加载模型。其他模型可手动加载，切换时需先明确卸载原模型。", en: "Transcription and speech each support one loaded model and one automatic selection. Other models can be loaded manually; switching requires explicitly unloading the occupied lane."))
                     .font(RapidFont.caption).foregroundStyle(.secondary)
             }
             if selected.isEmpty {
-                Text(i18n.text(zh: "未配置自动加载模型。请添加优选模型，或在使用场景中明确选择一个按需模型。", en: "No automatic models configured. Add a preferred model, or explicitly select an on-demand model in the workspace."))
+                Text(i18n.text(zh: "当前没有自动加载模型。可将模型设为“自动加载”，或点击“加载”手动启动。", en: "No automatic models. Choose Automatic for launch-time loading, or click Load to start a model manually."))
                     .font(RapidFont.caption).foregroundStyle(.secondary)
             }
             if choices.isEmpty {
@@ -156,14 +148,14 @@ struct ResidentServiceSlotList: View {
                 Spacer(minLength: 4)
                 Text(loading ? i18n.text(zh: "加载中", en: "Loading") : failure != nil ? i18n.text(zh: "加载失败", en: "Failed") : ready ? i18n.text(zh: "已就绪", en: "Ready") : i18n.text(zh: "未加载", en: "Not loaded"))
                     .font(RapidFont.caption).foregroundStyle(failure != nil ? Color.red : ready ? Color.green : Color.secondary)
-                if let index = selected.firstIndex(of: entry.alias) {
+                if selected.count > 1, let index = selected.firstIndex(of: entry.alias) {
                     Button {
                         YouziResidentServicePreference.promote(entry.alias, for: slot, in: defaults)
                         sync()
                     } label: {
                         Text("#\(index + 1)").monospacedDigit()
                     }.buttonStyle(.borderless).disabled(index == 0)
-                        .help(i18n.text(zh: "提升清单优先级；已就绪模型仍优先复用", en: "Move first in the pool; ready models are still reused first"))
+                        .help(i18n.text(zh: "设为优先使用的模型；已就绪模型仍优先复用", en: "Move first in the pool; ready models are still reused first"))
                         .accessibilityLabel(i18n.text(zh: "提升优先级", en: "Move first"))
                         .accessibilityIdentifier("Settings.Models.Selection.Priority.\(entry.alias)")
                 }
@@ -174,7 +166,7 @@ struct ResidentServiceSlotList: View {
                         sync()
                     }
                 )) {
-                    Text(i18n.text(zh: "按需加载", en: "On demand"))
+                    Text(i18n.text(zh: "手动加载", en: "Manual"))
                         .tag(YouziResidentServicePreference.LoadingPolicy.onDemand)
                     Text(i18n.text(zh: "自动加载", en: "Automatic"))
                         .tag(YouziResidentServicePreference.LoadingPolicy.automatic)
@@ -205,13 +197,7 @@ struct ResidentServiceSlotList: View {
         guard loadingAlias == nil else { return }
         loadingAlias = entry.alias; loadError = nil
         defer { loadingAlias = nil }
-        let success: Bool
-        if server.servingAlias != nil { success = await server.loadStartupModel(entry) }
-        else if entry.kind == .chat { success = await server.ensureServing(alias: entry.alias, hfPath: entry.hfRepo) }
-        else {
-            loadError = i18n.text(zh: "请先加载聊天模型以启动本地服务。", en: "Load a chat model first to start the local service.")
-            return
-        }
+        let success = await server.loadModelManually(entry)
         if success { await server.refreshResidency() }
         else {
             loadError = server.residentLoadFailures[entry.alias]?.message
