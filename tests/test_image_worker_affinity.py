@@ -150,3 +150,14 @@ def test_idle_adapter_does_not_start_worker():
     assert engine._worker is None
     asyncio.run(engine.stop())
     assert engine._worker is None
+
+
+def test_parallel_receipts_stay_with_their_render_on_owner_thread(lane):
+    engine, events = lane
+    with ThreadPoolExecutor(max_workers=3) as clients:
+        renders = [clients.submit(engine.generate_with_metadata, prompt="square", seed=seed,
+                                  num_inference_steps=8) for seed in (31, 32, 33)]
+        results = [future.result(timeout=5) for future in renders]
+    assert [receipt["seed"] for _, receipt in results] == [31, 32, 33]
+    assert all(png.startswith(b"\x89PNG") and receipt["steps"] == 8 for png, receipt in results)
+    assert len({owner for _, owner in events}) == 1

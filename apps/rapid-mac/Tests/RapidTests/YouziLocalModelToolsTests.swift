@@ -20,6 +20,8 @@ struct YouziLocalModelToolsTests {
         var loads = 0
         var generations = 0
         var capturedSize: String?
+        var capturedImage: ImageGenerationOptions?
+        var imageParameters: ImageGenerationParameters?
         var capturedVoice: String?
         var inspectedVideoModels: [String] = []
         var capturedVideo: YouziLocalVideoTool.Input?
@@ -33,7 +35,7 @@ struct YouziLocalModelToolsTests {
             catalog: { [self] in [image, speech, missing] + additionalModels },
             snapshot: { [self] in snapshot },
             load: { [self] entry in loads += 1; if loadFails { return false }; ready.insert(entry.alias); return true },
-            image: { [self] _, entry, size in generatedWith.append(entry.alias); generations += 1; capturedSize = size; if let imageError { throw imageError }; return png },
+            image: { [self] prompt, entry, options in generatedWith.append(entry.alias); generations += 1; capturedSize = options.size; capturedImage = options; if let imageError { throw imageError }; return GeneratedImage(pngData: png, prompt: prompt, isEdit: false, parameters: imageParameters) },
             speech: { [self] _, entry, voice in generatedWith.append(entry.alias); generations += 1; capturedVoice = voice; return SynthesizedAudio(data: wav, contentType: "audio/wav") },
             context: { [self] in context },
             save: { [self] data, name, _, kind, context in
@@ -86,6 +88,53 @@ struct YouziLocalModelToolsTests {
             try await Task.sleep(for: .milliseconds(5))
         }
         throw YouziLocalModelTools.Failure.generation_failed
+    }
+
+    @Test("Image controls are per-call and receipts use actual reported values")
+    func imageParameters() async throws {
+        let f = Fixture(); f.ready.insert(f.image.alias)
+        let settings = f.preferences.dictionaryRepresentation()
+        f.imageParameters = .init(seed: 321, steps: 40, size: "768x512", guidance: 1, negativePromptApplied: false, elapsedMs: 1234)
+        let result = try await f.call("youzi_generate_image", ["model": f.image.alias, "prompt": "moon", "size": "768x512", "seed": 321, "steps": 40, "guidance": 1])
+        #expect(!result.isError)
+        #expect(f.capturedImage == .init(size: "768x512", seed: 321, steps: 40, guidance: 1))
+        let receipt = try #require(try json(result)["generation"] as? [String: Any])
+        #expect(receipt["seed"] as? Int == 321 && receipt["steps"] as? Int == 40)
+        #expect(receipt["parameters_reported"] as? Bool == true)
+        #expect(receipt["negative_prompt_applied"] as? Bool == false)
+        #expect(receipt["elapsed_ms"] as? Int == 1234)
+        #expect(NSDictionary(dictionary: settings).isEqual(to: f.preferences.dictionaryRepresentation()))
+        f.imageParameters = nil
+        let oldRuntime = try await f.call("youzi_generate_image", ["model": f.image.alias, "prompt": "moon", "seed": 7])
+        let unknown = try #require(try json(oldRuntime)["generation"] as? [String: Any])
+        #expect(unknown["parameters_reported"] as? Bool == false && unknown["seed"] == nil)
+        #expect(f.capturedImage?.steps == nil && f.capturedImage?.guidance == nil)
+    }
+
+    @Test("Invalid image controls fail before startup approval or generation")
+    func invalidImageParameters() async throws {
+        let f = Fixture()
+        let invalid: [[String: Any]] = [["seed": -1], ["seed": 2147483648], ["seed": true], ["seed": "42"], ["seed": 1.5], ["steps": 0], ["steps": 51], ["steps": 2.5], ["steps": false], ["guidance": -1], ["guidance": 21], ["guidance": true], ["guidance": NSNull()], ["negative_prompt": ""], ["negative_prompt": String(repeating: "x", count: 4001)]]
+        for extra in invalid {
+            var args: [String: Any] = ["model": f.image.alias, "prompt": "moon"]
+            args.merge(extra) { _, new in new }
+            let result = try await f.call("youzi_generate_image", args)
+            #expect(result.isError && result.content.contains("invalid_arguments"))
+        }
+        #expect(f.loads == 0 && f.generations == 0 && f.tools.approval.pending == nil)
+    }
+
+    @Test("CFG and negative prompt forward together; rejection is not a GPU failure")
+    func imageCFG() async throws {
+        let f = Fixture(); f.ready.insert(f.image.alias)
+        let result = try await f.call("youzi_generate_image", ["model": f.image.alias, "prompt": "moon", "seed": 0, "steps": 1, "guidance": 2.5, "negative_prompt": "blur"])
+        #expect(!result.isError)
+        #expect(f.capturedImage == .init(seed: 0, steps: 1, guidance: 2.5, negativePrompt: "blur"))
+        f.imageError = .http(status: 400, message: "private server details")
+        let failed = try await f.call("youzi_generate_image", ["model": f.image.alias, "prompt": "moon"])
+        #expect(failed.isError && failed.content.contains("image_parameters_unsupported"))
+        #expect(!failed.content.contains("private server details"))
+        #expect(f.saved.count == 1)
     }
 
     @Test("Discovery reports downloaded and actual ready states without changing models")
@@ -233,7 +282,7 @@ struct YouziLocalModelToolsTests {
             #expect(!text.contains("secret") && !text.contains("sk-private"))
         }
         #expect(YouziLocalModelTools.imageFailure(.emptyResponse) == .image_empty_output)
-        #expect(YouziLocalModelTools.imageFailure(.http(status: 400, message: "bad size")) == .image_generation_failed)
+        #expect(YouziLocalModelTools.imageFailure(.http(status: 400, message: "bad size")) == .image_parameters_unsupported)
         #expect(YouziLocalModelTools.imageFailure(.notReady) == .model_not_ready)
     }
 

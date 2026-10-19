@@ -31,6 +31,31 @@ rapid-mlx serve qwen-image-2.1
 `hub/blobs/<两位哈希前缀>/<完整 SHA-256>` 共享缓存。
 其他指向仓库外的文件链接仍会被拒绝。
 
+## 智能体调用参数
+
+`youzi_generate_image` 除了 `model`、`prompt`、`size`，还接受以下可选参数。
+参数只影响本次生成，不会修改设置；省略时使用模型默认值。
+
+| 参数 | 范围与用途 |
+| --- | --- |
+| `seed` | 0–2147483647 的整数；省略时随机。复现时需同时保留模型、提示词、尺寸及其余参数。 |
+| `steps` | 1–50 的整数；Qwen-Image 2.1 默认 40。增加步数不保证改善画质。 |
+| `guidance` | 工具通用范围 0–20；Qwen-Image 2.1 接受 1–20，默认 1。 |
+| `negative_prompt` | 最多 4000 字符，用于描述希望排除的内容。 |
+
+当前 mflux 0.20.0 的 Qwen-Image 2.1 只有在 `guidance > 1` 且提供非空
+`negative_prompt` 时启用真正的 CFG。两者需要一起传；否则请都省略。
+不完整组合会在渲染前返回参数错误。CFG 会增加计算量，不能把较高 CFG
+当成通用的“更清晰”选项。其他模型按各自能力校验：例如 Bonsai 固定 4 步，
+HiDream-O1 / SD3.5 固定 28 步，FLUX.1 与 Z-Image Turbo 不接受负提示词，
+Schnell 不接受引导系数，Z-Image Turbo 仅接受省略或 0。
+
+成功回执的 `generation` 包含模型名称，以及运行库报告的实际种子、步数、
+尺寸、引导系数、负提示词是否生效（可确认时）和本次耗时。旧运行库未提供
+回执时，`parameters_reported` 为 `false`，智能体不能把请求值当作已生效值。
+这些字段也随本地 `/v1/images/generations` 每张图片的 `parameters` 返回；
+OpenAI SDK 可通过 `extra_body` 传入上述扩展参数。新增扩展不转发给未知远程网关。
+
 ## 验证记录（2026-10-19）
 
 本机为 Apple M5 Max、128GB 统一内存。真实离线生成使用上述固定权重、

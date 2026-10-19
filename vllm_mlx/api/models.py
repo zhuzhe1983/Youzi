@@ -3382,9 +3382,9 @@ class ImageGenerationRequest(BaseModel):
     # Upper bound so an arbitrarily large Python int can't reach the native
     # MLX/mflux backend and overflow into a 500.
     seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
-    negative_prompt: str | None = None
-    # Diffusion-step count. schnell/Qwen-Image are distilled for 2-8 steps; the
-    # ceiling keeps a single request from monopolizing the GPU for minutes.
+    negative_prompt: str | None = Field(default=None, max_length=4000)
+    # Model-specific defaults (e.g. Qwen-Image 2.1: 40); the ceiling bounds
+    # per-request work without replacing trained schedules.
     steps: int | None = Field(default=None, ge=1, le=50)
     guidance: float | None = Field(default=None, ge=0.0, le=20.0)
 

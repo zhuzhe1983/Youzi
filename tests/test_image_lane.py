@@ -18,6 +18,7 @@ from vllm_mlx.api.models import ImageGenerationRequest
 from vllm_mlx.image.engine import (
     ImageGenerationCancelled,
     ImageGenerationEngine,
+    ImageParameterError,
     ImageRuntimeError,
 )
 from vllm_mlx.runtime.image_lane import ImageEngine
@@ -439,18 +440,15 @@ def test_generate_resets_progress_and_registers_reporter():
     assert engine._progress["total"] == 4
 
 
-def test_klein_drops_unsupported_negative_prompt():
-    # Regression: FLUX.2 Klein's generate_image has no negative_prompt param,
-    # so the engine must NOT forward it (passing it raises a TypeError).
+def test_klein_rejects_unsupported_negative_prompt_before_load():
     engine = ImageGenerationEngine("Runpod/FLUX.2-klein-4B-mflux-4bit")
-    fake = _FakeModel()
-    engine._model = fake
-    engine.generate(prompt="a fox", negative_prompt="blurry, low quality", seed=1)
-    assert "negative_prompt" not in fake.calls[0]
+    with pytest.raises(ImageParameterError, match="negative_prompt"):
+        engine.generate(prompt="a fox", negative_prompt="blurry", seed=1)
+    assert engine._model is None
 
 
 def test_supporting_family_keeps_negative_prompt():
-    engine = ImageGenerationEngine("filipstrand/Z-Image-Turbo-mflux-4bit")
+    engine = ImageGenerationEngine("Qwen/Qwen-Image")
     fake = _FakeModel()
     engine._model = fake
     engine.generate(prompt="a fox", negative_prompt="blurry", seed=1)
@@ -1022,3 +1020,88 @@ def test_image_alias_skips_the_mllm_routing_preflight(monkeypatch):
     finally:
         for attr, value in saved.items():
             setattr(server, attr, value)
+
+
+@pytest.mark.parametrize("controls", [
+    {"guidance": 2}, {"negative_prompt": "blur"},
+    {"guidance": 1, "negative_prompt": "blur"}, {"guidance": 0.5},
+    {"guidance": 2, "negative_prompt": "   "},
+])
+def test_qwen21_rejects_inactive_cfg_before_loading(controls):
+    engine = ImageGenerationEngine("Qwen/Qwen-Image-2.1")
+    with pytest.raises(ImageParameterError, match="Qwen-Image 2.1"):
+        engine.generate(prompt="a fox", **controls)
+    assert engine._model is None
+
+
+def test_generation_metadata_comes_from_render_not_request(monkeypatch):
+    engine = ImageGenerationEngine("Qwen/Qwen-Image-2.1")
+    class Model:
+        def generate_image(self, **kwargs):
+            return types.SimpleNamespace(image=Image.new("RGB", (320, 256)), seed=9,
+                                         steps=38, guidance=2.5)
+    fake = Model()
+    engine._model = fake
+    monkeypatch.setattr(engine, "_ensure_loaded", lambda **_: fake)
+    png, receipt = engine.generate_with_metadata(prompt="a fox", seed=8,
+        width=512, height=512, num_inference_steps=40, guidance=2.5, negative_prompt="blur")
+    assert png.startswith(_PNG_MAGIC)
+    assert receipt["size"] == "320x256"
+    assert receipt["seed"] == 9 and receipt["steps"] == 38
+    assert receipt["guidance"] == 2.5 and receipt["negative_prompt_applied"] is True
+    assert receipt["elapsed_ms"] >= 0
+
+
+def test_route_returns_each_images_actual_receipt(client, monkeypatch):
+    class WithReceipt(_FakeImageEngine):
+        def generate_with_metadata(self, **kwargs):
+            png = self.generate(**kwargs)
+            return png, {"seed": kwargs["seed"], "steps": kwargs["num_inference_steps"],
+                         "size": "4x4", "guidance": 1, "negative_prompt_applied": False, "elapsed_ms": 10}
+    engine = WithReceipt()
+    engine.default_steps = 40
+    _patch_engine(monkeypatch, engine)
+    response = client.post("/v1/images/generations", json={"prompt": "fox", "n": 2, "seed": 2147483647})
+    assert response.status_code == 200
+    items = response.json()["data"]
+    assert [item["parameters"]["seed"] for item in items] == [2147483647, 0]
+    assert all(item["parameters"]["steps"] == 40 for item in items)
+
+
+def test_route_rejects_parameter_contract_as_400_not_worker_failure(client, monkeypatch):
+    class Invalid(_FakeImageEngine):
+        def generate_with_metadata(self, **kwargs):
+            raise ImageParameterError("Qwen-Image 2.1 true CFG requires both controls")
+    _patch_engine(monkeypatch, Invalid())
+    response = client.post("/v1/images/generations", json={"prompt": "fox", "guidance": 2})
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "unsupported_image_parameters"
+
+
+def test_old_engine_has_no_invented_parameter_receipt(client, monkeypatch):
+    _patch_engine(monkeypatch, _FakeImageEngine())
+    response = client.post("/v1/images/generations", json={"prompt": "fox", "seed": 42})
+    assert response.status_code == 200
+    assert "parameters" not in response.json()["data"][0]
+
+
+@pytest.mark.parametrize("model", ["black-forest-labs/FLUX.1-schnell", "black-forest-labs/FLUX.1-dev", "filipstrand/Z-Image-Turbo-mflux-4bit"])
+def test_ignored_negative_controls_are_rejected_before_loading(model):
+    engine = ImageGenerationEngine(model)
+    with pytest.raises(ImageParameterError, match="negative_prompt"):
+        engine.generate(prompt="fox", negative_prompt="blur")
+    assert engine._model is None
+
+
+def test_z_image_turbo_rejects_ineffective_guidance():
+    engine = ImageGenerationEngine("filipstrand/Z-Image-Turbo-mflux-4bit")
+    with pytest.raises(ImageParameterError, match="guidance"):
+        engine.generate(prompt="fox", guidance=7)
+    assert engine._model is None
+
+
+def test_schnell_rejects_ineffective_guidance():
+    engine = ImageGenerationEngine("black-forest-labs/FLUX.1-schnell")
+    with pytest.raises(ImageParameterError, match="guidance"):
+        engine.generate(prompt="fox", guidance=4)
+    assert engine._model is None

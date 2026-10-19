@@ -1,7 +1,6 @@
 import Foundation
 
-/// One generated (or edited) image plus the seed that produced it, so the
-/// gallery can label results and an edit can re-target a specific image.
+/// One generated (or edited) image and any parameters reported by its runtime.
 struct GeneratedImage: Identifiable, Hashable, Sendable {
     let id = UUID()
     /// Decoded PNG bytes (from the API's ``b64_json``).
@@ -10,6 +9,30 @@ struct GeneratedImage: Identifiable, Hashable, Sendable {
     let prompt: String
     /// True when this came from ``/v1/images/edits`` (vs. generations).
     let isEdit: Bool
+    var parameters: ImageGenerationParameters? = nil
+}
+
+/// Per-call overrides; nil leaves the configured size and backend defaults intact.
+struct ImageGenerationOptions: Sendable, Equatable {
+    var size: String? = nil
+    var seed: Int? = nil
+    var steps: Int? = nil
+    var guidance: Double? = nil
+    var negativePrompt: String? = nil
+}
+
+/// Reported by the runtime that produced the image, never inferred from a request.
+struct ImageGenerationParameters: Codable, Hashable, Sendable {
+    let seed: Int
+    let steps: Int
+    let size: String
+    let guidance: Double?
+    let negativePromptApplied: Bool?
+    let elapsedMs: Int
+    enum CodingKeys: String, CodingKey {
+        case seed, steps, size, guidance
+        case negativePromptApplied = "negative_prompt_applied", elapsedMs = "elapsed_ms"
+    }
 }
 
 /// Errors surfaced to the Images tab. Mirrors ``ChatStreamError`` in shape:
@@ -74,10 +97,26 @@ struct ImageClient {
         let size: String
         var response_format: String? = "b64_json"
         let seed: Int?
+        let steps: Int?
+        let guidance: Double?
+        let negative_prompt: String?
     }
 
     private struct ImageResponse: Decodable {
-        struct Item: Decodable { let b64_json: String?; let url: String? }
+        struct Item: Decodable {
+            let b64_json: String?
+            let url: String?
+            let parameters: ImageGenerationParameters?
+            enum CodingKeys: String, CodingKey { case b64_json, url, parameters }
+            init(from decoder: Decoder) throws {
+                let values = try decoder.container(keyedBy: CodingKeys.self)
+                b64_json = try values.decodeIfPresent(String.self, forKey: .b64_json)
+                url = try values.decodeIfPresent(String.self, forKey: .url)
+                // Unknown metadata from an older runtime or remote gateway must
+                // not discard a valid image; absent receipts remain unknown.
+                parameters = try? values.decode(ImageGenerationParameters.self, forKey: .parameters)
+            }
+        }
         let data: [Item]
         let cancelled: Bool?
     }
@@ -100,10 +139,17 @@ struct ImageClient {
         size: String? = nil,
         count: Int,
         seed: Int?,
+        steps: Int? = nil,
+        guidance: Double? = nil,
+        negativePrompt: String? = nil,
         port: Int,
         bearer: String?
     ) async throws -> [GeneratedImage] {
         let remote = try remoteRepository.endpoint(alias: model, slot: .image)
+        // These extensions belong to the local runtime, not arbitrary gateways.
+        if remote != nil, steps != nil || guidance != nil || negativePrompt != nil {
+            throw ImageClientError.http(status: 400, message: "Advanced image parameters require a local model.")
+        }
         let url = remote?.url("images/generations") ?? Self.loopbackURL(port: port).appendingPathComponent("v1/images/generations")
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -112,10 +158,10 @@ struct ImageClient {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         applyBearer(&req, remote == nil ? bearer : remote?.apiKey)
         req.httpBody = try JSONEncoder().encode(
-            GenerationBody(model: remote?.modelID ?? model, prompt: prompt, n: count, size: size ?? generationDefaults.imageSize, response_format: remote == nil || remote?.configuration.imageResponseFormat == "b64_json" ? "b64_json" : nil, seed: remote == nil ? seed : nil)
+            GenerationBody(model: remote?.modelID ?? model, prompt: prompt, n: count, size: size ?? generationDefaults.imageSize, response_format: remote == nil || remote?.configuration.imageResponseFormat == "b64_json" ? "b64_json" : nil, seed: remote == nil ? seed : nil, steps: steps, guidance: guidance, negative_prompt: negativePrompt)
         )
         let images = try await sendAndDecode(req, remote: remote != nil)
-        return images.map { GeneratedImage(pngData: $0, prompt: prompt, isEdit: false) }
+        return images.map { GeneratedImage(pngData: $0.png, prompt: prompt, isEdit: false, parameters: $0.parameters) }
     }
 
     // MARK: - Edits
@@ -160,7 +206,7 @@ struct ImageClient {
             fileMime: "image/png", fileData: imagePNG
         )
         let images = try await sendAndDecode(req, remote: remote != nil)
-        return images.map { GeneratedImage(pngData: $0, prompt: prompt, isEdit: true) }
+        return images.map { GeneratedImage(pngData: $0.png, prompt: prompt, isEdit: true, parameters: $0.parameters) }
     }
 
     // MARK: - Shared
@@ -173,7 +219,7 @@ struct ImageClient {
 
     /// Send, validate status, decode the ``{data:[{b64_json}]}`` envelope
     /// into raw PNG byte blobs.
-    private func sendAndDecode(_ req: URLRequest, remote: Bool = false) async throws -> [Data] {
+    private func sendAndDecode(_ req: URLRequest, remote: Bool = false) async throws -> [(png: Data, parameters: ImageGenerationParameters?)] {
         let data: Data
         let response: URLResponse
         do {
@@ -203,12 +249,12 @@ struct ImageClient {
         // Fail on any malformed item rather than silently dropping it — a
         // "successful" batch that quietly returns fewer images than requested
         // would hide server corruption behind a partial gallery.
-        var blobs: [Data] = []
+        var blobs: [(png: Data, parameters: ImageGenerationParameters?)] = []
         for item in decoded.data {
             if let b64 = item.b64_json, let data = Data(base64Encoded: b64) {
-                blobs.append(data)
+                blobs.append((data, remote ? nil : item.parameters))
             } else if remote, let text = item.url, let url = URL(string: text) {
-                blobs.append(try await remoteImageDownload(url))
+                blobs.append((try await remoteImageDownload(url), nil))
             } else { throw ImageClientError.emptyResponse }
         }
         return blobs

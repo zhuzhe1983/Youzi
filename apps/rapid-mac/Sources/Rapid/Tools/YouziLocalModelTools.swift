@@ -25,7 +25,7 @@ final class YouziLocalModelTools {
         var catalog: @MainActor () async throws -> [ModelEntry]
         var snapshot: @MainActor () async -> ModelResidencySnapshot
         var load: @MainActor (ModelEntry) async -> Bool
-        var image: @MainActor (String, ModelEntry, String?) async throws -> Data
+        var image: @MainActor (String, ModelEntry, ImageGenerationOptions) async throws -> GeneratedImage
         var speech: @MainActor (String, ModelEntry, String?) async throws -> SynthesizedAudio
         var context: @MainActor () -> Context?
         var save: @MainActor (Data, String, String, YouziArtifactKind, Context) throws -> Saved
@@ -38,7 +38,7 @@ final class YouziLocalModelTools {
         case catalog_unavailable, invalid_arguments, model_not_downloaded, model_not_ready
         case capability_not_supported, user_declined, load_failed, cancelled, automatic_model_unavailable
         case task_unavailable, file_unavailable, generation_failed, output_too_large, invalid_voice, video_timeout
-        case image_worker_failed, image_generation_failed, image_empty_output
+        case image_worker_failed, image_generation_failed, image_empty_output, image_parameters_unsupported
     }
     let approval: YouziModelApprovalStore
     let dependencies: Dependencies
@@ -61,13 +61,14 @@ final class YouziLocalModelTools {
     3. Plan a short book (up to 8 pages). Generate each illustration with youzi_generate_image and each narration with youzi_synthesize_speech, reusing consistent visual descriptions. Use the configured image size and voice unless the user requests a change. Omit voice by default; Chinese/English are languages, NOT speaker names. If a different speaker is requested, query youzi_speech_voices first and use an exact returned ID. Use returned artifact_id values, never invent IDs.
     4. Call youzi_create_storybook with title and ordered pages (heading, text, image_id, audio_id) to save an offline HTML book with embedded images and audio controls in My Files, linked to this task. It is a real file, not a code block. Report the returned filename. Preserve partial successes and state any missing media honestly.
     5. For short video requests use youzi_generate_video, omitting model to reuse the automatic video pool. youzi_video_capabilities reports presets for the ready selected model without starting it. Use an exact model alias only when the user selected it. Omit size/seconds to use compatible configured defaults. For image-to-video, reference_image_id must be an image artifact from this task, not a URL/path. The tool waits for its own job and saves a real MP4 to My Files. A timeout or Stop ends waiting and attempts to cancel a queued job; GPU work already running may continue in the Video workspace. Do not retry automatically or promise immediate GPU cancellation. Video files are separate artifacts; the HTML book currently embeds images/audio only.
+    6. Image calls accept optional seed, steps, guidance and negative_prompt. These override only this call, not saved settings. Omit them for model defaults; more steps or stronger guidance do not always improve quality. Qwen-Image 2.1 defaults to 40 steps and guidance 1.0. To enable its true CFG, supply BOTH guidance > 1 and a nonempty negative_prompt; otherwise omit both. CFG adds computation. Other models may reject unsupported controls or require fixed steps. Reuse returned seed, prompt, model and parameters for reproducibility; a seed alone does not preserve a character across changed prompts. Report only returned generation parameters as actual values; missing fields mean unknown. Do not invent settings controls or claim a parameter took effect without a receipt.
     Tools run locally and sequentially with a finite budget. Image/audio interpretation is NOT supplied by these tools; do not claim those operations succeeded. Images attached directly to a vision-capable chat model still use the normal image-input path. Do not use browse/MCP/shell to bypass these boundaries.
     """
 
     static let definitions: [ToolDefinition] = [
         define("youzi_models", "List Youzi's local model catalog with downloaded/ready states and supported tool operations. Call before local media generation. No downloads, startup or settings changes.", [:], []),
         define("youzi_load_model", "Request human confirmation to start a downloaded image, speech or video model alongside chat. Never claim approval yourself. If denied do not retry. Does not download, restart chat or enable autostart.", ["model": string("Exact alias from youzi_models"), "reason": string("Short explanation of why this user's task needs the model")], ["model", "reason"]),
-        define("youzi_generate_image", "Generate ONE local illustration using a downloaded image model; reuse it if ready, otherwise request human startup approval. Saves an image artifact to this task and returns artifact_id. Omit model to use the automatic image pool; specify an exact alias for an on-demand model. Uses configured default size if omitted.", ["model": string("Optional exact image alias; omit to use the automatic pool"), "prompt": string("Detailed illustration prompt"), "size": string("Optional WIDTHxHEIGHT, 256..2048, multiples of 64; must be supported by model")], ["prompt"]),
+        define("youzi_generate_image", "Generate ONE local illustration; request startup approval if stopped. Saves an artifact to this task and returns artifact_id and actual generation parameters when reported by the runtime. Omit model to use the automatic image pool. Optional parameters override this call only; omit them for configured size and model defaults.", ["model": string("Optional exact image alias; omit to use the automatic pool"), "prompt": string("Detailed illustration prompt"), "size": string("Optional WIDTHxHEIGHT, 256..2048, multiples of 64; must be supported by model"), "seed": number("integer", 0, 2147483647, "Optional fixed seed; omit for random"), "steps": number("integer", 1, 50, "Optional denoising steps; omit for model default (Qwen-Image 2.1: 40). Some models require fixed steps."), "guidance": number("number", 0, 20, "Optional model-specific guidance. Qwen-Image 2.1: omit for 1.0, or use >1 with negative_prompt for CFG."), "negative_prompt": string("Optional exclusions, up to 4000 characters. Qwen-Image 2.1 requires guidance >1; some models do not support this.")], ["prompt"]),
         define("youzi_speech_voices", "List supported speaker IDs for a downloaded speech model. Does not load weights or generate audio. Omit voice in synthesis to use the configured default. Language names are not voices.", ["model": string("Exact speech alias from youzi_models")], ["model"]),
         define("youzi_synthesize_speech", "Generate local narration with a downloaded speech model; reuse it if ready, otherwise request human startup approval. Omit model to use the automatic speech pool. Saves audio to this task and returns artifact_id. Uses configured default voice if omitted. Maximum 2000 characters per call.", ["model": string("Optional exact speech alias; omit to use the automatic pool"), "text": string("Text to speak"), "voice": string("Omit by default. Otherwise exact speaker ID from youzi_speech_voices; never Chinese/English")], ["text"]),
         define("youzi_video_capabilities", "Inspect the exact ready video model's modes, sizes and duration presets. Omit model for the automatic video pool. Does not start/download a model. If stopped, generation can request human startup approval.", ["model": string("Optional exact video alias; omit for the automatic pool")], []),
@@ -76,6 +77,9 @@ final class YouziLocalModelTools {
     ]
     private static func string(_ description: String) -> CodableJSON {
         .object(["type": .string("string"), "description": .string(description)])
+    }
+    private static func number(_ type: String, _ min: Double, _ max: Double, _ description: String) -> CodableJSON {
+        .object(["type": .string(type), "minimum": .number(min), "maximum": .number(max), "description": .string(description)])
     }
     private static func define(_ name: String, _ description: String, _ properties: [String: CodableJSON], _ required: [String]) -> ToolDefinition {
         ToolDefinition(name: name, description: description, parameters: .object([
@@ -106,11 +110,13 @@ final class YouziLocalModelTools {
                     let preferred = YouziResidentServicePreference.Slot.allCases.filter {
                         YouziResidentServicePreference.automaticAlias(for: $0, entries: catalog, snapshot: snapshot, in: preferences) == entry.alias
                     }.map(\.rawValue)
-                    return ["model": entry.alias, "kind": entry.kind.rawValue, "downloaded": entry.cached,
+                    var row: [String: Any] = ["model": entry.alias, "kind": entry.kind.rawValue, "downloaded": entry.cached,
                         "ready": YouziScenarioModels.isReady(entry, in: snapshot),
                         "operations": Self.operations(entry), "disk_size": entry.sizeOnDisk ?? "unknown",
                         "loading_policy": !entry.cached ? "not_downloaded" : automatic.isEmpty ? "on_demand" : "automatic",
                         "automatic_for": automatic, "preferred_for": preferred, "default_for": preferred]
+                    if let steps = entry.imageDefaultSteps { row["image_default_steps"] = steps }
+                    return row
                 }
                 return success(["models": models, "missing_model_action": "Settings > Models > Files", "note": "Downloaded is not necessarily runnable; startup validates dependencies and memory. No keys are exposed."], id: call.id)
             }
@@ -172,7 +178,7 @@ final class YouziLocalModelTools {
             let saved: Saved
             switch call.function.name {
             case "youzi_generate_image":
-                try validateKeys(args, allowed: ["model", "prompt", "size"])
+                try validateKeys(args, allowed: ["model", "prompt", "size", "seed", "steps", "guidance", "negative_prompt"])
                 guard Self.operations(entry).contains("image_generation") else { throw Failure.capability_not_supported }
                 let prompt = try text(args, "prompt", max: 4000)
                 let size = try optionalText(args, "size", max: 12)
@@ -181,11 +187,24 @@ final class YouziLocalModelTools {
                     let parts = dimensions.compactMap { Int($0) }
                     guard dimensions.count == 2, parts.count == 2, parts.allSatisfy({ (256...2048).contains($0) && $0 % 64 == 0 }) else { throw Failure.invalid_arguments }
                 }
+                let options = ImageGenerationOptions(size: size,
+                    seed: try optionalNumber(args, "seed", range: 0...2147483647, integer: true).map(Int.init),
+                    steps: try optionalNumber(args, "steps", range: 1...50, integer: true).map(Int.init),
+                    guidance: try optionalNumber(args, "guidance", range: 0...20),
+                    negativePrompt: try optionalText(args, "negative_prompt", max: 4000))
                 try await ensureReady(entry, snapshot: snapshot, reason: "Generate an illustration for the current task")
-                let png = try await dependencies.image(prompt, entry, size)
+                let image = try await dependencies.image(prompt, entry, options)
+                let png = image.pngData
                 try Task.checkCancellation()
                 guard !png.isEmpty, png.count <= YouziStorybook.maxAssetBytes else { throw Failure.output_too_large }
                 saved = try dependencies.save(png, "illustration-\(UUID().uuidString.prefix(8)).png", "public.png", .image, context)
+                var generation: [String: Any] = ["model": entry.alias, "parameters_reported": image.parameters != nil]
+                if let parameters = image.parameters {
+                    let encoded = try JSONEncoder().encode(parameters)
+                    let values = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] ?? [:]
+                    generation.merge(values) { _, reported in reported }
+                }
+                return savedResult(saved, id: call.id, generation: generation)
             case "youzi_generate_video":
                 try validateKeys(args, allowed: ["model", "prompt", "size", "seconds", "reference_image_id"])
                 guard Self.operations(entry).contains("video_generation") else { throw Failure.capability_not_supported }
@@ -287,9 +306,18 @@ final class YouziLocalModelTools {
         guard args[key] != nil else { return nil }
         return try text(args, key, max: max)
     }
-    private func savedResult(_ saved: Saved, id: String) -> ToolCallResult {
-        success(["artifact_id": saved.artifactID.uuidString, "file_id": saved.fileID.uuidString,
-                 "filename": saved.name, "location": "My Files / current task", "saved": true], id: id)
+    private func optionalNumber(_ args: [String: Any], _ key: String, range: ClosedRange<Double>, integer: Bool = false) throws -> Double? {
+        guard let raw = args[key] else { return nil }
+        guard let number = raw as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite, range.contains(number.doubleValue),
+              !integer || number.doubleValue.rounded() == number.doubleValue else { throw Failure.invalid_arguments }
+        return number.doubleValue
+    }
+    private func savedResult(_ saved: Saved, id: String, generation: [String: Any]? = nil) -> ToolCallResult {
+        var result: [String: Any] = ["artifact_id": saved.artifactID.uuidString, "file_id": saved.fileID.uuidString,
+                 "filename": saved.name, "location": "My Files / current task", "saved": true]
+        if let generation { result["generation"] = generation }
+        return success(result, id: id)
     }
     private func success(_ object: [String: Any], id: String) -> ToolCallResult {
         let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data()
@@ -301,6 +329,7 @@ final class YouziLocalModelTools {
         switch error {
         case .notReady: return .model_not_ready
         case .emptyResponse: return .image_empty_output
+        case let .http(status, _) where status == 400 || status == 422: return .image_parameters_unsupported
         case let .http(status, message) where status >= 500:
             let detail = message?.lowercased() ?? ""
             return detail.contains("there is no stream(") && detail.contains("in current thread")
@@ -315,6 +344,7 @@ final class YouziLocalModelTools {
               let object = try? JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any],
               let code = object["error"] as? String else { return nil }
         switch code {
+        case "image_parameters_unsupported": return chinese ? "当前图片模型不支持这组参数，未生成图片。请检查步数、引导系数与负提示词的组合。" : "This image model does not support these parameters; no image was generated. Check steps, guidance and negative prompt together."
         case "image_worker_failed": return chinese ? "图片模型的 GPU 执行线程异常，未生成图片。这不是提示词问题；请更新客户端，并重新加载图片模型后再试。" : "The image model's GPU worker failed; no image was generated. This is not a prompt error. Update the client and reload the image model before retrying."
         case "image_generation_failed": return chinese ? "图片生成服务未完成请求，未保存图片。请检查图片模型状态和服务日志，不要连续重复提交。" : "The image service could not finish; no image was saved. Check the image model and service logs instead of repeatedly resubmitting."
         case "image_empty_output": return chinese ? "图片服务没有返回图片，未保存成果。请检查图片模型状态。" : "The image service returned no image; no artifact was saved. Check the image model's status."
@@ -331,6 +361,7 @@ final class YouziLocalModelTools {
     private func failure(_ error: Failure, id: String) -> ToolCallResult {
         let action: String
         switch error {
+        case .image_parameters_unsupported: action = "No image was generated. Check the model-specific parameter contract. Qwen-Image 2.1 requires guidance >1 and a nonempty negative_prompt together for CFG; omit both for default 1.0. Other models may reject these controls or require fixed steps. Do not silently remove user-requested parameters or retry automatically."
         case .image_worker_failed: action = "Image GPU worker/thread failure, not invalid input. No image was saved. Ask the user to update the client and reload the image model. Do not restart chat, retry automatically or invent an artifact."
         case .image_generation_failed, .image_empty_output: action = "No image was saved. Ask the user to check the image service and logs. Do not retry automatically or invent an artifact."
         case .video_timeout: action = "Waiting timed out. No artifact was saved. Queued work was canceled when possible; running GPU work may continue in Videos. Do not resubmit automatically."

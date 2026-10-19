@@ -34,6 +34,26 @@ struct ImageClientTests {
         #expect(body?["size"] as? String == "768x768")
     }
 
+    @Test("Local overrides reach the runtime and actual receipt survives decoding")
+    func generationParameters() async throws {
+        let client = makeClient()
+        ImageStubProtocol.response = (200, Data(#"{"data":[{"b64_json":"cG5n","parameters":{"seed":42,"steps":40,"size":"512x512","guidance":2.5,"negative_prompt_applied":true,"elapsed_ms":1900}}]}"#.utf8))
+        let result = try await client.generate(prompt: "cup", model: "qwen-image-2.1", count: 1, seed: 42,
+            steps: 40, guidance: 2.5, negativePrompt: "blur", port: 8123, bearer: nil)
+        let body = try #require(JSONSerialization.jsonObject(with: ImageStubProtocol.bodies.last!) as? [String: Any])
+        #expect(body["seed"] as? Int == 42 && body["steps"] as? Int == 40)
+        #expect(body["guidance"] as? Double == 2.5 && body["negative_prompt"] as? String == "blur")
+        #expect(result.first?.parameters == .init(seed: 42, steps: 40, size: "512x512", guidance: 2.5, negativePromptApplied: true, elapsedMs: 1900))
+        ImageStubProtocol.response = (200, Data(#"{"data":[{"b64_json":"cG5n"}]}"#.utf8))
+        let old = try await client.generate(prompt: "cup", model: "image", count: 1, seed: nil, port: 8123, bearer: nil)
+        let defaults = try #require(JSONSerialization.jsonObject(with: ImageStubProtocol.bodies.last!) as? [String: Any])
+        for key in ["seed", "steps", "guidance", "negative_prompt"] { #expect(defaults[key] == nil) }
+        #expect(old.first?.parameters == nil)
+        ImageStubProtocol.response = (200, Data(#"{"data":[{"b64_json":"cG5n","parameters":{"vendor":"other"}}]}"#.utf8))
+        let unknown = try await client.generate(prompt: "cup", model: "image", count: 1, seed: nil, port: 8123, bearer: nil)
+        #expect(unknown.first?.pngData == Data("png".utf8) && unknown.first?.parameters == nil)
+    }
+
     @Test("Request timeout leaves headroom for cold image model loads")
     func editTimeout() {
         #expect(ImageClient.requestTimeout >= 30 * 60)

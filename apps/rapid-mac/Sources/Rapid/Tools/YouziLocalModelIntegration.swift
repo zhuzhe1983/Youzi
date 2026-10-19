@@ -39,12 +39,13 @@ extension YouziLocalModelTools {
                 return await server.ensureServing(alias: entry.alias, hfPath: entry.hfRepo,
                     residencyEligible: true, requestIsMedia: true, mediaKind: entry.kind)
             },
-            image: { [weak server] prompt, entry, size in
+            image: { [weak server] prompt, entry, options in
                 guard let server, server.servingAlias != nil else { throw Failure.model_not_ready }
-                let images = try await ImageClient().generate(prompt: prompt, model: entry.alias, size: size,
-                    count: 1, seed: nil, port: server.activePort, bearer: server.activeBearer)
+                let images = try await ImageClient().generate(prompt: prompt, model: entry.alias, size: options.size,
+                    count: 1, seed: options.seed, steps: options.steps, guidance: options.guidance,
+                    negativePrompt: options.negativePrompt, port: server.activePort, bearer: server.activeBearer)
                 guard let image = images.first else { throw Failure.generation_failed }
-                return image.pngData
+                return image
             },
             speech: { [weak server] text, entry, voice in
                 guard let server, server.servingAlias != nil else { throw Failure.model_not_ready }

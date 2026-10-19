@@ -65,10 +65,11 @@ struct YouziMultimodalLiveTests {
                     return true
                 } catch { return false }
             },
-            image: { prompt, entry, size in
+            image: { prompt, entry, options in
                 let images = try await ImageClient().generate(prompt: prompt, model: entry.alias,
-                    size: size ?? "512x512", count: 1, seed: 42, port: port, bearer: key)
-                return try #require(images.first).pngData
+                    size: options.size ?? "512x512", count: 1, seed: options.seed ?? 42,
+                    steps: options.steps, guidance: options.guidance, negativePrompt: options.negativePrompt, port: port, bearer: key)
+                return try #require(images.first)
             },
             speech: { text, entry, voice in
                 try await YouziLocalModelTools.synthesizeLocally(text: text, entry: entry,

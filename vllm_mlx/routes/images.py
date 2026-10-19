@@ -236,14 +236,15 @@ def _image_engine(model_name: str = ""):
     return img_engine
 
 
-def _generate_one(img_engine, request: ImageGenerationRequest, seed: int) -> bytes:
+def _generate_one(img_engine, request: ImageGenerationRequest, seed: int) -> tuple[bytes, dict | None]:
     """Blocking single-image render — runs off the event loop."""
     width, height = request.dimensions()
     # Step count is family-aware: a distilled model (Klein/schnell, 4 steps)
     # would waste wall-clock at 20 and a non-distilled one (Qwen, 20) would be
     # noise at 4. The engine advertises the right default per family.
     default_steps = getattr(img_engine, "default_steps", 4)
-    return img_engine.generate(
+    render = getattr(img_engine, "generate_with_metadata", None)
+    result = (render or img_engine.generate)(
         prompt=request.prompt,
         width=width,
         height=height,
@@ -256,6 +257,8 @@ def _generate_one(img_engine, request: ImageGenerationRequest, seed: int) -> byt
         guidance=request.guidance,
         negative_prompt=request.negative_prompt,
     )
+    # Older engines remain valid, but must not manufacture an actual receipt.
+    return result if render else (result, None)
 
 
 @router.post("/v1/images/generations")
@@ -266,7 +269,7 @@ async def create_image(request: ImageGenerationRequest = Body(...)):
     responses are not offered by the local lane (there is no object store to
     host the bytes) — callers must request ``b64_json``.
     """
-    from ..image.engine import ImageRuntimeError
+    from ..image.engine import ImageParameterError, ImageRuntimeError
 
     img_engine = _image_engine(request.model)
 
@@ -316,7 +319,7 @@ async def create_image(request: ImageGenerationRequest = Body(...)):
     cancelled = False
     for index in range(request.n):
         try:
-            png_bytes = await run_to_completion(
+            png_bytes, parameters = await run_to_completion(
                 _generate_one, img_engine, request, (base_seed + index) & 0x7FFFFFFF
             )
         except ImageGenerationCancelled:
@@ -324,6 +327,11 @@ async def create_image(request: ImageGenerationRequest = Body(...)):
             # error, so a cancelled multi-image batch keeps its earlier images.
             cancelled = True
             break
+        except ImageParameterError as exc:
+            raise HTTPException(status_code=400, detail={"error": {
+                "message": str(exc), "type": "invalid_request_error",
+                "code": "unsupported_image_parameters",
+            }}) from exc
         except ImageRuntimeError as exc:
             raise HTTPException(
                 status_code=500,
@@ -335,7 +343,10 @@ async def create_image(request: ImageGenerationRequest = Body(...)):
                     }
                 },
             ) from exc
-        data.append({"b64_json": base64.b64encode(png_bytes).decode("ascii")})
+        item = {"b64_json": base64.b64encode(png_bytes).decode("ascii")}
+        if parameters is not None:
+            item["parameters"] = parameters
+        data.append(item)
 
     return {"created": int(time.time()), "data": data, "cancelled": cancelled}
 

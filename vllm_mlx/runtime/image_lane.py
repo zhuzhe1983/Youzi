@@ -187,6 +187,10 @@ class ImageEngine:
             image_paths=image_paths,
         )
 
+    def generate_with_metadata(self, **kwargs) -> tuple[bytes, dict]:
+        """Keep the receipt and PNG on the same owner thread and invocation."""
+        return self._execute(self._engine.generate_with_metadata, **kwargs)
+
     def generate_warmup(self) -> None:
         """Image weights load lazily; startup must not trigger a multi-GB pull."""
 

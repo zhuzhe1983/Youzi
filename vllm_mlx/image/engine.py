@@ -92,6 +92,10 @@ class ImageRuntimeError(RuntimeError):
     """Safe, actionable generation error suitable for the public API."""
 
 
+class ImageParameterError(ImageRuntimeError):
+    """Unsupported generation controls; fail before loading or rendering."""
+
+
 class ImageGenerationCancelled(ImageRuntimeError):  # noqa: N818 — a cancel, not an error condition
     """Raised when the user cancels an in-flight generation mid-denoise."""
 
@@ -198,11 +202,10 @@ def _detect_family(model_name: str) -> str:
     )
 
 
-# Families whose ``generate_image`` takes NO ``negative_prompt`` parameter.
-# FLUX.2 Klein omits it (Flux1 / Qwen-Image / Z-Image all accept it), and
-# passing an unknown kwarg raises — so the engine drops it for these.
+# Families that reject or ignore negative conditioning in the pinned backend.
+# Reject explicit requests instead of reporting a successful ineffective control.
 _NO_NEGATIVE_PROMPT_FAMILIES = frozenset(
-    {"flux2-klein", "hidream-o1-dev", "bonsai-image"}
+    {"flux2-klein", "hidream-o1-dev", "bonsai-image", "flux-schnell", "flux-dev", "z-image"}
 )
 
 # Per-family default denoise steps when the request pins none. Distilled/turbo
@@ -990,6 +993,11 @@ class ImageGenerationEngine:
             "family": self.family,
         }
 
+    def generate_with_metadata(self, **kwargs) -> tuple[bytes, dict]:
+        metadata = {}
+        png = self.generate(**kwargs, _metadata=metadata)
+        return png, metadata
+
     def generate(
         self,
         *,
@@ -1001,6 +1009,7 @@ class ImageGenerationEngine:
         guidance: float | None = None,
         negative_prompt: str | None = None,
         image_paths: list[str] | None = None,
+        _metadata: dict | None = None,
     ) -> bytes:
         """Generate one image and return it as PNG bytes.
 
@@ -1013,23 +1022,23 @@ class ImageGenerationEngine:
         if num_inference_steps is None:
             num_inference_steps = self.default_edit_steps if editing else self.default_steps
         if self.family == "qwen-image-2.1" and editing and len(input_paths) != 1:
-            raise ImageRuntimeError("Qwen-Image 2.1 img2img accepts one input image.")
+            raise ImageParameterError("Qwen-Image 2.1 img2img accepts one input image.")
         if not editing and not self.supports_generation:
-            raise ImageRuntimeError(
+            raise ImageParameterError(
                 "qwen-image-edit requires at least one input image (image_paths)."
             )
         if editing and not self.supports_editing:
-            raise ImageRuntimeError(
+            raise ImageParameterError(
                 f"{self.family} is text-to-image only and does not accept input images; "
                 "use an image-edit capable model."
             )
         if self.family == "hidream-o1-dev":
             if len(prompt) > 4096:
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "HiDream-O1 prompts are limited to 4096 characters."
                 )
             if num_inference_steps != 28:
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "HiDream-O1 Dev supports its published 28-step schedule only."
                 )
             if (
@@ -1038,20 +1047,20 @@ class ImageGenerationEngine:
                 or not (256 <= width <= 2048)
                 or not (256 <= height <= 2048)
             ):
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "HiDream-O1 dimensions must be between 256 and 2048 pixels."
                 )
             if width % 32 or height % 32:
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "HiDream-O1 dimensions must be multiples of 32."
                 )
             if guidance is not None:
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "HiDream-O1 Dev does not expose classifier-free guidance; "
                     "omit the guidance field."
                 )
             if negative_prompt is not None:
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "HiDream-O1 Dev does not support negative_prompt."
                 )
         elif self.family == "sdxl-base":
@@ -1061,18 +1070,18 @@ class ImageGenerationEngine:
                 or not (256 <= width <= 2048)
                 or not (256 <= height <= 2048)
             ):
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "SDXL dimensions must be between 256 and 2048 pixels."
                 )
             if width % 8 or height % 8:
-                raise ImageRuntimeError("SDXL dimensions must be multiples of 8.")
+                raise ImageParameterError("SDXL dimensions must be multiples of 8.")
         elif self.family == "bonsai-image":
             if len(prompt) > 4096:
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "Bonsai Image prompts are limited to 4096 characters."
                 )
             if num_inference_steps != 4:
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "Bonsai Image supports its published 4-step schedule only."
                 )
             if (
@@ -1081,28 +1090,28 @@ class ImageGenerationEngine:
                 or not (256 <= width <= 2048)
                 or not (256 <= height <= 2048)
             ):
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "Bonsai Image dimensions must be between 256 and 2048 pixels."
                 )
             if width % 32 or height % 32:
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "Bonsai Image dimensions must be multiples of 32."
                 )
             if guidance not in (None, 1.0):
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "Bonsai Image uses guidance 1.0; omit guidance or set it to 1.0."
                 )
             if negative_prompt is not None:
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "Bonsai Image does not support negative_prompt."
                 )
         elif self.family == "sd35-large":
             if len(prompt) > 4096:
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "SD3.5 Large prompts are limited to 4096 characters."
                 )
             if num_inference_steps != 28:
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "SD3.5 Large supports its validated 28-step schedule only."
                 )
             if (
@@ -1111,19 +1120,36 @@ class ImageGenerationEngine:
                 or not (256 <= width <= 1536)
                 or not (256 <= height <= 1536)
             ):
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "SD3.5 Large dimensions must be between 256 and 1536 pixels."
                 )
             if width % 16 or height % 16:
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "SD3.5 Large dimensions must be multiples of 16."
                 )
             if guidance is not None and (
                 not math.isfinite(guidance) or not (0.0 <= guidance <= 20.0)
             ):
-                raise ImageRuntimeError(
+                raise ImageParameterError(
                     "SD3.5 Large guidance must be a finite value between 0 and 20."
                 )
+
+        if negative_prompt is not None and not self.supports_negative_prompt:
+            raise ImageParameterError(f"{self.family} does not support negative_prompt.")
+        if self.family == "flux-schnell" and guidance is not None:
+            raise ImageParameterError("FLUX.1 Schnell does not use guidance; omit it.")
+        if self.family == "z-image" and guidance not in (None, 0.0):
+            raise ImageParameterError("Z-Image Turbo does not support guidance; omit it or use 0.")
+        if self.family == "qwen-image-2.1":
+            effective_guidance = 1.0 if guidance is None else guidance
+            if not (1 <= effective_guidance <= 20) or not math.isfinite(effective_guidance):
+                raise ImageParameterError("Qwen-Image 2.1 guidance must be between 1 and 20.")
+            if (effective_guidance > 1) != bool(negative_prompt and negative_prompt.strip()):
+                raise ImageParameterError(
+                    "Qwen-Image 2.1 true CFG requires guidance >1 and a nonempty "
+                    "negative_prompt together; omit both for guidance 1.0."
+                )
+        started = time.monotonic()
 
         with self._lock:
             # Claim a run sequence and arm progress BEFORE loading, so a Cancel
@@ -1259,7 +1285,26 @@ class ImageGenerationEngine:
                 with self._state_lock:
                     self._active_seq = 0
 
-        return self._encode_png(result)
+        png = self._encode_png(result)
+        if _metadata is not None:
+            actual_width, actual_height = result.image.size
+            actual_guidance = (
+                None if self.family == "flux-schnell" else getattr(result, "guidance", None)
+            )
+            _metadata.update(
+                seed=getattr(result, "seed", seed),
+                steps=getattr(result, "steps", num_inference_steps),
+                size=f"{actual_width}x{actual_height}",
+                guidance=actual_guidance,
+                # Only claim application when the backend's behavior is known.
+                negative_prompt_applied=(
+                    bool(negative_prompt) and actual_guidance is not None and actual_guidance > 1
+                    if self.family == "qwen-image-2.1" else
+                    False if not self.supports_negative_prompt or not negative_prompt else None
+                ),
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+            )
+        return png
 
     def _gen_kwargs(
         self, seed, prompt, num_inference_steps, guidance, negative_prompt
