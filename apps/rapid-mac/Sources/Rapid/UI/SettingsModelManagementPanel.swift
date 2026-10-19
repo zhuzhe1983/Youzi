@@ -183,7 +183,9 @@ struct SettingsModelManagementPanel: View {
                 badge: ModelCacheActions.statusBadge(for: entry, downloadJob: downloads.jobs[entry.alias], servingAlias: server.servingAlias),
                 loaded: YouziScenarioModels.isReady(entry, in: server.residency) || server.servingAlias == entry.alias,
                 loading: loadingTableAliases.contains(entry.alias) || server.residentLoadsInFlight[entry.alias, default: 0] > 0,
-                recommendationRank: recommendations.firstIndex { $0.pick.alias == entry.alias },
+                recommendationRank: capability == .image
+                    ? YouziImageRecommendation.rank(for: entry, physicalMemoryGB: hardware.physicalRAMGB)
+                    : recommendations.firstIndex { $0.pick.alias == entry.alias },
                 favorite: favorites.contains(entry.alias),
                 scores: capability == .chat ? BenchScoresCatalog.lookup(alias: entry.alias) : nil
             )

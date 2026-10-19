@@ -1435,6 +1435,8 @@ IMAGE_MODEL_REVISIONS: dict[str, str] = {
     "mflux-community/flux-1-schnell-mflux-q4": "bcdbe817ad51175959b2e691e64eca626db30558",
     "mflux-community/flux2-klein-4b-mflux-bf16": "4d8e1bae8eb47c7766705de2cda7dabd6cc4ba67",
     "mflux-community/qwen-image-mflux-q6": "c628fe4392d963557c3013c2709e6d3b67bca79d",
+    "Qwen/Qwen-Image-2.1": "790c92633540aa0cb11d9abf19eb46d861714758",
+    "mlx-community/Qwen-Image-2.1-mflux-q4": "746a58556820933a2df5c75887a2570f1ad200c0",
     HIDREAM_O1_REPO: HIDREAM_O1_REVISION,
     SDXL_REPO: SDXL_REVISION,
     BONSAI_IMAGE_REPO: BONSAI_IMAGE_REVISION,
@@ -1511,6 +1513,19 @@ def pinned_image_snapshot(repo_id: str) -> str | None:
 # let an interrupted first download reach the runtime and fail much later.
 _MFLUX_EXTRA_TOKENIZERS: dict[str, tuple[str, ...]] = {
     "mflux-community/flux-1-schnell-mflux-q4": ("tokenizer_2",),
+}
+_MFLUX_TOKENIZER_DIRS: dict[str, tuple[str, ...]] = {
+    # Official Qwen 2.1 stores its Qwen3-VL tokenizer under processor/.
+    "Qwen/Qwen-Image-2.1": ("processor",),
+    "mlx-community/Qwen-Image-2.1-mflux-q4": ("processor",),
+}
+_MFLUX_INDEX_FILES: dict[str, dict[str, str]] = {
+    "Qwen/Qwen-Image-2.1": {
+        "transformer": "diffusion_pytorch_model.safetensors.index.json",
+    },
+}
+_MFLUX_SINGLE_FILE_COMPONENTS: dict[str, dict[str, str]] = {
+    "Qwen/Qwen-Image-2.1": {"vae": "diffusion_pytorch_model.safetensors"},
 }
 _MFLUX_EXTRA_COMPONENTS: dict[str, tuple[str, ...]] = {
     "mflux-community/flux-1-schnell-mflux-q4": ("text_encoder_2",),
@@ -1654,13 +1669,24 @@ def mflux_missing_weights(repo_id: str) -> list[str] | None:
     repo_root, snap_dir = resolved
 
     repo_root_real = os.path.realpath(repo_root)
+    hub_root_real = os.path.dirname(repo_root_real)
 
     def _is_nonempty_repo_file(path: str) -> bool:
         if not os.path.isfile(path):
             return False
         real = os.path.realpath(path)
         if real != repo_root_real and not real.startswith(repo_root_real + os.sep):
-            return False
+            # Recent huggingface_hub versions deduplicate downloaded files in
+            # hub/blobs/<sha256[:2]>/<sha256>. Accept only that exact resolved
+            # layout; arbitrary links outside the repo remain invalid.
+            relative = os.path.relpath(real, hub_root_real).split(os.sep)
+            if not (
+                len(relative) == 3
+                and relative[0] == "blobs"
+                and re.fullmatch(r"[0-9a-f]{64}", relative[2])
+                and relative[1] == relative[2][:2]
+            ):
+                return False
         try:
             return os.path.getsize(path) > 0
         except OSError:
@@ -1688,7 +1714,9 @@ def mflux_missing_weights(repo_id: str) -> list[str] | None:
     # All supported mflux families use these common components. Some
     # checkpoints add family-specific encoders/tokenizers, which are part of
     # the same completeness contract.
-    tokenizers = ("tokenizer",) + _MFLUX_EXTRA_TOKENIZERS.get(repo_id, ())
+    tokenizers = _MFLUX_TOKENIZER_DIRS.get(
+        repo_id, ("tokenizer",)
+    ) + _MFLUX_EXTRA_TOKENIZERS.get(repo_id, ())
     for tokenizer in tokenizers:
         tokenizer_rel = f"{tokenizer}/tokenizer.json"
         if not _is_nonempty_repo_file(os.path.join(snap_dir, tokenizer_rel)):
@@ -1699,8 +1727,17 @@ def mflux_missing_weights(repo_id: str) -> list[str] | None:
     )
     for component in components:
         component_dir = os.path.join(snap_dir, component)
-        index_rel = f"{component}/model.safetensors.index.json"
-        index_path = os.path.join(component_dir, "model.safetensors.index.json")
+        single_file = _MFLUX_SINGLE_FILE_COMPONENTS.get(repo_id, {}).get(component)
+        if single_file is not None:
+            single_rel = f"{component}/{single_file}"
+            if not _is_nonempty_repo_file(os.path.join(component_dir, single_file)):
+                missing.append(single_rel)
+            continue
+        index_file = _MFLUX_INDEX_FILES.get(repo_id, {}).get(
+            component, "model.safetensors.index.json"
+        )
+        index_rel = f"{component}/{index_file}"
+        index_path = os.path.join(component_dir, index_file)
         if not _is_nonempty_repo_file(index_path):
             missing.append(index_rel)
             continue

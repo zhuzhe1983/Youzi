@@ -220,6 +220,7 @@ final class ImageGenViewModel {
         // text-to-image model and the edit variant) — matching the engine's
         // per-family default, so the bar isn't scaled for a 4-step turbo run
         // that is actually a 20-step one.
+        if alias.localizedCaseInsensitiveContains("qwen-image-2.1") { return 40 }
         if alias.localizedCaseInsensitiveContains("qwen-image") { return 20 }
         if alias.localizedCaseInsensitiveContains("hidream-o1") { return 28 }
         if alias.localizedCaseInsensitiveContains("sd35")
@@ -339,7 +340,7 @@ final class ImageGenViewModel {
         let stillValid = candidates.contains { $0.alias == selectedAlias }
         guard selectedAlias.isEmpty || !stillValid else { return }
         selectedAlias = server.automaticModelAlias(for: .image, entries: candidates)
-            ?? (candidates.first { $0.cached } ?? candidates.first)?.alias ?? ""
+            ?? YouziImageRecommendation.fallbackAlias(in: candidates) ?? ""
     }
 
     // MARK: - Generate

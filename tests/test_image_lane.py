@@ -90,6 +90,21 @@ def test_unknown_family_raises():
 
 
 @pytest.mark.parametrize(
+    "hf_path",
+    [
+        "Qwen/Qwen-Image-2.0",
+        "Qwen/Qwen-Image-2.2",
+        "acme/Qwen-Image-Edit-2.1",
+        "acme/Qwen-Image-Edit-v2.1",
+        "acme/Qwen-Image-2.1-Edit",
+    ],
+)
+def test_unsupported_qwen_image_2_is_rejected_before_1x_dispatch(hf_path):
+    with pytest.raises(ImageRuntimeError, match=r"Qwen-Image 2.x.*not supported"):
+        ImageGenerationEngine(hf_path)
+
+
+@pytest.mark.parametrize(
     "hf_path,family",
     [
         # ``<n>bit`` convention — the repos the fast-tab aliases point at

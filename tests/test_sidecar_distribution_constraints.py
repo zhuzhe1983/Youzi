@@ -36,7 +36,7 @@ def test_emitted_constraints_are_stable_and_complete(constraints) -> None:
         "mlx==0.32.2",
         "transformers==5.15.1",
         "mlx-vlm==0.6.17",
-        "mflux==0.19.0",
+        "mflux==0.20.0",
         "sentencepiece==0.2.2",
         "mlx-video-with-audio==0.1.36",
         "mlx-arsenal==0.12.1",

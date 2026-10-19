@@ -538,6 +538,14 @@ def estimate_model_bytes(model_name: str) -> int:
     """
 
     folded = model_name.casefold()
+    if re.search(r"qwen[-_]image[-_]v?2(?:[._-]1|1)(?=$|[-_./])", folded):
+        if folded == "qwen-image-2.1" or "mflux-q4" in folded:
+            # Full-q4 transformer + encoder peaks at 5.14 GiB in the 1024²
+            # pressure run. Reserve 6 GiB for allocator/output headroom; the
+            # curated alias separately enforces an 8 GB whole-machine floor.
+            return int(6.0 * _GIB)
+        # Official bf16-encoder path retains the original conservative charge.
+        return int(28.0 * _GIB)
     known_image_gib = {
         # Conservative admission charge for the 15.98 GB mflux-layout bf16
         # payload plus generation activations. The alias itself requires a
