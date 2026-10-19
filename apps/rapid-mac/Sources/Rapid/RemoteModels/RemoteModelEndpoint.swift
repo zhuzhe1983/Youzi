@@ -53,6 +53,9 @@ struct RemoteModelEndpoint: Sendable, Equatable, CustomStringConvertible, Custom
     }()
     /// No inference, no billing probe. A successful list is not a capability claim.
     func discover(session: URLSession = Self.session) async throws -> [String] {
+        try await discoverModels(session: session).map(\.id)
+    }
+    func discoverModels(session: URLSession = Self.session) async throws -> [RemoteDiscoveredModel] {
         let (bytes, response) = try await session.bytes(for: request("models", timeout: 20))
         defer { bytes.task.cancel() }
         guard let response = response as? HTTPURLResponse else { throw RemoteModelError.invalidResponse }
@@ -62,9 +65,7 @@ struct RemoteModelEndpoint: Sendable, Equatable, CustomStringConvertible, Custom
             guard data.count < 4 * 1024 * 1024 else { throw RemoteModelError.invalidResponse }
             data.append(byte)
         }
-        struct List: Decodable { struct Item: Decodable { let id: String }; let data: [Item] }
-        guard let list = try? JSONDecoder().decode(List.self, from: data) else { throw RemoteModelError.invalidResponse }
-        return Array(Set(list.data.map(\.id))).sorted()
+        return try RemoteDiscoveredModel.parse(data)
     }
 }
 private final class RemoteModelNoRedirects: NSObject, URLSessionTaskDelegate {

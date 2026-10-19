@@ -157,6 +157,29 @@ struct RemoteModelTests {
         #expect(throws: (any Error).self) { try RemoteModelEndpoint(configuration: model(), apiKey: "bad\r\nkey") }
     }
 
+    @Test("Reusing a service copies credentials only to a new model at the same base")
+    func reuseService() throws {
+        let (settings, defaults, name, secrets) = fixture()
+        defer { defaults.removePersistentDomain(forName: name) }
+        let source = model(); try settings.save(source, key: "fixture-shared")
+        var image = model(.image)
+        #expect(try settings.discoveryEndpoint(image, key: nil, inheritingFrom: source.id).apiKey == "fixture-shared")
+        #expect(try secrets.read(image.id) == nil) // Discovery does not persist the draft.
+        image.baseURL = "https://provider.example/another-gateway"
+        #expect(throws: (any Error).self) { try settings.discoveryEndpoint(image, key: nil, inheritingFrom: source.id) }
+        #expect(throws: (any Error).self) { try settings.save(image, key: nil, inheritingFrom: source.id) }
+        image.baseURL = source.baseURL + "/"
+        #expect(throws: (any Error).self) { try settings.save(image, key: "other-key", inheritingFrom: source.id) }
+        try settings.save(image, key: nil, inheritingFrom: source.id)
+        #expect(try secrets.read(image.id) == "fixture-shared")
+        #expect(throws: (any Error).self) { try settings.save(image, key: nil, inheritingFrom: source.id) }
+        try settings.remove(source.id)
+        #expect(try settings.repository.endpoint(alias: image.alias)?.apiKey == "fixture-shared")
+        let video = model(.video)
+        #expect(throws: (any Error).self) { try settings.save(video, key: nil, inheritingFrom: source.id) }
+        #expect(!String(decoding: try #require(defaults.data(forKey: RemoteModelRepository.key)), as: UTF8.self).contains("fixture-shared"))
+    }
+
     @Test("Global and per-kind priorities cover all slots; explicit routing never falls back", arguments: RemoteModelSlot.allCases)
     func priorities(_ slot: RemoteModelSlot) throws {
         var first = model(slot)
@@ -377,6 +400,70 @@ struct RemoteModelTests {
         #expect(RemoteFixtureProtocol.records.first?.request.httpMethod == "GET")
     }
 
+    @Test("Discovery classifies output capabilities, never vision or video input")
+    func discoveryMetadata() throws {
+        let data = Data(#"""
+        {"data":[
+          {"id":"vision-chat","input_modalities":["image","video"],"output_modalities":["text"]},
+          {"id":"input-only","capabilities":{"vision":true,"video_input":true,"image_generation":false}},
+          {"id":"qwen-image-disabled","capabilities":{"image_generation":false}},
+          {"id":"qwen-image-misleading","supported_endpoints":["/v1/chat/completions"]},
+          {"id":"custom-image","architecture":{"input_modalities":["text"],"output_modalities":["image"]}},
+          {"id":"custom-video","capabilities":{"video_generation":true}},
+          {"id":"custom-asr","pipeline_tag":"automatic-speech-recognition","output_modalities":["text"]},
+          {"id":"custom-tts","supported_endpoints":["audio/speech"]},
+          {"id":"dual","capabilities":["text-to-image"]},
+          {"id":"dual","supported_endpoints":["/v1/videos"]},
+          {"id":"dual"},
+          {"id":"gpt-embedding","supported_endpoints":["/v1/embeddings"]}
+        ]}
+        """#.utf8)
+        let models = try RemoteDiscoveredModel.parse(data)
+        let byID = Dictionary(uniqueKeysWithValues: models.map { ($0.id, $0) })
+        #expect(byID["vision-chat"]?.slots == [.chat])
+        #expect(byID["input-only"]?.slots == [])
+        #expect(byID["qwen-image-disabled"]?.slots == [])
+        #expect(byID["qwen-image-misleading"]?.slots == [.chat])
+        #expect(byID["custom-image"]?.slots == [.image])
+        #expect(byID["custom-video"]?.slots == [.video])
+        #expect(byID["custom-asr"]?.slots == [.transcription])
+        #expect(byID["custom-tts"]?.slots == [.speech])
+        #expect(byID["dual"]?.slots == [.image, .video])
+        #expect(byID["dual"]?.evidence == .metadata)
+        #expect(byID["gpt-embedding"]?.evidence == .other)
+    }
+
+    @Test("Name hints separate image/video/audio from chat; unknown aliases remain selectable")
+    func discoveryNames() throws {
+        let ids = ["localai/qwen-image-2.1", "gpt-image-2", "gemini-3.1-flash-image", "grok-imagine-image-2.0",
+                   "tsingfly/MiniMax-H3", "minimax-h3-ref2va-q4", "grok-imagine-video-1.5-lite",
+                   "Minimax-M3", "gemini-4-argon-high", "Qwen3-TTS-12Hz-1.7B-Base", "faster-qwen3-tts",
+                   "qwen3-asr-1.7b", "localai/text-embedding-ada-002", "jina-reranker-v1-base-en", "silero-vad-ggml", "my-custom-alias"]
+        let data = try JSONSerialization.data(withJSONObject: ["data": ids.map { ["id": $0] }])
+        let models = try RemoteDiscoveredModel.parse(data)
+        func selected(_ slot: RemoteModelSlot) -> [RemoteDiscoveredModel] {
+            RemoteDiscoveredModel.filtered(models, slot: slot, query: "", showAll: false)
+        }
+        #expect(selected(.image).count == 4)
+        #expect(selected(.video).count == 3)
+        #expect(selected(.chat).count == 2)
+        #expect(selected(.speech).count == 2)
+        #expect(selected(.transcription).count == 1)
+        #expect(selected(.image).allSatisfy { $0.evidence == .name })
+        #expect(models.filter { $0.evidence == .other }.count == 3)
+        #expect(RemoteDiscoveredModel.filtered(models, slot: .video, query: " QWEN ", showAll: false).isEmpty)
+        #expect(RemoteDiscoveredModel.filtered(models, slot: .image, query: " QWEN ", showAll: false).map(\.id) == ["localai/qwen-image-2.1"])
+        #expect(RemoteDiscoveredModel.filtered(models, slot: .image, query: "my-custom", showAll: true).map(\.id) == ["my-custom-alias"])
+        #expect(RemoteDiscoveredModel.filtered(models, slot: .image, query: "", showAll: true).count == ids.count)
+    }
+
+    @Test("Discovery rejects invalid envelopes and drops malformed identifiers")
+    func discoveryValidation() throws {
+        #expect(throws: (any Error).self) { try RemoteDiscoveredModel.parse(Data(#"{"models":[]}"#.utf8)) }
+        let data = try JSONSerialization.data(withJSONObject: ["data": [["id": ""], ["id": "bad\nID"], ["id": String(repeating: "a", count: 257)], ["id": "safe"], ["id": "safe"]]])
+        #expect(try RemoteDiscoveredModel.parse(data).map(\.id) == ["safe"])
+    }
+
     @Test("Video pins a provider until reconnect; disabling blocks new work, not active polling")
     func videoSessionPinning() async throws {
         let (settings, defaults, name, _) = fixture()
@@ -461,6 +548,10 @@ struct RemoteModelTests {
             ]
             for slot in RemoteModelSlot.allCases {
                 cases.append(("editor-\(slot.rawValue)", AnyView(RemoteModelEditor(model: model(slot), settings: settings)), CGSize(width: 620, height: 650)))
+                if slot == .image || slot == .video {
+                    let catalog = try RemoteDiscoveredModel.parse(Data(#"{"data":[{"id":"Qwen-Image-2.1"},{"id":"grok-imagine-video-1.5"},{"id":"custom-alias"}]}"#.utf8))
+                    cases.append(("discovery-\(slot.rawValue)", AnyView(RemoteModelEditor(model: model(slot), settings: settings, discovered: catalog)), CGSize(width: 620, height: 650)))
+                }
             }
             for (label, view, size) in cases {
                 let identity = "\(english ? "en" : "zh")-\(label)"

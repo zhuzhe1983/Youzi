@@ -189,8 +189,9 @@ final class RemoteModelSettings {
         try repository.save(next); document = next; revision += 1
     }
     /// nil key means keep existing; empty means explicitly remove authentication.
-    func save(_ model: RemoteModelConfiguration, key: String?) throws {
+    func save(_ model: RemoteModelConfiguration, key: String?, inheritingFrom sourceID: UUID? = nil) throws {
         guard loadError == nil else { throw RemoteModelError.corruptSettings }
+        let key = try resolvedDraftKey(model, key: key, sourceID: sourceID)
         let valid = try model.validated()
         // Changing hosts must never silently transfer the previous host's key.
         if let old = document.models.first(where: { $0.id == model.id }), old.baseURL != valid.baseURL, key == nil { throw RemoteModelError.changedEndpointKey }
@@ -219,8 +220,9 @@ final class RemoteModelSettings {
     }
     /// Discovery has the same credential boundary as Save, including gateway paths.
     /// It does not validate inference presets or mutate the saved configuration.
-    func discoveryEndpoint(_ draft: RemoteModelConfiguration, key: String?) throws -> RemoteModelEndpoint {
+    func discoveryEndpoint(_ draft: RemoteModelConfiguration, key: String?, inheritingFrom sourceID: UUID? = nil) throws -> RemoteModelEndpoint {
         guard loadError == nil else { throw RemoteModelError.corruptSettings }
+        let key = try resolvedDraftKey(draft, key: key, sourceID: sourceID)
         let url = try RemoteModelEndpoint.normalizedBaseURL(draft.baseURL, allowHTTP: draft.allowInsecureHTTP)
         if let old = document.models.first(where: { $0.id == draft.id }),
            old.baseURL != url.absoluteString, key == nil { throw RemoteModelError.changedEndpointKey }
@@ -228,6 +230,16 @@ final class RemoteModelSettings {
         probe.slot = .chat; probe.modelID = "discovery-only"; probe.imageResponseFormat = "auto"
         let credential = try key ?? repository.secrets.read(draft.id)
         return try RemoteModelEndpoint(configuration: probe, apiKey: credential)
+    }
+    /// Reuse is explicit, only for new configurations at the exact same API base.
+    /// Save copies the key to a separate Keychain item; later source removal is safe.
+    private func resolvedDraftKey(_ draft: RemoteModelConfiguration, key: String?, sourceID: UUID?) throws -> String? {
+        guard let sourceID else { return key }
+        guard key == nil, !document.models.contains(where: { $0.id == draft.id }),
+              let source = document.models.first(where: { $0.id == sourceID }),
+              try RemoteModelEndpoint.normalizedBaseURL(draft.baseURL, allowHTTP: draft.allowInsecureHTTP).absoluteString == source.baseURL
+        else { throw RemoteModelError.changedEndpointKey }
+        return try repository.secrets.read(sourceID) ?? ""
     }
     func entries(kind: ModelKind) -> [ModelEntry] { document.models.filter { $0.enabled && $0.slot.kind == kind }.map(\.entry) }
     func readiness(_ alias: String) -> ModelReadiness? {
