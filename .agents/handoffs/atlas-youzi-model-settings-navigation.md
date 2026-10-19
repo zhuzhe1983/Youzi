@@ -16,7 +16,13 @@ Branch: `feat/youzi-model-settings-navigation` (local Mac, 2026-10-19).
 - Validation: 379 Swift tests in 60 suites passed; 75 Python tests passed
   (loaded-only discovery, loading policy and anonymous inference). Two synthetic
   native render tests passed; Chinese remote editor/list and model-file size
-  screenshots inspected. Local installed-app acceptance follows integration.
+  screenshots inspected. Installed preview `candidate-5d687ff9` passed native navigation, chat remote
+  visibility, editable auto-name/cancel, and live API model-list checks. Official
+  SDK model listing and real Responses (streaming/non-streaming) passed; service
+  stayed ready for 61 seconds and wrong keys were rejected. Authentication mode
+  and existing remote credentials were not edited. The app reports unavailable
+  persistent Keychain access; its active service credential remains usable.
+  No credential reset or access bypass was attempted.
 
 No role files exist in this checkout. Atlas handled the cross-cutting navigation,
 with focused tests for compatibility and synthetic credentials only.
