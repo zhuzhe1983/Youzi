@@ -1,9 +1,9 @@
 import Foundation
 
 /// Single source of truth for startup AND unspecified-model routing.
-/// Downloaded models are either automatic (ordered preferred pool) or on-demand.
+/// Only the preferred local model starts automatically; all others require Load.
 /// A scenario may explicitly request any compatible model; that never changes
-/// this pool or authorizes loading/downloading it.
+/// the preference or authorizes loading/downloading it.
 enum YouziResidentServicePreference {
     static let enabledKey = "youzi.models.residentService.enabled.v1"
     static func enabled(in defaults: UserDefaults = .standard) -> Bool {
@@ -28,7 +28,9 @@ enum YouziResidentServicePreference {
         // multi-residency by silently replacing the previous selection.
         var allowsMultiple: Bool { kind != .audio }
         func accepts(_ entry: ModelEntry) -> Bool {
-            guard entry.cached else { return false }
+            entry.cached && supports(entry)
+        }
+        func supports(_ entry: ModelEntry) -> Bool {
             switch self {
             case .chat: return entry.kind == .chat
             case .video: return entry.kind == .video
@@ -51,13 +53,27 @@ enum YouziResidentServicePreference {
         }
     }
 
-    /// Read legacy single aliases without deleting them. An explicit empty v2
-    /// array wins, so clearing a migrated selection cannot resurrect the old one.
+    /// Effective GUI preference, including read-only migration of old source
+    /// priorities and ordered local pools. One slot yields at most one model.
+    static func preferredAlias(for slot: Slot, in defaults: UserDefaults = .standard,
+                               remoteDocument: RemoteModelDocument? = nil) -> String? {
+        let document = remoteDocument ?? defaults.data(forKey: RemoteModelRepository.key)
+            .flatMap { try? JSONDecoder().decode(RemoteModelDocument.self, from: $0) }
+        if let explicit = document?.preferredModels?[slot.rawValue] {
+            return explicit.isEmpty ? nil : explicit
+        }
+        let local = (defaults.stringArray(forKey: slot.selectionKey)
+            ?? defaults.string(forKey: slot.key).map { [$0] } ?? []).first { !$0.isEmpty }
+        guard let document, let remoteSlot = RemoteModelSlot(rawValue: slot.rawValue) else { return local }
+        return document.automatic(for: remoteSlot, local: local)
+    }
+
+    /// Only the preferred local model may start automatically. A remote
+    /// preference suppresses local startup without unloading resident models.
     static func aliases(for slot: Slot, in defaults: UserDefaults = .standard) -> [String] {
-        let values = defaults.stringArray(forKey: slot.selectionKey)
-            ?? defaults.string(forKey: slot.key).map { [$0] } ?? []
-        var seen = Set<String>()
-        return values.filter { !$0.isEmpty && seen.insert($0).inserted }
+        guard let alias = preferredAlias(for: slot, in: defaults),
+              !RemoteModelEndpoint.isRemote(alias) else { return [] }
+        return [alias]
     }
 
     static func setAliases(_ aliases: [String], for slot: Slot, in defaults: UserDefaults = .standard) {
@@ -74,9 +90,8 @@ enum YouziResidentServicePreference {
         aliases(for: slot, in: defaults).contains(alias) ? .automatic : .onDemand
     }
 
-    /// Only compatible, downloaded members of the explicit pool are candidates.
-    /// Prefer a ready member to avoid a second allocation; ties use saved order,
-    /// never catalog order. Each model’s policy is the only startup switch.
+    /// Only the compatible, downloaded preferred model may start. A different
+    /// resident model never replaces this preference merely because it is ready.
     static func automaticAlias(
         for slot: Slot, entries: [ModelEntry], snapshot: ModelResidencySnapshot? = nil,
         in defaults: UserDefaults = .standard
@@ -88,6 +103,14 @@ enum YouziResidentServicePreference {
             return ready.alias
         }
         return candidates.first?.alias
+    }
+
+    static func preferredInferenceAlias(for slot: Slot, entries: [ModelEntry],
+                                        in defaults: UserDefaults = .standard,
+                                        remoteDocument: RemoteModelDocument? = nil) -> String? {
+        guard let alias = preferredAlias(for: slot, in: defaults, remoteDocument: remoteDocument),
+              entries.contains(where: { $0.alias == alias && $0.isAvailableForInference && slot.supports($0) }) else { return nil }
+        return alias
     }
 
     /// Explicit requests (including scenario recommendations) are exact and
@@ -128,7 +151,7 @@ enum YouziResidentServicePreference {
     }
 
     /// The first compatible automatic model can own the service, including an
-    /// image/audio/video-only setup. Remote priority never suppresses local startup.
+    /// image/audio/video-only setup. A preferred remote never starts local weights.
     static func startupEntry(entries: [ModelEntry], in defaults: UserDefaults = .standard) -> ModelEntry? {
         selected(in: defaults).lazy.compactMap { slot, alias in
             entries.first { $0.alias == alias && slot.accepts($0) && !$0.isRemote }

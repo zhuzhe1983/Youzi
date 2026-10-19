@@ -8,13 +8,11 @@ struct SettingsModelsPanel: View {
     @Environment(ServerManager.self) private var server
     @State private var generation = ModelGenerationSettings.shared
     @AppStorage(ModelSwitchConfirmationPreference.storageKey) private var confirmSwitch = ModelSwitchConfirmationPreference.defaultValue
-    @State private var remote = RemoteModelSettings.shared
-    @State private var priorityError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             SectionHeader(i18n.text(zh: "模型加载", en: "Model loading"),
-                          subtitle: i18n.text(zh: "按场景管理本地加载策略和远程替代。", en: "Manage local loading and remote alternatives for each workflow."), emphasis: .page)
+                          subtitle: i18n.text(zh: "在同一个列表中选择各场景的优先模型。", en: "Choose a preferred model for each workflow from one list."), emphasis: .page)
             // Horizontal scrolling keeps all four workflows reachable at the
             // minimum window width and the largest global font size.
             ScrollView(.horizontal, showsIndicators: false) {
@@ -58,16 +56,6 @@ struct SettingsModelsPanel: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle(i18n.text(zh: "中断正在处理的请求前先确认", en: "Confirm before interrupting active requests"), isOn: $confirmSwitch)
                         .accessibilityIdentifier("Settings.Models.ConfirmActiveRequestSwitchToggle")
-                    Picker(i18n.text(zh: "全局模型来源优先级", en: "Global model source priority"), selection: Binding(
-                        get: { remote.document.globalPriority },
-                        set: { priority in
-                            do { try remote.update { $0.globalPriority = priority }; priorityError = nil }
-                            catch { priorityError = error.localizedDescription }
-                        }
-                    )) {
-                        ForEach(ModelSourcePriority.allCases, id: \.self) { Text($0.title(chinese: i18n.isChinese)).tag($0) }
-                    }
-                    if let priorityError { Text(priorityError).foregroundStyle(.red).font(RapidFont.caption) }
                 }
             }
         }

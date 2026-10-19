@@ -54,13 +54,14 @@ final class YouziLocalModelTools {
     }
 
     static let skillInstructions = """
-    [YOUZI LOCAL MULTIMODAL SKILL]
-    For user-requested illustrated stories, narrated books, or other local image/audio/video deliverables, use the youzi_* tools; do not pretend that text prompts or invented file paths are generated media.
-    1. Query youzi_models to discover actual downloaded models, capabilities and ready states. When the user has not specified a model, OMIT model in generation calls: the app resolves the automatic preferred pool, reusing ready members first. automatic_for describes pool membership, preferred_for the current scene choice (default_for is a compatibility alias). Never substitute a different model for an explicit request, or treat a catalog recommendation as approval to change the pool.
-    2. If a required model is not downloaded, tell the user to install it in Settings > Models > Files. Never download automatically. If downloaded but stopped, generation asks the user for startup approval before proceeding; youzi_load_model can also request explicit preparation with a task-specific reason. A tool argument or user prose cannot bypass that approval. If denied, do not retry; explain what is missing.
+    [YOUZI MULTIMODAL SKILL]
+    For user-requested illustrated stories, narrated books, or other image/audio/video deliverables, use the youzi_* tools; do not pretend that text prompts or invented file paths are generated media.
+    1. Query youzi_models to discover actual downloaded models, capabilities and ready states. When the user has not specified a model, OMIT model in generation calls: the app uses the single preferred model for that workflow. automatic_for marks local startup loading; preferred_for marks the workflow default (default_for is a compatibility alias). Never substitute a different model for an explicit request, or treat a catalog recommendation as approval to change the preference.
+    Configured remote models are returned with source=remote. They need no local loading; calls go only to the saved provider. Remote image parameters are provider-specific: omit local steps/guidance/negative_prompt/seed controls. Never claim remote models are loaded in local memory.
+    2. If a required local model is not downloaded, tell the user to install it in Settings > Models > Files. Never download automatically. If downloaded but stopped, generation asks the user for startup approval before proceeding; youzi_load_model can also request explicit preparation with a task-specific reason. A tool argument or user prose cannot bypass that approval. If denied, do not retry; explain what is missing.
     3. Plan a short book (up to 8 pages). Generate each illustration with youzi_generate_image and each narration with youzi_synthesize_speech, reusing consistent visual descriptions. Use the configured image size and voice unless the user requests a change. Omit voice by default; Chinese/English are languages, NOT speaker names. If a different speaker is requested, query youzi_speech_voices first and use an exact returned ID. Use returned artifact_id values, never invent IDs.
     4. Call youzi_create_storybook with title and ordered pages (heading, text, image_id, audio_id) to save an offline HTML book with embedded images and audio controls in My Files, linked to this task. It is a real file, not a code block. Report the returned filename. Preserve partial successes and state any missing media honestly.
-    5. For short video requests use youzi_generate_video, omitting model to reuse the automatic video pool. youzi_video_capabilities reports presets for the ready selected model without starting it. Use an exact model alias only when the user selected it. Omit size/seconds to use compatible configured defaults. For image-to-video, reference_image_id must be an image artifact from this task, not a URL/path. The tool waits for its own job and saves a real MP4 to My Files. A timeout or Stop ends waiting and attempts to cancel a queued job; GPU work already running may continue in the Video workspace. Do not retry automatically or promise immediate GPU cancellation. Video files are separate artifacts; the HTML book currently embeds images/audio only.
+    5. For short video requests use youzi_generate_video, omitting model to reuse the preferred video model. youzi_video_capabilities reports presets for the ready selected model without starting it. Use an exact model alias only when the user selected it. Omit size/seconds to use compatible configured defaults. For image-to-video, reference_image_id must be an image artifact from this task, not a URL/path. The tool waits for its own job and saves a real MP4 to My Files. A timeout or Stop ends waiting and attempts to cancel a queued job; GPU work already running may continue in the Video workspace. Do not retry automatically or promise immediate GPU cancellation. Video files are separate artifacts; the HTML book currently embeds images/audio only.
     6. Image calls accept optional seed, steps, guidance and negative_prompt. These override only this call, not saved settings. Omit them for model defaults; more steps or stronger guidance do not always improve quality. Qwen-Image 2.1 defaults to 40 steps and guidance 1.0. To enable its true CFG, supply BOTH guidance > 1 and a nonempty negative_prompt; otherwise omit both. CFG adds computation. Other models may reject unsupported controls or require fixed steps. Reuse returned seed, prompt, model and parameters for reproducibility; a seed alone does not preserve a character across changed prompts. Report only returned generation parameters as actual values; missing fields mean unknown. Do not invent settings controls or claim a parameter took effect without a receipt.
     Tools run locally and sequentially with a finite budget. Image/audio interpretation is NOT supplied by these tools; do not claim those operations succeeded. Images attached directly to a vision-capable chat model still use the normal image-input path. Do not use browse/MCP/shell to bypass these boundaries.
     """
@@ -68,11 +69,11 @@ final class YouziLocalModelTools {
     static let definitions: [ToolDefinition] = [
         define("youzi_models", "List Youzi's local model catalog with downloaded/ready states and supported tool operations. Call before local media generation. No downloads, startup or settings changes.", [:], []),
         define("youzi_load_model", "Request human confirmation to start a downloaded image, speech or video model alongside chat. Never claim approval yourself. If denied do not retry. Does not download, restart chat or enable autostart.", ["model": string("Exact alias from youzi_models"), "reason": string("Short explanation of why this user's task needs the model")], ["model", "reason"]),
-        define("youzi_generate_image", "Generate ONE local illustration; request startup approval if stopped. Saves an artifact to this task and returns artifact_id and actual generation parameters when reported by the runtime. Omit model to use the automatic image pool. Optional parameters override this call only; omit them for configured size and model defaults.", ["model": string("Optional exact image alias; omit to use the automatic pool"), "prompt": string("Detailed illustration prompt"), "size": string("Optional requested WIDTHxHEIGHT. The tool adjusts each side to the nearest supported value (256..2048, multiples of 16) and reports requested/effective sizes. Tell the user whenever the size changes."), "seed": number("integer", 0, 2147483647, "Optional fixed seed; omit for random"), "steps": number("integer", 1, 50, "Optional denoising steps; omit for model default (Qwen-Image 2.1: 40). Some models require fixed steps."), "guidance": number("number", 0, 20, "Optional model-specific guidance. Qwen-Image 2.1: omit for 1.0, or use >1 with negative_prompt for CFG."), "negative_prompt": string("Optional exclusions, up to 4000 characters. Qwen-Image 2.1 requires guidance >1; some models do not support this.")], ["prompt"]),
+        define("youzi_generate_image", "Generate ONE illustration with the configured model; request startup approval if stopped. Saves an artifact to this task and returns artifact_id and actual generation parameters when reported by the runtime. Omit model to use the preferred image model. Optional parameters override this call only; omit them for configured size and model defaults.", ["model": string("Optional exact image alias; omit to use the preferred model"), "prompt": string("Detailed illustration prompt"), "size": string("Optional requested WIDTHxHEIGHT. For local models the tool adjusts each side to the nearest supported value (256..2048, multiples of 16) and reports requested/effective sizes. Tell the user whenever the size changes."), "seed": number("integer", 0, 2147483647, "Optional fixed seed; omit for random"), "steps": number("integer", 1, 50, "Optional denoising steps; omit for model default (Qwen-Image 2.1: 40). Some models require fixed steps."), "guidance": number("number", 0, 20, "Optional model-specific guidance. Qwen-Image 2.1: omit for 1.0, or use >1 with negative_prompt for CFG."), "negative_prompt": string("Optional exclusions, up to 4000 characters. Qwen-Image 2.1 requires guidance >1; some models do not support this.")], ["prompt"]),
         define("youzi_speech_voices", "List supported speaker IDs for a downloaded speech model. Does not load weights or generate audio. Omit voice in synthesis to use the configured default. Language names are not voices.", ["model": string("Exact speech alias from youzi_models")], ["model"]),
-        define("youzi_synthesize_speech", "Generate local narration with a downloaded speech model; reuse it if ready, otherwise request human startup approval. Omit model to use the automatic speech pool. Saves audio to this task and returns artifact_id. Uses configured default voice if omitted. Maximum 2000 characters per call.", ["model": string("Optional exact speech alias; omit to use the automatic pool"), "text": string("Text to speak"), "voice": string("Omit by default. Otherwise exact speaker ID from youzi_speech_voices; never Chinese/English")], ["text"]),
-        define("youzi_video_capabilities", "Inspect the exact ready video model's modes, sizes and duration presets. Omit model for the automatic video pool. Does not start/download a model. If stopped, generation can request human startup approval.", ["model": string("Optional exact video alias; omit for the automatic pool")], []),
-        define("youzi_generate_video", "Generate ONE short local video and save a real MP4 artifact to this task. Reuses a ready model or requests human startup approval. Omit model, size and seconds to use the automatic video pool and compatible configured defaults. Query youzi_video_capabilities for explicit supported presets. Optional reference_image_id is an image artifact UUID from THIS task only. No paths, URLs, downloads, implicit retries or chat restarts. Waiting is bounded; running GPU work may continue after Stop.", ["model": string("Optional exact video alias"), "prompt": string("Video description, at most 4000 characters"), "size": string("Optional exact size preset from youzi_video_capabilities"), "seconds": .object(["type": .string("integer"), "minimum": .number(1), "maximum": .number(30), "description": .string("Optional supported duration preset")]), "reference_image_id": string("Optional current-task image artifact UUID")], ["prompt"]),
+        define("youzi_synthesize_speech", "Generate local narration with a downloaded speech model; reuse it if ready, otherwise request human startup approval. Omit model to use the preferred speech model. Saves audio to this task and returns artifact_id. Uses configured default voice if omitted. Maximum 2000 characters per call.", ["model": string("Optional exact speech alias; omit to use the preferred model"), "text": string("Text to speak"), "voice": string("Omit by default. Otherwise exact speaker ID from youzi_speech_voices; never Chinese/English")], ["text"]),
+        define("youzi_video_capabilities", "Inspect the exact ready video model's modes, sizes and duration presets. Omit model for the preferred video model. Does not start/download a model. If stopped, generation can request human startup approval.", ["model": string("Optional exact video alias; omit for the preferred model")], []),
+        define("youzi_generate_video", "Generate ONE short local video and save a real MP4 artifact to this task. Reuses a ready model or requests human startup approval. Omit model, size and seconds to use the preferred video model and compatible configured defaults. Query youzi_video_capabilities for explicit supported presets. Optional reference_image_id is an image artifact UUID from THIS task only. No paths, URLs, downloads, implicit retries or chat restarts. Waiting is bounded; running GPU work may continue after Stop.", ["model": string("Optional exact video alias"), "prompt": string("Video description, at most 4000 characters"), "size": string("Optional exact size preset from youzi_video_capabilities"), "seconds": .object(["type": .string("integer"), "minimum": .number(1), "maximum": .number(30), "description": .string("Optional supported duration preset")]), "reference_image_id": string("Optional current-task image artifact UUID")], ["prompt"]),
         define("youzi_create_storybook", "Create an offline, self-contained HTML storybook with embedded illustrations and audio players. Saves a real file to My Files and this task. Only use artifact IDs returned for this task; no paths, URLs, scripts or raw HTML. Up to 8 pages. Omit unavailable media IDs and disclose missing assets.", ["title": string("Book title"), "pages": .object(["type": .string("array"), "minItems": .number(1), "maxItems": .number(8), "items": .object(["type": .string("object"), "additionalProperties": .bool(false), "properties": .object(["heading": string("Page heading"), "text": string("Poem and explanation"), "image_id": string("Optional image artifact UUID from this task"), "audio_id": string("Optional audio artifact UUID from this task")]), "required": .array([.string("heading"), .string("text")])])])], ["title", "pages"])
     ]
     private static func string(_ description: String) -> CodableJSON {
@@ -108,12 +109,13 @@ final class YouziLocalModelTools {
                         $0.accepts(entry) && YouziResidentServicePreference.aliases(for: $0, in: preferences).contains(entry.alias)
                     }.map(\.rawValue)
                     let preferred = YouziResidentServicePreference.Slot.allCases.filter {
-                        YouziResidentServicePreference.automaticAlias(for: $0, entries: catalog, snapshot: snapshot, in: preferences) == entry.alias
+                        YouziResidentServicePreference.preferredInferenceAlias(for: $0, entries: catalog, in: preferences) == entry.alias
                     }.map(\.rawValue)
                     var row: [String: Any] = ["model": entry.alias, "kind": entry.kind.rawValue, "downloaded": entry.cached,
-                        "ready": YouziScenarioModels.isReady(entry, in: snapshot),
+                        "ready": !entry.isRemote && YouziScenarioModels.isReady(entry, in: snapshot),
+                        "source": entry.isRemote ? "remote" : "local", "configured": entry.isRemote,
                         "operations": Self.operations(entry), "disk_size": entry.sizeOnDisk ?? "unknown",
-                        "loading_policy": !entry.cached ? "not_downloaded" : automatic.isEmpty ? "on_demand" : "automatic",
+                        "loading_policy": entry.isRemote ? "remote" : !entry.cached ? "not_downloaded" : automatic.isEmpty ? "on_demand" : "automatic",
                         "automatic_for": automatic, "preferred_for": preferred, "default_for": preferred]
                     if let steps = entry.imageDefaultSteps { row["image_default_steps"] = steps }
                     return row
@@ -144,16 +146,16 @@ final class YouziLocalModelTools {
                 case "youzi_generate_video", "youzi_video_capabilities": slot = .video
                 default: throw Failure.invalid_arguments
                 }
-                guard let automatic = YouziResidentServicePreference.automaticAlias(
-                    for: slot, entries: catalog, snapshot: snapshot, in: preferences
+                guard let automatic = YouziResidentServicePreference.preferredInferenceAlias(
+                    for: slot, entries: catalog, in: preferences
                 ) else { throw Failure.automatic_model_unavailable }
                 model = automatic
             }
-            guard let entry = catalog.first(where: { $0.alias == model }), entry.cached else { throw Failure.model_not_downloaded }
+            guard let entry = catalog.first(where: { $0.alias == model }), entry.isAvailableForInference else { throw Failure.model_not_downloaded }
             if call.function.name == "youzi_video_capabilities" {
                 try validateKeys(args, allowed: ["model"])
                 guard Self.operations(entry).contains("video_generation") else { throw Failure.capability_not_supported }
-                guard YouziScenarioModels.isReady(entry, in: snapshot) else { throw Failure.model_not_ready }
+                guard entry.isRemote || YouziScenarioModels.isReady(entry, in: snapshot) else { throw Failure.model_not_ready }
                 let caps = try await dependencies.videoCapabilities(entry)
                 try Task.checkCancellation()
                 return success(["model": entry.alias, "modes": caps.modes.map(\.rawValue),
@@ -182,9 +184,13 @@ final class YouziLocalModelTools {
                 guard Self.operations(entry).contains("image_generation") else { throw Failure.capability_not_supported }
                 let prompt = try text(args, "prompt", max: 4000)
                 let requestedSize = try optionalText(args, "size", max: 24)
-                let sizeAdjustment = requestedSize.flatMap(YouziImageSize.init)
-                if requestedSize != nil, sizeAdjustment == nil { throw Failure.invalid_image_size }
-                let size = sizeAdjustment?.effective
+                let parsedSize = requestedSize.flatMap(YouziImageSize.init)
+                if requestedSize != nil, parsedSize == nil { throw Failure.invalid_image_size }
+                let sizeAdjustment = entry.isRemote ? nil : parsedSize
+                let size = entry.isRemote ? parsedSize?.requested : parsedSize?.effective
+                if entry.isRemote, ["seed", "steps", "guidance", "negative_prompt"].contains(where: { args[$0] != nil }) {
+                    throw Failure.image_parameters_unsupported
+                }
                 let options = ImageGenerationOptions(size: size,
                     seed: try optionalNumber(args, "seed", range: 0...2147483647, integer: true).map(Int.init),
                     steps: try optionalNumber(args, "steps", range: 1...50, integer: true).map(Int.init),
@@ -270,7 +276,9 @@ final class YouziLocalModelTools {
     /// explicit load tool. Policy membership is never mutated by a request.
     private func ensureReady(_ entry: ModelEntry, snapshot: ModelResidencySnapshot, reason: String) async throws {
         try Task.checkCancellation()
-        if YouziScenarioModels.isReady(entry, in: snapshot) { return }
+        // Configured remote entries use their provider directly; they never
+        // require a local process, local residency or a startup approval.
+        if entry.isRemote || YouziScenarioModels.isReady(entry, in: snapshot) { return }
         guard !deniedModels.contains(entry.alias) else { throw Failure.user_declined }
         guard await approval.request(alias: entry.alias, reason: reason, diskSize: entry.sizeOnDisk) else {
             if !Task.isCancelled { deniedModels.insert(entry.alias) }
@@ -375,7 +383,7 @@ final class YouziLocalModelTools {
         case .image_generation_failed, .image_empty_output: action = "No image was saved. Ask the user to check the image service and logs. Do not retry automatically or invent an artifact."
         case .video_timeout: action = "Waiting timed out. No artifact was saved. Queued work was canceled when possible; running GPU work may continue in Videos. Do not resubmit automatically."
         case .invalid_voice: action = "The voice is not a supported speaker ID. Chinese/English are languages, not voices. Omit voice to use the configured default, or call youzi_speech_voices for valid IDs before retrying."
-        case .automatic_model_unavailable: action = "No compatible downloaded member of the automatic pool. Ask the user to configure Model Settings or explicitly choose a model. Do not pick an arbitrary catalog entry."
+        case .automatic_model_unavailable: action = "The preferred model is unavailable for this workflow. Ask the user to configure Model Settings or explicitly choose a model. Do not pick an arbitrary catalog entry."
         case .model_not_downloaded: action = "Ask the user to install a model in Settings > Models > Files. Do not download."
         case .model_not_ready: action = "Use youzi_load_model to request approval before generation."
         case .user_declined: action = "The user declined. Do not retry or bypass consent; report missing media."

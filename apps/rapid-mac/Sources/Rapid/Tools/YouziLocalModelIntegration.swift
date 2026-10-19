@@ -25,10 +25,16 @@ extension YouziLocalModelTools {
     static func desktop(server: ServerManager, chat: ChatViewModel, product: YouziProductModel, downloads: DownloadManager) -> YouziLocalModelTools {
         YouziLocalModelTools(dependencies: Dependencies(
             catalog: { [weak server, weak downloads] in
-                guard let server, let binary = server.binaryPath,
-                      let media = await ModelCatalog.scenarioMediaEntries(binary: binary) else { throw Failure.catalog_unavailable }
+                guard let server else { throw Failure.catalog_unavailable }
+                let remote = server.remoteModelSettings.document.models.filter(\.enabled).map(\.entry)
+                guard let binary = server.binaryPath else {
+                    if remote.isEmpty { throw Failure.catalog_unavailable }
+                    return remote
+                }
+                let media = await ModelCatalog.scenarioMediaEntries(binary: binary)
+                if media == nil, remote.isEmpty { throw Failure.catalog_unavailable }
                 let chat = await ModelCatalogCache.shared.entries(binary: binary, generation: downloads?.cacheGeneration ?? 0)
-                return YouziScenarioModels.merge(chat: chat, media: media)
+                return YouziScenarioModels.merge(chat: chat, media: (media ?? []) + remote)
             },
             snapshot: { [weak server] in
                 await server?.refreshResidency()
@@ -40,7 +46,7 @@ extension YouziLocalModelTools {
                     residencyEligible: true, requestIsMedia: true, mediaKind: entry.kind)
             },
             image: { [weak server] prompt, entry, options in
-                guard let server, server.servingAlias != nil else { throw Failure.model_not_ready }
+                guard let server, entry.isRemote || server.servingAlias != nil else { throw Failure.model_not_ready }
                 let images = try await ImageClient().generate(prompt: prompt, model: entry.alias, size: options.size,
                     count: 1, seed: options.seed, steps: options.steps, guidance: options.guidance,
                     negativePrompt: options.negativePrompt, port: server.activePort, bearer: server.activeBearer)
@@ -48,7 +54,7 @@ extension YouziLocalModelTools {
                 return image
             },
             speech: { [weak server] text, entry, voice in
-                guard let server, server.servingAlias != nil else { throw Failure.model_not_ready }
+                guard let server, entry.isRemote || server.servingAlias != nil else { throw Failure.model_not_ready }
                 return try await synthesizeLocally(text: text, entry: entry, voice: voice,
                     port: server.activePort, bearer: server.activeBearer)
             },
@@ -76,17 +82,13 @@ extension YouziLocalModelTools {
                 }
             },
             video: { [weak server] input, entry in
-                let runner = YouziLocalVideoTool(client: VideoClient(session: VideoClient.toolSession), session: { [weak server] in
-                    guard let server, server.servingAlias != nil, let bearer = server.activeBearer else { return nil }
-                    return .init(epoch: server.activeSessionGeneration, port: server.activePort, bearer: bearer)
-                })
+                guard let server else { throw Failure.model_not_ready }
+                let runner = try videoRunner(entry, server: server)
                 return try await runner.generate(input, entry: entry)
             },
             videoCapabilities: { [weak server] entry in
-                let runner = YouziLocalVideoTool(client: VideoClient(session: VideoClient.toolSession), session: { [weak server] in
-                    guard let server, server.servingAlias != nil, let bearer = server.activeBearer else { return nil }
-                    return .init(epoch: server.activeSessionGeneration, port: server.activePort, bearer: bearer)
-                })
+                guard let server else { throw Failure.model_not_ready }
+                let runner = try videoRunner(entry, server: server)
                 return try await runner.describe(entry)
             },
             voices: { [weak server] entry in
@@ -96,4 +98,23 @@ extension YouziLocalModelTools {
             }
         ))
     }
+    static func videoRunner(_ entry: ModelEntry, server: ServerManager) throws -> YouziLocalVideoTool {
+        var client = VideoClient(session: VideoClient.toolSession)
+        if let endpoint = try server.remoteModelSettings.repository.endpoint(alias: entry.alias, slot: .video) {
+            client.remoteEndpoint = endpoint
+            return YouziLocalVideoTool(client: client, session: { [weak server] in
+                guard let server,
+                      let current = try? server.remoteModelSettings.repository.endpoint(alias: entry.alias, slot: .video),
+                      current.configuration == endpoint.configuration, current.apiKey == endpoint.apiKey else { return nil }
+                // The client owns the captured remote endpoint. No local port
+                // or key is used, and a provider change invalidates this job.
+                return .init(epoch: 0, port: 0, bearer: "")
+            }, reportedModel: endpoint.modelID)
+        }
+        return YouziLocalVideoTool(client: client, session: { [weak server] in
+            guard let server, server.servingAlias != nil, let bearer = server.activeBearer else { return nil }
+            return .init(epoch: server.activeSessionGeneration, port: server.activePort, bearer: bearer)
+        })
+    }
+
 }

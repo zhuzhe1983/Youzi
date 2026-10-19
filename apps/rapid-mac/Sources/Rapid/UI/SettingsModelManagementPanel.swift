@@ -91,9 +91,6 @@ struct SettingsModelManagementPanel: View {
             if showsPageHeader {
                 header
             }
-            modelsFolderSection
-            linkedModelsSection
-            storageOverviewSection
             capabilityTabs
             if loading && catalog.isEmpty {
                 loadingState
@@ -102,6 +99,9 @@ struct SettingsModelManagementPanel: View {
             } else {
                 modelFilesTable
             }
+            modelsFolderSection
+            linkedModelsSection
+            storageOverviewSection
             if let lastError {
                 InlineNotice(
                     message: lastError,

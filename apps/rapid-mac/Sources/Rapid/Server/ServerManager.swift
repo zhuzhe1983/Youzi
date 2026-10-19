@@ -494,15 +494,14 @@ final class ServerManager {
         )
     }
 
-    /// UI and workspaces share the same ordered pool as startup. A ready pool
-    /// member wins over a stopped one, avoiding needless co-loads.
+    /// GUI workspaces share one preference per workflow. Loaded secondary
+    /// models remain available for explicit use and external API clients.
     func automaticModelAlias(for slot: YouziResidentServicePreference.Slot, entries: [ModelEntry]) -> String? {
-        let localEntries = entries.filter { !$0.isRemote }
-        let local = YouziResidentServicePreference.automaticAlias(
-            for: slot, entries: localEntries, snapshot: residency, in: sessionDefaults ?? .standard
-        )
-        guard let remoteSlot = RemoteModelSlot(rawValue: slot.rawValue) else { return local }
-        return remoteModelSettings.document.automatic(for: remoteSlot, local: local)
+        let candidates = entries.filter { !$0.isRemote }
+            + remoteModelSettings.document.models.filter { $0.enabled && $0.slot.rawValue == slot.rawValue }.map(\.entry)
+        return YouziResidentServicePreference.preferredInferenceAlias(
+            for: slot, entries: candidates, in: sessionDefaults ?? .standard,
+            remoteDocument: remoteModelSettings.document)
     }
 
     /// Start a configured media model without changing the chat selection.

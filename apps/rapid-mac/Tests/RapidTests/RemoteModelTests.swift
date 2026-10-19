@@ -244,6 +244,76 @@ struct RemoteModelTests {
         #expect(RemoteModelDocument().automatic(for: slot, local: "existing-local") == "existing-local")
     }
 
+    @Test("One GUI preference controls default routing and only its local startup", arguments: RemoteModelSlot.allCases)
+    func unifiedPreference(_ remoteSlot: RemoteModelSlot) throws {
+        let (settings, defaults, suite, _) = fixture()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let slot = try #require(YouziResidentServicePreference.Slot(rawValue: remoteSlot.rawValue))
+        var remote = model(remoteSlot); remote.enabled = false
+        try settings.save(remote, key: "")
+        let local = ModelEntry(alias: "local-preferred", hfRepo: "fixture/local", sizeOnDisk: "1 GB", cached: true,
+            kind: remoteSlot.kind, audioCapability: remote.entry.audioCapability, imageCapability: remote.entry.imageCapability)
+        let server = ServerManager(testingState: .ready(alias: "already-loaded"), sessionDefaults: defaults)
+        server.remoteModelSettings = settings
+        defaults.set(["legacy-first", "legacy-second"], forKey: slot.selectionKey)
+        try settings.prefer(local.alias, for: remoteSlot)
+        #expect(YouziResidentServicePreference.aliases(for: slot, in: defaults) == [local.alias])
+        #expect(YouziResidentServicePreference.startupEntry(entries: [local], in: defaults) == local)
+        #expect(server.automaticModelAlias(for: slot, entries: [local]) == local.alias)
+        try settings.prefer(remote.alias, for: remoteSlot)
+        #expect(settings.document.model(alias: remote.alias)?.enabled == true)
+        #expect(YouziResidentServicePreference.aliases(for: slot, in: defaults).isEmpty)
+        #expect(YouziResidentServicePreference.startupEntry(entries: [local], in: defaults) == nil)
+        #expect(server.automaticModelAlias(for: slot, entries: [local]) == remote.alias)
+        #expect(server.servingAlias == "already-loaded")
+        #expect(try settings.repository.load().preferredModels?[remoteSlot.rawValue] == remote.alias)
+        #expect(defaults.stringArray(forKey: slot.selectionKey) == ["legacy-first", "legacy-second"])
+        try settings.remove(remote.id)
+        #expect(server.automaticModelAlias(for: slot, entries: [local]) == nil)
+        #expect(YouziResidentServicePreference.aliases(for: slot, in: defaults).isEmpty)
+        try settings.prefer(nil, for: remoteSlot)
+        #expect(YouziResidentServicePreference.preferredAlias(for: slot, in: defaults) == nil)
+    }
+
+    @Test("Legacy routing migrates read-only to one preference and independent audio defaults")
+    func unifiedLegacyPreference() throws {
+        let (settings, defaults, suite, _) = fixture()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let image = model(.image)
+        try settings.save(image, key: "")
+        defaults.set(["first", "second"], forKey: YouziResidentServicePreference.Slot.image.selectionKey)
+        #expect(YouziResidentServicePreference.aliases(for: .image, in: defaults) == ["first"])
+        try settings.update { $0.globalPriority = .remoteFirst }
+        let original = defaults.data(forKey: RemoteModelRepository.key)
+        #expect(YouziResidentServicePreference.preferredAlias(for: .image, in: defaults) == image.alias)
+        #expect(YouziResidentServicePreference.aliases(for: .image, in: defaults).isEmpty)
+        #expect(defaults.data(forKey: RemoteModelRepository.key) == original)
+        try settings.prefer("local-asr", for: .transcription)
+        let speech = model(.speech); try settings.save(speech, key: "")
+        try settings.prefer(speech.alias, for: .speech)
+        #expect(YouziResidentServicePreference.aliases(for: .transcription, in: defaults) == ["local-asr"])
+        #expect(YouziResidentServicePreference.aliases(for: .speech, in: defaults).isEmpty)
+        #expect(settings.document.automatic(for: .transcription, local: "local-asr") == "local-asr")
+        #expect(settings.document.automatic(for: .speech, local: nil) == speech.alias)
+    }
+
+    @Test("Remote video tool capabilities need no local process and reject changed endpoints")
+    func remoteVideoToolSession() async throws {
+        let (settings, defaults, suite, _) = fixture()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var video = model(.video)
+        try settings.save(video, key: "")
+        let server = ServerManager(testingState: .stopped, sessionDefaults: defaults)
+        server.remoteModelSettings = settings
+        let runner = try YouziLocalModelTools.videoRunner(video.entry, server: server)
+        let caps = try await runner.describe(video.entry)
+        #expect(caps.model == video.modelID)
+        #expect(server.servingAlias == nil)
+        video.enabled = false
+        try settings.save(video, key: nil)
+        await #expect(throws: YouziLocalModelTools.Failure.model_not_ready) { try await runner.describe(video.entry) }
+    }
+
     @Test("Remote routing does not start a process or claim downloads/residency")
     func noLocalStartup() async throws {
         let (settings, defaults, name, _) = fixture()
@@ -651,9 +721,12 @@ struct RemoteModelTests {
         for english in [false, true] {
             i18n.language = english ? .en : .zhHans
             window.appearance = NSAppearance(named: english ? .aqua : .darkAqua)
+            let server = ServerManager(testingState: .idle, sessionDefaults: defaults)
             var cases: [(String, AnyView, CGSize)] = [
-                ("chat", AnyView(SettingsRemoteModelsPanel(kind: .chat, settings: settings).padding(20)), CGSize(width: 480, height: 680)),
-                ("audio", AnyView(SettingsRemoteModelsPanel(kind: .audio, settings: settings).padding(20)), CGSize(width: 860, height: 680)),
+                ("chat", AnyView(ResidentServiceSlotList(defaults: defaults, slot: .chat, entries: [], settings: settings)
+                    .environment(server).padding(20)), CGSize(width: 480, height: 680)),
+                ("audio", AnyView(ResidentServiceSlotList(defaults: defaults, slot: .speech, entries: [], settings: settings)
+                    .environment(server).padding(20)), CGSize(width: 860, height: 680)),
             ]
             for slot in RemoteModelSlot.allCases {
                 cases.append(("editor-\(slot.rawValue)", AnyView(RemoteModelEditor(model: model(slot), settings: settings)), CGSize(width: 620, height: 650)))

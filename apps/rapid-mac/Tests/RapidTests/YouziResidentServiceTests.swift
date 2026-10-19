@@ -36,7 +36,7 @@ struct YouziResidentServiceTests {
         #expect(selected.first?.1 == "missing")
     }
 
-    @Test("Changing a single-lane policy replaces intent only; wire payload preserves pool order")
+    @Test("Changing a single-lane policy replaces intent only; wire payload contains only the preferred local model")
     func policyWireAndSingleLane() throws {
         let suite = "YouziResidentServiceTests." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -48,7 +48,7 @@ struct YouziResidentServiceTests {
         YouziResidentServicePreference.setAliases(["b", "a"], for: .chat, in: defaults)
         let json = try #require(YouziResidentServicePreference.encodedPolicy(in: defaults))
         let decoded = try JSONDecoder().decode(ModelLoadingPolicyClient.Policy.self, from: Data(json.utf8))
-        #expect(decoded.automatic["chat"] == ["b", "a"])
+        #expect(decoded.automatic["chat"] == ["b"])
         #expect(decoded.automatic["image"] == [])
         let env = ServerManager.serveEnvironmentAdditions(bearer: "test-key", ambient: ["YOUZI_AUTOMATIC_MODEL_POOL": "untrusted"], automaticModelPolicy: json)
         #expect(env["YOUZI_AUTOMATIC_MODEL_POOL"] == json)
@@ -177,7 +177,7 @@ struct YouziUnifiedModelChoiceTests {
         defaults.set("old", forKey: slot.key)
         #expect(YouziResidentServicePreference.aliases(for: slot, in: defaults) == ["old"])
         YouziResidentServicePreference.setAliases(["old", "new", "old", ""], for: slot, in: defaults)
-        #expect(YouziResidentServicePreference.aliases(for: slot, in: defaults) == ["old", "new"])
+        #expect(YouziResidentServicePreference.aliases(for: slot, in: defaults) == ["old"])
         YouziResidentServicePreference.setAliases([], for: slot, in: defaults)
         #expect(YouziResidentServicePreference.aliases(for: slot, in: defaults).isEmpty)
         #expect(defaults.string(forKey: slot.key) == "old")
@@ -200,7 +200,7 @@ struct YouziUnifiedModelChoiceTests {
         #expect(YouziResidentServicePreference.loadingPolicy(for: manual.alias, slot: slot, in: defaults) == .onDemand)
     }
 
-    @Test("Automatic routing reuses ready pool members, never unrelated ready models")
+    @Test("Automatic routing uses only the preferred model, even if another model is loaded")
     func automaticPriority() throws {
         let name = "YouziModelPool." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: name))
@@ -209,7 +209,7 @@ struct YouziUnifiedModelChoiceTests {
             ModelEntry(alias: $0, hfRepo: "local/" + $0, sizeOnDisk: nil, cached: true, kind: .image, imageCapability: .generation)
         }
         let slot = YouziResidentServicePreference.Slot.image
-        YouziResidentServicePreference.setAliases(["missing", "first", "second"], for: slot, in: defaults)
+        YouziResidentServicePreference.setAliases(["first", "second"], for: slot, in: defaults)
         func snapshot(_ names: [String]) -> ModelResidencySnapshot {
             ModelResidencySnapshot(memoryLimitBytes: 0, memoryUsedBytes: 0, memoryAvailableBytes: nil,
                 idleTTLSeconds: 0, loadsTotal: 0, evictionsTotal: 0, models: names.map {
@@ -218,27 +218,25 @@ struct YouziUnifiedModelChoiceTests {
                 })
         }
         #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: entries.reversed(), in: defaults) == "first")
-        #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: entries, snapshot: snapshot(["manual", "second"]), in: defaults) == "second")
+        #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: entries, snapshot: snapshot(["manual", "second"]), in: defaults) == "first")
         #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: entries, snapshot: snapshot(["manual"]), in: defaults) == "first")
         #expect(YouziResidentServicePreference.resolveAlias(requested: "manual", for: slot, entries: entries, snapshot: snapshot(["first"]), in: defaults) == "manual")
         #expect(YouziResidentServicePreference.resolveAlias(requested: "missing", for: slot, entries: entries, in: defaults) == nil)
         #expect(YouziResidentServicePreference.resolveAlias(requested: "", for: slot, entries: entries, in: defaults) == nil)
-        YouziResidentServicePreference.promote("second", for: slot, in: defaults)
-        #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: entries, snapshot: snapshot(["first", "second"]), in: defaults) == "second")
-        YouziResidentServicePreference.promote("manual", for: slot, in: defaults)
-        #expect(!YouziResidentServicePreference.aliases(for: slot, in: defaults).contains("manual"))
+        YouziResidentServicePreference.setAliases(["missing", "first"], for: slot, in: defaults)
+        #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: entries, snapshot: snapshot(["first", "second"]), in: defaults) == nil)
         YouziResidentServicePreference.setAliases([], for: slot, in: defaults)
         #expect(YouziResidentServicePreference.automaticAlias(for: slot, entries: entries, snapshot: snapshot(["first"]), in: defaults) == nil)
     }
 
-    @Test("Chat and video offer multiple startup entries, audio is honest about its single slot")
+    @Test("Every workflow has one preferred startup model")
     func multiple() throws {
         let name = "YouziMultipleStartup." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
         for slot in YouziResidentServicePreference.Slot.allCases {
             YouziResidentServicePreference.setAliases(["one", "two"], for: slot, in: defaults)
-            #expect(YouziResidentServicePreference.aliases(for: slot, in: defaults).count == (slot.allowsMultiple ? 2 : 1))
+            #expect(YouziResidentServicePreference.aliases(for: slot, in: defaults).count == 1)
         }
         let video = ModelEntry(alias: "video", hfRepo: nil, sizeOnDisk: nil, cached: true, kind: .video)
         let chat = ModelEntry(alias: "chat", hfRepo: nil, sizeOnDisk: nil, cached: true, kind: .chat)
@@ -370,7 +368,8 @@ struct YouziModelSelectionVisualTests {
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         for chinese in [true, false] {
             i18n.language = chinese ? .zhHans : .en
-            let view = ResidentServiceSlotList(defaults: defaults, slot: .chat, entries: entries)
+            let view = ResidentServiceSlotList(defaults: defaults, slot: .chat, entries: entries,
+                settings: RemoteModelSettings(repository: RemoteModelRepository(defaults: defaults)))
                 .padding(16).background(Color(nsColor: .windowBackgroundColor))
                 .environment(i18n).environment(server).defaultAppStorage(defaults)
             let host = NSHostingView(rootView: view)

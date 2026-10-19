@@ -35,6 +35,7 @@ struct YouziLocalVideoTool {
 
     var client: any YouziVideoToolClient
     var session: @MainActor () -> Session?
+    var reportedModel: String? = nil
     var defaults = ModelGenerationDefaults()
     var now: @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     var wait: @MainActor () async throws -> Void = { try await Task.sleep(for: .seconds(2)) }
@@ -48,7 +49,7 @@ struct YouziLocalVideoTool {
         try check(captured)
         let caps = try await client.capabilities(model: entry.alias, port: captured.port, bearer: captured.bearer).validated()
         try check(captured)
-        guard caps.model == entry.alias || caps.model == entry.hfRepo else { throw Failure.capability_not_supported }
+        guard caps.model == entry.alias || caps.model == entry.hfRepo || caps.model == reportedModel else { throw Failure.capability_not_supported }
         return caps
     }
 
@@ -130,7 +131,7 @@ struct YouziLocalVideoTool {
 
     private func validate(_ job: VideoJob, request: VideoCreateRequest, entry: ModelEntry) throws {
         _ = try VideoClient.cacheFileName(for: job.id) // strict ID alphabet/length, no paths
-        guard (job.model == entry.alias || job.model == entry.hfRepo),
+        guard (job.model == entry.alias || job.model == entry.hfRepo || job.model == reportedModel),
               job.prompt == request.prompt.trimmingCharacters(in: .whitespacesAndNewlines),
               job.size == request.size, job.seconds == String(request.seconds) else { throw Failure.generation_failed }
     }

@@ -20,6 +20,7 @@ struct YouziLocalVideoToolTests {
         var onRetrieve: () -> Void = {}
         var onDownload: () -> Void = {}
         var waitAction: (() async throws -> Void)?
+        var reportedModel: String?
         var badModel = false
         var badID = false
         var capsModel = "org/video"
@@ -50,7 +51,7 @@ struct YouziLocalVideoToolTests {
         }
         func job(_ status: VideoJobStatus) -> VideoJob {
             let request = requests.last!
-            return .init(id: badID ? "other_job" : "video_own", model: badModel ? "another-model" : request.model,
+            return .init(id: badID ? "other_job" : "video_own", model: badModel ? "another-model" : (reportedModel ?? request.model),
                 prompt: request.prompt, seconds: String(request.seconds), size: request.size, status: status,
                 progress: status == .completed ? 100 : 0, createdAt: 1, completedAt: nil, error: nil)
         }
@@ -77,6 +78,16 @@ struct YouziLocalVideoToolTests {
         #expect(f.requests.count == 1 && f.requests[0].model == f.entry.alias)
         #expect(f.requests[0].size == "768x512" && f.requests[0].seconds == 2)
         #expect(f.polls == 2 && f.downloaded == ["video_own"] && f.deleted.isEmpty)
+    }
+
+    @Test("A captured remote model ID validates its job without changing the configured alias")
+    func remoteModelIdentity() async throws {
+        let f = Fixture()
+        f.capsModel = "provider-video"; f.reportedModel = "provider-video"
+        var runner = f.runner; runner.reportedModel = "provider-video"
+        #expect(try await runner.generate(f.input, entry: f.entry) == f.data)
+        #expect(f.requests.first?.model == f.entry.alias)
+        #expect(f.downloaded == ["video_own"])
     }
 
     @Test("Explicit unsupported controls fail before POST, never silently substitute")

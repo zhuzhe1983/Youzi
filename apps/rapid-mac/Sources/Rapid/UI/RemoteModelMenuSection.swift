@@ -16,7 +16,7 @@ struct RemoteModelMenuSection: View {
     var body: some View {
         if !models.isEmpty {
             Divider()
-            Button(i18n.text(zh: "按当前优先级选择", en: "Choose by current priority")) {
+            Button(i18n.text(zh: "自动选择", en: "Choose automatically")) {
                 if let alias = automatic() { select(alias) }
             }.accessibilityIdentifier("Models.Priority.\(slot.rawValue)")
             Section(i18n.text(zh: "远程模型（可选）", en: "Remote models (optional)")) {

@@ -180,7 +180,7 @@ enum MenuBarStatus {
         guard isChinese else { return items }
         return items.map { item in
             guard case .button(let action, let title, let enabled, let shortcut) = item else {
-                if case .models = item { return .models(title: "已就绪模型") }
+                if case .models = item { return .models(title: "已加载模型") }
                 return item
             }
             let titles: [MenuBarAction: String] = [

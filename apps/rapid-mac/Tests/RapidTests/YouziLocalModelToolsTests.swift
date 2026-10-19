@@ -220,13 +220,44 @@ struct YouziLocalModelToolsTests {
         #expect(row["default_for"] as? [String] == row["preferred_for"] as? [String])
     }
 
+    @Test("Configured preferred media runs remotely without loading local models", arguments: [RemoteModelSlot.image, .speech, .video])
+    func remotePreferredMedia(_ slot: RemoteModelSlot) async throws {
+        let f = Fixture()
+        let remote = RemoteModelConfiguration(modelID: "provider-model", baseURL: "https://fixture.example/v1", slot: slot)
+        f.additionalModels = [remote.entry]
+        let doc = RemoteModelDocument(models: [remote], preferredModels: [slot.rawValue: remote.alias])
+        f.preferences.set(try JSONEncoder().encode(doc), forKey: RemoteModelRepository.key)
+        let name: String
+        let args: [String: Any]
+        switch slot {
+        case .image: name = "youzi_generate_image"; args = ["prompt": "moon", "size": "1920x1080"]
+        case .speech: name = "youzi_synthesize_speech"; args = ["text": "hello"]
+        default: name = "youzi_generate_video"; args = ["prompt": "moon"]
+        }
+        let result = try await f.call(name, args)
+        #expect(!result.isError)
+        #expect(f.loads == 0 && f.tools.approval.pending == nil)
+        if slot == .image {
+            #expect(f.capturedSize == "1920x1080")
+            #expect(f.generatedWith == [remote.alias])
+            #expect(try await f.call(name, ["prompt": "moon", "steps": 20]).isError)
+            #expect(f.generations == 1)
+        }
+        let rows = try #require(try json(try await f.call("youzi_models"))["models"] as? [[String: Any]])
+        let row = try #require(rows.first { $0["model"] as? String == remote.alias })
+        #expect(row["source"] as? String == "remote")
+        #expect(row["ready"] as? Bool == false)
+        #expect(row["preferred_for"] as? [String] == [slot.rawValue])
+        #expect(row["automatic_for"] as? [String] == [])
+    }
+
     @Test("Ready preferred models avoid allocations; explicit on-demand models remain exact")
     func reuseVersusExplicit() async throws {
         let f = Fixture()
         let resident = ModelEntry(alias: "already-loaded", hfRepo: "local/loaded", sizeOnDisk: "2 GiB", cached: true, kind: .image, imageCapability: .generation)
         f.additionalModels = [resident]
         f.ready = [resident.alias]
-        YouziResidentServicePreference.setAliases([f.image.alias, resident.alias], for: .image, in: f.preferences)
+        YouziResidentServicePreference.setAliases([resident.alias, f.image.alias], for: .image, in: f.preferences)
         #expect(try await !f.call("youzi_generate_image", ["prompt": "moon"]).isError)
         #expect(f.generatedWith == [resident.alias] && f.loads == 0)
         // Remove the stopped model from the pool. An explicit request can still

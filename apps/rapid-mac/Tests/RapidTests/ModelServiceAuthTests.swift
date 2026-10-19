@@ -85,7 +85,7 @@ struct ModelServiceAuthTests {
         await #expect(throws: ModelLoadingPolicyClient.Failure.self) {
             try await server.applySavedModelPolicy(client: client)
         }
-        #expect(YouziResidentServicePreference.aliases(for: .chat, in: defaults) == ["b", "a"])
+        #expect(YouziResidentServicePreference.aliases(for: .chat, in: defaults) == ["b"])
     }
 
     @Test func stoppedPolicySaveDoesNotContactOrStartServer() async throws {

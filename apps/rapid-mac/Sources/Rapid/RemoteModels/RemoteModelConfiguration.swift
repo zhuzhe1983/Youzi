@@ -104,6 +104,9 @@ struct RemoteModelDocument: Codable, Equatable, Sendable {
     var overrides: [String: ModelSourcePriority] = [:]
     /// Preferred remote within each slot; disabled/removed choices fall back in list order.
     var preferred: [String: UUID] = [:]
+    /// One GUI default per workflow. Missing keys retain the legacy effective
+    /// choice; an empty value explicitly clears it. Optional for v1 decoding.
+    var preferredModels: [String: String]? = nil
     func priority(for kind: ModelKind) -> ModelSourcePriority { overrides[kind.rawValue] ?? globalPriority }
     func model(alias: String) -> RemoteModelConfiguration? { models.first { $0.alias == alias && $0.enabled } }
     func remote(for slot: RemoteModelSlot) -> RemoteModelConfiguration? {
@@ -112,6 +115,12 @@ struct RemoteModelDocument: Codable, Equatable, Sendable {
     }
     /// Only used for AUTOMATIC choice. Explicit aliases never fall through here.
     func automatic(for slot: RemoteModelSlot, local: String?) -> String? {
+        if let preferred = preferredModels?[slot.rawValue] {
+            if RemoteModelEndpoint.isRemote(preferred) {
+                return model(alias: preferred).flatMap { $0.slot == slot ? $0.alias : nil }
+            }
+            return !preferred.isEmpty && local == preferred ? local : nil
+        }
         let remote = remote(for: slot)?.alias
         return priority(for: slot.kind) == .localFirst ? (local ?? remote) : (remote ?? local)
     }
@@ -210,6 +219,23 @@ final class RemoteModelSettings {
         var next = document; mutation(&next)
         try repository.save(next); document = next; revision += 1
     }
+    /// Selecting a configured remote also enables it. Local selection is
+    /// validated against the downloaded catalog by the settings UI.
+    func prefer(_ alias: String?, for slot: RemoteModelSlot) throws {
+        if let alias, RemoteModelEndpoint.isRemote(alias),
+           !document.models.contains(where: { $0.alias == alias && $0.slot == slot }) {
+            throw RemoteModelError.unavailable
+        }
+        try update { doc in
+            var choices = doc.preferredModels ?? [:]
+            choices[slot.rawValue] = alias ?? ""
+            doc.preferredModels = choices
+            if let index = doc.models.firstIndex(where: { $0.alias == alias && $0.slot == slot }) {
+                doc.models[index].enabled = true
+            }
+        }
+    }
+
     /// nil key means keep existing; empty means explicitly remove authentication.
     func save(_ model: RemoteModelConfiguration, key: String?, inheritingFrom sourceID: UUID? = nil) throws {
         guard loadError == nil else { throw RemoteModelError.corruptSettings }

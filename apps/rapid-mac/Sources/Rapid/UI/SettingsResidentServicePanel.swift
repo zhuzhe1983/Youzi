@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// One pool for startup and automatic routing; readiness remains observed state.
+/// GUI defaults and local loading share one list. The optional external API
+/// separately exposes all resident local models; it owns no model preference.
 struct SettingsResidentServicePanel: View {
     var slots: [YouziResidentServicePreference.Slot] = YouziResidentServicePreference.Slot.allCases
     var showsLaunchGuidance = true
@@ -34,23 +35,13 @@ struct SettingsResidentServicePanel: View {
                         }
                     }
                 }
-                Text(i18n.text(zh: "本地模型", en: "Local models")).font(RapidFont.bodyEmphasis)
-                ResidentServiceSlotList(slot: slot, entries: entries).id(slot)
+                ResidentServiceSlotList(slot: slot, entries: entries, settings: server.remoteModelSettings).id(slot)
                 HStack {
                     if server.isRestoringResidentServices || loadingCatalog { ProgressView().controlSize(.small) }
                     Spacer()
                     Button(i18n.text(zh: "刷新列表", en: "Refresh")) { Task { await refreshCatalog() } }
                         .disabled(loadingCatalog)
                         .accessibilityIdentifier("Settings.Models.Selection.Refresh")
-                }
-                Text(i18n.text(
-                    zh: "自动加载：每次打开 Youzi 时加载。手动加载：点击模型旁的“加载”后使用。修改策略不会立即卸载已加载模型；策略即时保存，下次启动生效。对外 API 只提供已加载的本地模型。",
-                    en: "Automatic models load when Youzi opens. Manual models load when you click Load. Changing the policy never unloads a running model. Policies are saved immediately and apply at the next launch. The external API only serves loaded local models."
-                )).font(RapidFont.caption).foregroundStyle(.secondary)
-                SettingsRemoteModelsPanel(kind: RemoteModelSlot(rawValue: slot.rawValue)?.kind, slot: RemoteModelSlot(rawValue: slot.rawValue))
-                if showsLaunchGuidance {
-                    Text(i18n.text(zh: "视频就绪表示服务可用，不代表权重持续驻留内存。", en: "Video ready means service availability, not permanent weight residency."))
-                        .font(RapidFont.caption).foregroundStyle(.secondary)
                 }
             }.padding(16)
         }
@@ -70,138 +61,154 @@ struct ResidentServiceSlotList: View {
     var defaults: UserDefaults = .standard
     let slot: YouziResidentServicePreference.Slot
     let entries: [ModelEntry]
+    @State var settings: RemoteModelSettings = .shared
     @Environment(ServerManager.self) private var server
     @Environment(YouziI18nConfig.self) private var i18n
-    @State private var selected: [String] = []
+    @State private var preferred: String?
     @State private var query = ""
     @State private var loadingAlias: String?
-    @State private var loadError: String?
+    @State private var error: String?
+    @State private var editing: RemoteModelConfiguration?
+    @State private var removing: RemoteModelConfiguration?
 
+    private var remoteSlot: RemoteModelSlot { RemoteModelSlot(rawValue: slot.rawValue)! }
+    private var remoteModels: [RemoteModelConfiguration] { settings.document.models.filter { $0.slot == remoteSlot } }
+    private var allChoices: [ModelEntry] { entries.filter { slot.accepts($0) && !$0.isRemote } + remoteModels.map(\.entry) }
+    private func remote(_ entry: ModelEntry) -> RemoteModelConfiguration? { remoteModels.first { $0.alias == entry.alias } }
+    private func title(_ entry: ModelEntry) -> String { remote(entry)?.displayName ?? entry.alias }
     private var choices: [ModelEntry] {
-        entries.filter { slot.accepts($0) && (query.isEmpty || $0.alias.localizedCaseInsensitiveContains(query)) }
+        allChoices.filter { query.isEmpty || title($0).localizedCaseInsensitiveContains(query)
+            || (remote($0)?.modelID ?? $0.alias).localizedCaseInsensitiveContains(query) }
             .sorted { lhs, rhs in
-                let left = selected.firstIndex(of: lhs.alias) ?? Int.max
-                let right = selected.firstIndex(of: rhs.alias) ?? Int.max
-                if left != right { return left < right }
-                return lhs.alias.localizedStandardCompare(rhs.alias) == .orderedAscending
+                if (lhs.alias == preferred) != (rhs.alias == preferred) { return lhs.alias == preferred }
+                if lhs.isRemote != rhs.isRemote { return !lhs.isRemote }
+                return title(lhs).localizedStandardCompare(title(rhs)) == .orderedAscending
             }
-    }
-    private var unavailable: [String] {
-        selected.filter { alias in
-            !entries.contains { $0.alias == alias && slot.accepts($0) }
-        }.sorted()
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                TextField(i18n.text(zh: "搜索已下载模型", en: "Search downloaded models"), text: $query)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityIdentifier("Settings.Models.Selection.Search.\(slot.rawValue)")
-
-            }
-            if !slot.allowsMultiple {
-                Text(i18n.text(zh: "语音识别与语音合成各支持一个已加载模型；每个场景只能选一个自动加载模型。其他模型可手动加载，切换时需先明确卸载原模型。", en: "Transcription and speech each support one loaded model and one automatic selection. Other models can be loaded manually; switching requires explicitly unloading the occupied lane."))
-                    .font(RapidFont.caption).foregroundStyle(.secondary)
-            }
-            if selected.isEmpty {
-                Text(i18n.text(zh: "当前没有自动加载模型。可将模型设为“自动加载”，或点击“加载”手动启动。", en: "No automatic models. Choose Automatic for launch-time loading, or click Load to start a model manually."))
-                    .font(RapidFont.caption).foregroundStyle(.secondary)
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            TextField(i18n.text(zh: "搜索本地或远程模型", en: "Search local or remote models"), text: $query)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("Settings.Models.Selection.Search.\(slot.rawValue)")
             if choices.isEmpty {
-                Text(i18n.text(zh: "没有匹配的已下载模型，请刷新或前往“模型文件”管理。", en: "No matching downloaded models. Refresh or manage Model Files."))
+                Text(i18n.text(zh: "没有匹配的模型。可在“模型文件”中下载，或添加远程模型。", en: "No matching models. Download one in Model Files or add a remote model."))
                     .font(RapidFont.caption).foregroundStyle(.secondary)
             }
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(choices, id: \.alias) { entry in row(entry) }
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(choices, id: \.alias) { entry in
+                        row(entry)
+                        Divider()
+                    }
                 }
-            }.frame(height: CGFloat(min(5, choices.count)) * max(62, 62 * RapidFont.fontScale))
-            ForEach(unavailable, id: \.self) { alias in
+            }.frame(height: CGFloat(min(5, choices.count)) * max(92, 92 * RapidFont.fontScale))
+            if let preferred, !allChoices.contains(where: { $0.alias == preferred }) {
                 HStack {
-                    Text(alias + i18n.text(zh: "（不可用，已保留选择）", en: " (unavailable; selection retained)"))
+                    Text(i18n.text(zh: "优先模型暂不可用，请重新选择。", en: "The preferred model is unavailable. Choose another model."))
                         .font(RapidFont.caption).foregroundStyle(.orange)
-                    Spacer()
-                    Button(i18n.text(zh: "移除选择", en: "Clear selection")) {
-                        YouziResidentServicePreference.setAliases(selected.filter { $0 != alias }, for: slot, in: defaults)
-                        sync()
-                    }.accessibilityIdentifier("Settings.Models.Selection.Clear.\(alias)")
+                    Button(i18n.text(zh: "清除选择", en: "Clear selection")) {
+                        perform { try settings.prefer(nil, for: remoteSlot); sync() }
+                    }
                 }
             }
-            if let loadError { Text(loadError).font(RapidFont.caption).foregroundStyle(.red) }
+            Button {
+                var model = RemoteModelConfiguration(); model.slot = remoteSlot; editing = model
+            } label: { Label(i18n.text(zh: "添加远程模型", en: "Add remote model"), systemImage: "plus") }
+                .accessibilityIdentifier("Settings.Remote.Add.\(slot.kind.rawValue)")
+            Text(i18n.text(
+                zh: "每个场景只选一个优先模型，供柚子默认使用。本地优先模型会自动加载，其他本地模型可手动加载。切换优先模型不会卸载已经加载的模型，也不会改变进行中的任务。",
+                en: "Choose one preferred model per workflow for Youzi to use by default. A preferred local model loads automatically; other local models can be loaded manually. Changing the preference does not unload models or change ongoing tasks."
+            )).font(RapidFont.caption).foregroundStyle(.secondary)
+            if let failure = error ?? settings.loadError { Text(failure).font(RapidFont.caption).foregroundStyle(.red) }
         }
         .onAppear { sync() }
+        .onChange(of: settings.revision) { _, _ in sync() }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in sync() }
+        .sheet(item: $editing) { model in RemoteModelEditor(model: model, settings: settings) }
+        .confirmationDialog(i18n.text(zh: "移除远程模型配置和对应密钥？不会删除服务商的模型或文件。", en: "Remove this configuration and its key? Provider models and files are not deleted."), isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
+            Button(i18n.text(zh: "移除", en: "Remove"), role: .destructive) {
+                if let model = removing { perform { try settings.remove(model.id); sync() } }
+                removing = nil
+            }
+        }
     }
 
     private func row(_ entry: ModelEntry) -> some View {
-        let ready = YouziScenarioModels.isReady(entry, in: server.residency)
+        let configuration = remote(entry)
+        let ready = !entry.isRemote && YouziScenarioModels.isReady(entry, in: server.residency)
         let loading = loadingAlias == entry.alias || server.isResidentLoadInFlight(entry.alias)
         let failure = server.residentLoadFailures[entry.alias]
-        return VStack(alignment: .leading, spacing: 3) {
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.alias).font(RapidFont.secondary).lineLimit(1).truncationMode(.middle)
-                    Text(modelSize(entry))
-                        .font(RapidFont.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
+                Label(title(entry), systemImage: entry.isRemote ? "network" : "desktopcomputer")
+                    .font(RapidFont.bodyEmphasis).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 4)
-                Text(loading ? i18n.text(zh: "加载中", en: "Loading") : failure != nil ? i18n.text(zh: "加载失败", en: "Failed") : ready ? i18n.text(zh: "已就绪", en: "Ready") : i18n.text(zh: "未加载", en: "Not loaded"))
-                    .font(RapidFont.caption).foregroundStyle(failure != nil ? Color.red : ready ? Color.green : Color.secondary)
-                if selected.count > 1, let index = selected.firstIndex(of: entry.alias) {
-                    Button {
-                        YouziResidentServicePreference.promote(entry.alias, for: slot, in: defaults)
-                        sync()
-                    } label: {
-                        Text("#\(index + 1)").monospacedDigit()
-                    }.buttonStyle(.borderless).disabled(index == 0)
-                        .help(i18n.text(zh: "设为优先使用的模型；已就绪模型仍优先复用", en: "Move first in the pool; ready models are still reused first"))
-                        .accessibilityLabel(i18n.text(zh: "提升优先级", en: "Move first"))
-                        .accessibilityIdentifier("Settings.Models.Selection.Priority.\(entry.alias)")
+                if entry.alias == preferred {
+                    Label(i18n.text(zh: "优先", en: "Preferred"), systemImage: "checkmark.circle.fill")
+                        .font(RapidFont.caption).foregroundStyle(Color.accentColor).fixedSize()
+                        .accessibilityIdentifier("Settings.Models.Preferred.\(entry.alias)")
+                } else {
+                    Button(i18n.text(zh: configuration?.enabled == false ? "启用并设为优先" : "设为优先", en: configuration?.enabled == false ? "Enable and prefer" : "Make preferred")) {
+                        perform { try settings.prefer(entry.alias, for: remoteSlot); sync() }
+                        if preferred == entry.alias, !entry.isRemote, !ready {
+                            Task { await load(entry) }
+                        }
+                    }.disabled(loadingAlias != nil)
+                        .accessibilityIdentifier("Settings.Models.Prefer.\(entry.alias)")
                 }
-                Picker(i18n.text(zh: "加载策略", en: "Loading policy"), selection: Binding(
-                    get: { selected.contains(entry.alias) ? YouziResidentServicePreference.LoadingPolicy.automatic : .onDemand },
-                    set: { policy in
-                        YouziResidentServicePreference.setLoadingPolicy(policy, for: entry.alias, slot: slot, in: defaults)
-                        sync()
+            }
+            HStack(spacing: 10) {
+                Text(entry.isRemote ? i18n.text(zh: "远程", en: "Remote") : i18n.text(zh: "本地", en: "Local"))
+                    .font(RapidFont.caption).foregroundStyle(.secondary).fixedSize()
+                if let configuration {
+                    Text(configuration.modelID + " · " + (URL(string: configuration.baseURL)?.host ?? ""))
+                        .font(RapidFont.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    Text(i18n.text(zh: configuration.enabled ? "已配置" : "已停用", en: configuration.enabled ? "Configured" : "Disabled"))
+                        .font(RapidFont.caption).foregroundStyle(.secondary).fixedSize()
+                    Menu {
+                        Button(i18n.text(zh: "编辑", en: "Edit")) { editing = configuration }
+                        Button(i18n.text(zh: "移除配置…", en: "Remove configuration…"), role: .destructive) { removing = configuration }
+                    } label: { Image(systemName: "ellipsis") }
+                        .menuStyle(.borderlessButton).fixedSize()
+                        .accessibilityLabel(i18n.text(zh: "远程模型操作", en: "Remote model actions"))
+                } else {
+                    Text(modelSize(entry)).font(RapidFont.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text(loading ? i18n.text(zh: "加载中", en: "Loading") : failure != nil ? i18n.text(zh: "加载失败", en: "Failed") : ready ? i18n.text(zh: "已加载", en: "Loaded") : i18n.text(zh: "未加载", en: "Not loaded"))
+                        .font(RapidFont.caption).foregroundStyle(failure != nil ? Color.red : ready ? Color.green : Color.secondary).fixedSize()
+                    if !ready {
+                        Button(i18n.text(zh: "加载", en: "Load")) { Task { await load(entry) } }
+                            .disabled(loading || loadingAlias != nil)
+                            .accessibilityIdentifier("Settings.Models.Selection.Load.\(entry.alias)")
                     }
-                )) {
-                    Text(i18n.text(zh: "手动加载", en: "Manual"))
-                        .tag(YouziResidentServicePreference.LoadingPolicy.onDemand)
-                    Text(i18n.text(zh: "自动加载", en: "Automatic"))
-                        .tag(YouziResidentServicePreference.LoadingPolicy.automatic)
-                }.pickerStyle(.menu).labelsHidden().frame(width: 115)
-                    .accessibilityIdentifier("Settings.Models.Resident.\(slot.rawValue).\(entry.alias)")
-                if !ready {
-                    Button(i18n.text(zh: loading ? "加载中" : "加载", en: loading ? "Loading" : "Load")) {
-                        Task { await load(entry) }
-                    }.disabled(loading || loadingAlias != nil)
-                        .accessibilityIdentifier("Settings.Models.Selection.Load.\(entry.alias)")
                 }
             }
             if let failure { Text(failure.message).font(RapidFont.caption).foregroundStyle(.red).lineLimit(2) }
-        }.font(RapidFont.secondary).padding(.vertical, 5)
+        }.padding(.vertical, 12)
     }
 
     private func modelSize(_ entry: ModelEntry) -> String {
         let files = i18n.text(zh: "文件：", en: "Files: ") + (entry.sizeOnDisk ?? "—")
         guard let model = server.residency.models.first(where: { $0.matches(entry.alias) }), model.displayBytes > 0 else { return files }
-        return files + i18n.text(zh: " · 内存估算：", en: " · Memory estimate: ") + formatGigabytes(model.displayBytes)
+        return files + i18n.text(zh: " · 内存：", en: " · RAM: ") + formatGigabytes(model.displayBytes)
     }
 
     private func sync() {
-        selected = YouziResidentServicePreference.aliases(for: slot, in: defaults)
+        preferred = YouziResidentServicePreference.preferredAlias(for: slot, in: defaults, remoteDocument: settings.document)
+    }
+
+    private func perform(_ action: () throws -> Void) {
+        do { try action(); error = nil } catch { self.error = error.localizedDescription }
     }
 
     private func load(_ entry: ModelEntry) async {
         guard loadingAlias == nil else { return }
-        loadingAlias = entry.alias; loadError = nil
+        loadingAlias = entry.alias; error = nil
         defer { loadingAlias = nil }
         let success = await server.loadModelManually(entry)
         if success { await server.refreshResidency() }
-        else {
-            loadError = server.residentLoadFailures[entry.alias]?.message
-                ?? i18n.text(zh: "模型未能加载，请检查服务日志。", en: "Could not load the model. Check the service logs.")
-        }
+        else { error = server.residentLoadFailures[entry.alias]?.message ?? i18n.text(zh: "模型未能加载，请重试或查看日志。", en: "Could not load the model. Retry or check the logs.") }
     }
 }

@@ -84,7 +84,7 @@ struct YouziSimpleTaskView: View {
         .alert(i18n.text(zh: "请选择聊天模型", en: "Choose a chat model"), isPresented: $showsModelSelectionHelp) {
             Button(i18n.text(zh: "知道了", en: "OK"), role: .cancel) {}
         } message: {
-            Text(i18n.text(zh: "请从输入框旁的模型菜单选择一个已下载模型，或在模型设置中配置自动加载清单。你的输入已保留。", en: "Choose a downloaded model beside the composer, or configure the automatic pool in Model Settings. Your draft is preserved."))
+            Text(i18n.text(zh: "请从输入框旁的模型菜单选择一个已下载模型，或在模型设置中选择优先模型。你的输入已保留。", en: "Choose a downloaded model beside the composer, or choose a preferred model in Model Settings. Your draft is preserved."))
         }
         .onAppear {
             loadTaskContext()
@@ -99,6 +99,10 @@ struct YouziSimpleTaskView: View {
         }
         .onChange(of: server.state) { _, _ in
             resolveAssistantAliasIfNeeded()
+        }
+        .onChange(of: server.remoteModelSettings.document.preferredModels) { _, _ in
+            guard chat.messages.isEmpty, !chat.isStreaming else { return }
+            assistantAlias = server.automaticModelAlias(for: .chat, entries: downloadedChatModels) ?? ""
         }
         .onChange(of: selectedHelperID) { _, _ in persistReferences() }
         .onChange(of: selectedSkillIDs) { _, _ in persistReferences() }
