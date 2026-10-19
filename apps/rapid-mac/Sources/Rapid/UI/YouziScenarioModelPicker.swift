@@ -5,6 +5,7 @@ struct YouziScenarioModelPicker: View {
     @Binding var assistantAlias: String
     let chatEntries: [ModelEntry]
     var chatIsStreaming = false
+    var showsSelectionName = false
     @Environment(ServerManager.self) private var server
     @Environment(AudioViewModel.self) private var audio
     @Environment(ImageGenViewModel.self) private var images
@@ -75,8 +76,14 @@ struct YouziScenarioModelPicker: View {
 
     var body: some View {
         Button { presented.toggle() } label: {
-            YouziModelAvailabilityOrb(lanes: YouziModelAvailability.lanes(for: readySlots))
-                .frame(width: 44, height: 44).contentShape(Rectangle())
+            HStack(spacing: 5) {
+                if showsSelectionName {
+                    Text(RemoteModelSettings.shared.document.model(alias: assistantAlias)?.displayName ?? (assistantAlias.isEmpty ? i18n.text(zh: "选择模型", en: "Choose model") : assistantAlias))
+                        .font(RapidFont.caption).lineLimit(1).truncationMode(.middle).frame(maxWidth: 170)
+                }
+                YouziModelAvailabilityOrb(lanes: YouziModelAvailability.lanes(for: readySlots))
+                .frame(width: 36, height: 36).contentShape(Rectangle())
+            }
         }
         .buttonStyle(.plain)
         .help(i18n.text(zh: "模型选择 · ", en: "Model selection · ") + availabilityDescription)

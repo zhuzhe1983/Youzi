@@ -37,6 +37,16 @@ struct YouziSimpleTaskView: View {
     @State private var selectedWorkspaceID: UUID?
     @State private var selectedProjectID: UUID?
     @State private var selectedArtifactID: UUID?
+    @State private var selectedScene = YouziTaskScene.writing
+    @State private var selectedHelperID: UUID?
+    @State private var selectedSkillIDs: [UUID] = []
+    @State private var selectedConnectorIDs: [UUID] = []
+    @SceneStorage("YouziSimple.Composer.referenceDrafts.v1") private var referenceDrafts = "{}"
+    private struct ReferenceDraft: Codable {
+        var helper: UUID?
+        var skills: [UUID]
+        var connectors: [UUID]
+    }
     @State private var fileImportError: String?
 
 
@@ -90,6 +100,9 @@ struct YouziSimpleTaskView: View {
         .onChange(of: server.state) { _, _ in
             resolveAssistantAliasIfNeeded()
         }
+        .onChange(of: selectedHelperID) { _, _ in persistReferences() }
+        .onChange(of: selectedSkillIDs) { _, _ in persistReferences() }
+        .onChange(of: selectedConnectorIDs) { _, _ in persistReferences() }
         .alert(i18n.text(zh: "没有添加文件", en: "No files added"), isPresented: fileImportAlertBinding) {
             Button(i18n.text(zh: "好", en: "OK"), role: .cancel) {}
                 .accessibilityIdentifier("YouziSimpleTaskView.Button.2a749ebe68")
@@ -187,22 +200,30 @@ struct YouziSimpleTaskView: View {
 
     private var welcome: some View {
         YouziCenteredWelcome {
-            VStack(spacing: RapidTheme.Space.xxl) {
-                YouziLogo(size: 48)
+            VStack(spacing: 24) {
+                YouziLogo(size: 42)
 
                 VStack(spacing: RapidTheme.Space.xs) {
                     Text(i18n.text(zh: "今天想让我帮你做什么？", en: "What would you like to do today?"))
                         .font(.system(size: max(20, round(28 * RapidFont.fontScale)), weight: .semibold))
                         .tracking(RapidFont.displayTitleTracking)
                         .multilineTextAlignment(.center)
-                    Text(i18n.text(zh: "告诉柚子你想完成什么。你的内容会留在这台 Mac 上。", en: "Tell Youzi what you'd like to do. Your content stays on this Mac."))
+                    Text(i18n.text(zh: "选一个场景，或直接告诉柚子你想完成什么。", en: "Choose a workflow, or tell Youzi what you’d like to do."))
                         .font(RapidFont.displaySubtitle)
                         .foregroundStyle(RapidTheme.textSecondary)
                         .multilineTextAlignment(.center)
                 }
 
-                composer
-                    .frame(maxWidth: 960)
+                VStack(spacing: 12) {
+                    YouziTaskSceneTabs(selection: $selectedScene)
+                        .padding(.horizontal, RapidTheme.Space.xl)
+                    composer
+                    YouziTaskSceneSuggestions(scene: selectedScene) { prompt in
+                        let current = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        draft = current.isEmpty ? prompt : current + "\n" + prompt
+                        focusRequest &+= 1
+                    }.padding(.horizontal, RapidTheme.Space.xl)
+                }.frame(maxWidth: 860)
 
             }
             .accessibilityIdentifier("YouziSimple.Welcome.Content")
@@ -326,7 +347,7 @@ struct YouziSimpleTaskView: View {
     }
 
     private var composer: some View {
-        let contentWidth: CGFloat = chat.messages.isEmpty ? 960 : RapidTheme.Layout.contentMaxWidth
+        let contentWidth: CGFloat = chat.messages.isEmpty ? 860 : RapidTheme.Layout.contentMaxWidth
         return VStack(spacing: RapidTheme.Space.sm) {
             if needsAttention {
                 HStack(spacing: RapidTheme.Space.sm) {
@@ -342,10 +363,8 @@ struct YouziSimpleTaskView: View {
                 .frame(maxWidth: contentWidth)
             }
 
-            YouziSimpleSkillBar(draft: $draft)
-                .frame(maxWidth: contentWidth)
-
-            VStack(spacing: RapidTheme.Space.sm) {
+            VStack(alignment: .leading, spacing: RapidTheme.Space.sm) {
+                selectedReferences
                 ComposeField(
                     text: $draft,
                     focusToken: focusRequest,
@@ -361,70 +380,10 @@ struct YouziSimpleTaskView: View {
                     axRoleDescription: i18n.text(zh: "任务请求输入框", en: "Task request input")
                 )
 
+                .frame(minHeight: chat.messages.isEmpty ? 88 : 44, alignment: .top)
+
                 HStack(spacing: RapidTheme.Space.sm) {
                     Menu {
-                        Menu(i18n.text(zh: "引用专家", en: "Reference Expert")) {
-                            ForEach(productModel.document.helpers) { helper in
-                                Button(helper.name) {
-                                    insertReference("@\(helper.name) ")
-                                }
-                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.9e348b9044")
-                            }
-                        }
-                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.f25632e2ea")
-
-                        Menu(i18n.text(zh: "引用技能", en: "Reference Skill")) {
-                            ForEach(productModel.document.skills) { skill in
-                                Button(skill.name) {
-                                    insertReference("/\(skill.name) ")
-                                    productModel.markSkillUsed(skill.id)
-                                }
-                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.e7fd73f4b6")
-                            }
-                        }
-                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.458e538ec0")
-
-                        Menu(i18n.text(zh: "引用连接器", en: "Reference Connector")) {
-                            ForEach(productModel.document.connectors) { connector in
-                                Button(connector.name) {
-                                    insertReference("#\(connector.name) ")
-                                }
-                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.0c91261a94")
-                            }
-                        }
-                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.f0e167a6b7")
-
-                        Divider()
-
-                        Menu(i18n.text(zh: "工作空间", en: "Workspaces")) {
-                            Button(i18n.text(zh: "由柚子在开始时管理", en: "Managed by Youzi at start")) {
-                                selectWorkspace(nil)
-                            }
-                                .accessibilityIdentifier("YouziSimpleTaskView.Button.f0e6e6b312")
-                            ForEach(activeWorkspaces) { workspace in
-                                Button(workspace.name) { selectWorkspace(workspace.id) }
-                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.3f2cdaaa0c")
-                            }
-                            Divider()
-                            Button(i18n.text(zh: "管理工作空间…", en: "Manage Workspaces…")) { onNavigate(.workspaces) }
-                                .accessibilityIdentifier("YouziSimpleTaskView.Button.f8d3623359")
-                        }
-                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.073cb55317")
-
-                        Menu(i18n.text(zh: "项目", en: "Projects")) {
-                            Button(i18n.text(zh: "不放入项目", en: "No Project")) { selectProject(nil) }
-                                .accessibilityIdentifier("YouziSimpleTaskView.Button.03c3cf3e2c")
-                            ForEach(activeProjects) { project in
-                                Button(project.name) { selectProject(project.id) }
-                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.a293291eae")
-                            }
-                            Divider()
-                            Button(i18n.text(zh: "管理项目…", en: "Manage Projects…")) { onNavigate(.workspaces) }
-                                .accessibilityIdentifier("YouziSimpleTaskView.Button.56aa8c1007")
-                        }
-                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.3df50ff4d9")
-
-                        Divider()
                         Button(i18n.text(zh: "导入文件副本…", en: "Import File Copy…")) {
                             importFile(mode: .copy, target: .task)
                         }
@@ -434,6 +393,44 @@ struct YouziSimpleTaskView: View {
                         }
                             .accessibilityIdentifier("YouziSimpleTaskView.Button.150e3b5583")
 
+                        Divider()
+                        Menu(i18n.text(zh: "专家", en: "Experts")) {
+                            ForEach(productModel.document.helpers.filter { $0.state == .active }) { helper in
+                                Button(helper.name) {
+                                    selectedHelperID = helper.id
+                                    focusRequest &+= 1
+                                }
+                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.9e348b9044")
+                            }
+                        }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.f25632e2ea")
+
+                        Menu(i18n.text(zh: "技能", en: "Skills")) {
+                            ForEach(productModel.document.skills.filter { $0.state == .active }) { skill in
+                                Button(skill.name) {
+                                    if !selectedSkillIDs.contains(skill.id) { selectedSkillIDs.append(skill.id) }
+                                    focusRequest &+= 1
+                                    productModel.markSkillUsed(skill.id)
+                                }
+                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.e7fd73f4b6")
+                            }
+                        }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.458e538ec0")
+
+                        Menu(i18n.text(zh: "连接器", en: "Connectors")) {
+                            ForEach(productModel.document.connectors.filter { $0.state == .active }) { connector in
+                                Button(connector.name) {
+                                    if !selectedConnectorIDs.contains(connector.id) { selectedConnectorIDs.append(connector.id) }
+                                    focusRequest &+= 1
+                                }
+                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.0c91261a94")
+                            }
+                        }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.f0e167a6b7")
+
+                        Divider()
+
+                        Divider()
                         if currentProject != nil {
                             Divider()
                             Button(i18n.text(zh: "向项目添加资料副本…", en: "Add File Copy to Project…")) {
@@ -458,21 +455,15 @@ struct YouziSimpleTaskView: View {
                         Divider()
                         Button(i18n.text(zh: "从模板开始…", en: "Start from Template…"), action: onShowTemplates)
                             .accessibilityIdentifier("YouziSimpleTaskView.Button.dc919abd3c")
-                        Button(i18n.text(zh: "选择帮手…", en: "Choose Helper…")) { onNavigate(.helpers) }
+                        Button(i18n.text(zh: "管理专家、技能与连接器…", en: "Manage Experts, Skills & Connectors…")) { onNavigate(.helpers) }
                             .accessibilityIdentifier("YouziSimpleTaskView.Button.1f017082b2")
                     } label: {
-                        Label(i18n.text(zh: "添加", en: "Add"), systemImage: "plus")
+                        Image(systemName: "plus").font(.system(size: 17)).frame(width: 30, height: 30)
                     }
-                    .menuStyle(.borderlessButton)
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden)
                     .fixedSize()
+                    .accessibilityLabel(i18n.text(zh: "添加文件、专家、技能或连接器", en: "Add files, experts, skills or connectors"))
                     .accessibilityIdentifier("YouziSimple.NewTask.Add")
-
-                    if let workspace = currentWorkspace {
-                        Label(workspace.name, systemImage: "folder")
-                            .font(RapidFont.caption)
-                            .foregroundStyle(RapidTheme.textSecondary)
-                            .lineLimit(1)
-                    }
 
                     if !currentTaskFiles.isEmpty {
                         Label(i18n.text(zh: "\(currentTaskFiles.count) 份资料", en: "\(currentTaskFiles.count) files"), systemImage: "paperclip")
@@ -482,6 +473,17 @@ struct YouziSimpleTaskView: View {
 
                     Spacer(minLength: 0)
 
+                    if let helper = selectedHelper {
+                        Menu {
+                            Button(i18n.text(zh: "取消专家选择", en: "Clear expert")) { selectedHelperID = nil }
+                            Divider()
+                            ForEach(productModel.helpers.filter { $0.state == .active }) { item in
+                                Button(item.name) { selectedHelperID = item.id }
+                            }
+                        } label: { Label(helper.name, systemImage: "person.crop.circle").lineLimit(1) }
+                            .font(RapidFont.caption).menuStyle(.borderlessButton).frame(maxWidth: 140)
+                            .accessibilityIdentifier("YouziSimple.SelectedExpert")
+                    }
                     modelQuickPicker
 
                     YouziContextUsageRing(messages: chat.messages, alias: assistantAlias)
@@ -510,10 +512,45 @@ struct YouziSimpleTaskView: View {
                     .strokeBorder(RapidTheme.hairlineStrong, lineWidth: 1)
             )
             .frame(maxWidth: contentWidth)
+            HStack(spacing: 16) {
+                        Menu(currentWorkspace?.name ?? i18n.text(zh: "工作空间：自动管理", en: "Workspace: managed")) {
+                            Button(i18n.text(zh: "由柚子在开始时管理", en: "Managed by Youzi at start")) {
+                                selectWorkspace(nil)
+                            }
+                                .accessibilityIdentifier("YouziSimpleTaskView.Button.f0e6e6b312")
+                            ForEach(activeWorkspaces) { workspace in
+                                Button(workspace.name) { selectWorkspace(workspace.id) }
+                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.3f2cdaaa0c")
+                            }
+                            Divider()
+                            Button(i18n.text(zh: "管理工作空间…", en: "Manage Workspaces…")) { onNavigate(.workspaces) }
+                                .accessibilityIdentifier("YouziSimpleTaskView.Button.f8d3623359")
+                        }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.073cb55317")
+
+                        Menu(currentProject?.name ?? i18n.text(zh: "项目：未选择", en: "Project: none")) {
+                            Button(i18n.text(zh: "不放入项目", en: "No Project")) { selectProject(nil) }
+                                .accessibilityIdentifier("YouziSimpleTaskView.Button.03c3cf3e2c")
+                            ForEach(activeProjects) { project in
+                                Button(project.name) { selectProject(project.id) }
+                                    .accessibilityIdentifier("YouziSimpleTaskView.Button.a293291eae")
+                            }
+                            Divider()
+                            Button(i18n.text(zh: "管理项目…", en: "Manage Projects…")) { onNavigate(.workspaces) }
+                                .accessibilityIdentifier("YouziSimpleTaskView.Button.56aa8c1007")
+                        }
+                            .accessibilityIdentifier("YouziSimpleTaskView.Menu.3df50ff4d9")
+
+                Spacer(minLength: 0)
+            }
+            .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary).lineLimit(1)
+            .menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: contentWidth, alignment: .leading)
+            .accessibilityIdentifier("YouziSimple.Composer.Workspace")
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, RapidTheme.Space.xl)
-        .padding(.vertical, RapidTheme.Space.lg)
+        .padding(.vertical, chat.messages.isEmpty ? 0 : RapidTheme.Space.md)
         .background(RapidTheme.surfaceCanvas)
     }
 
@@ -526,17 +563,60 @@ struct YouziSimpleTaskView: View {
     }
 
     private var modelQuickPicker: some View {
-        YouziScenarioModelPicker(assistantAlias: $assistantAlias, chatEntries: catalogEntries, chatIsStreaming: chat.isStreaming)
+        YouziScenarioModelPicker(assistantAlias: $assistantAlias, chatEntries: catalogEntries, chatIsStreaming: chat.isStreaming, showsSelectionName: true)
     }
 
-    private func insertReference(_ text: String) {
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            draft = text
-        } else {
-            draft = "\(trimmed) \(text)"
+    private var selectedHelper: YouziHelper? {
+        selectedHelperID.flatMap(productModel.helper(id:))
+    }
+
+    @ViewBuilder private var selectedReferences: some View {
+        if !selectedSkillIDs.isEmpty || !selectedConnectorIDs.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(selectedSkillIDs.compactMap(productModel.skill(id:))) { skill in
+                        referenceChip(skill.name, symbol: "bolt") { selectedSkillIDs.removeAll { $0 == skill.id } }
+                    }
+                    ForEach(selectedConnectorIDs.compactMap(productModel.connector(id:))) { connector in
+                        referenceChip(connector.name, symbol: "link") { selectedConnectorIDs.removeAll { $0 == connector.id } }
+                    }
+                }
+            }.accessibilityIdentifier("YouziSimple.Composer.References")
         }
-        focusRequest &+= 1
+    }
+
+    private func referenceChip(_ title: String, symbol: String, remove: @escaping () -> Void) -> some View {
+        HStack(spacing: 5) {
+            Label(title, systemImage: symbol).lineLimit(1)
+            Button(action: remove) { Image(systemName: "xmark").font(.system(size: 9)) }
+                .buttonStyle(.plain).accessibilityLabel(i18n.text(zh: "移除引用：", en: "Remove reference: ") + title)
+        }.font(RapidFont.caption).padding(.horizontal, 9).padding(.vertical, 6)
+            .background(RapidTheme.brandPrimaryTint, in: Capsule())
+            .foregroundStyle(RapidTheme.brandPrimary)
+    }
+
+    private var storedReferenceDrafts: [String: ReferenceDraft] {
+        (try? JSONDecoder().decode([String: ReferenceDraft].self, from: Data(referenceDrafts.utf8))) ?? [:]
+    }
+
+    private func persistReferences() {
+        var records = storedReferenceDrafts
+        records[(preparedTaskID ?? taskID)?.uuidString ?? "new"] = ReferenceDraft(helper: selectedHelperID, skills: selectedSkillIDs, connectors: selectedConnectorIDs)
+        if let data = try? JSONEncoder().encode(records) { referenceDrafts = String(decoding: data, as: UTF8.self) }
+    }
+
+    private func restoreReferences(for task: YouziTask?) {
+        let saved = storedReferenceDrafts[task?.id.uuidString ?? "new"]
+        selectedHelperID = (saved?.helper ?? task?.helperID).flatMap { productModel.helper(id: $0)?.state == .active ? $0 : nil }
+        selectedSkillIDs = (saved?.skills ?? task?.skillIDs ?? []).filter { productModel.skill(id: $0)?.state == .active }
+        selectedConnectorIDs = (saved?.connectors ?? []).filter { productModel.connector(id: $0)?.state == .active }
+    }
+
+    private func requestWithReferences(_ request: String) -> String {
+        var references = selectedHelper.map { ["@" + $0.name] } ?? []
+        references += selectedSkillIDs.compactMap(productModel.skill(id:)).map { "/" + $0.name }
+        references += selectedConnectorIDs.compactMap(productModel.connector(id:)).map { "#" + $0.name }
+        return references.isEmpty ? request : request + "\n\n" + references.joined(separator: " ")
     }
 
     private func resolveAssistantAliasIfNeeded() {
@@ -585,6 +665,7 @@ struct YouziSimpleTaskView: View {
 
     private func loadTaskContext() {
         preparedTaskID = taskID
+        restoreReferences(for: taskID.flatMap(productModel.task(id:)))
         guard let taskID, let task = productModel.task(id: taskID) else {
             selectedProjectID = projectID
             selectedWorkspaceID = nil
@@ -632,6 +713,7 @@ struct YouziSimpleTaskView: View {
             productModel.assignWorkspace(selectedWorkspaceID, toTask: task.id)
         }
         preparedTaskID = task.id
+        persistReferences()
         onTaskPersisted(task.id)
         return productModel.task(id: task.id) ?? task
     }
@@ -725,7 +807,10 @@ struct YouziSimpleTaskView: View {
         guard let attachments = prepareTaskRequest(request) else { return }
         draft = ""
         focusRequest &+= 1
-        chat.send(request, alias: assistantAlias, fileAttachments: attachments)
+        chat.send(requestWithReferences(request), alias: assistantAlias, fileAttachments: attachments)
+        var records = storedReferenceDrafts
+        records.removeValue(forKey: "new")
+        if let data = try? JSONEncoder().encode(records) { referenceDrafts = String(decoding: data, as: UTF8.self) }
     }
 
     /// Text and voice share task/workspace preparation and attachment handling.
@@ -734,6 +819,8 @@ struct YouziSimpleTaskView: View {
         guard var task = ensureTaskDraft(request: request) else { return nil }
         task.title = (task.title == "未命名任务" || task.title == "Untitled Task") ? taskTitle(from: request) : task.title
         task.request = request
+        task.helperID = selectedHelperID
+        task.skillIDs = selectedSkillIDs
         task.updatedAt = Date()
         productModel.save(task)
         productModel.assignWorkspace(selectedWorkspaceID, toTask: task.id)
