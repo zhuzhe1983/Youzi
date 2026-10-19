@@ -15,6 +15,7 @@ struct YouziSimpleResultsPage: View {
     @State private var searchText = ""
     @AppStorage("youzi.results.cardSize") private var cardSize: YouziArtifactCardSize = .medium
     @State private var playback = YouziArtifactPlayback()
+    @State private var artifactToDelete: YouziArtifact?
 
     var body: some View {
         ZStack {
@@ -58,11 +59,19 @@ struct YouziSimpleResultsPage: View {
             .allowsHitTesting(playback.preview == nil)
             .accessibilityHidden(playback.preview != nil)
             if let preview = playback.preview {
-                YouziArtifactMediaOverlay(preview: preview, onClose: { playback.stop() })
+                YouziArtifactMediaOverlay(preview: preview, onClose: { playback.stop() }, onDelete: {
+                    if let artifact = artifacts.first(where: { $0.id == preview.id }) {
+                        playback.stop()
+                        artifactToDelete = artifact
+                    }
+                })
                     .id(preview.id).zIndex(1)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(item: $artifactToDelete) { artifact in
+            YouziArtifactDeleteConfirmation(artifact: artifact)
+        }
         .alert(i18n.text(zh: "无法预览文件", en: "Unable to preview file"), isPresented: Binding(
             get: { playback.failed }, set: { playback.failed = $0 }
         )) {
@@ -149,13 +158,26 @@ struct YouziSimpleResultsPage: View {
                         Button(i18n.text(zh: "分享…", en: "Share…")) { onShare(artifact) }.disabled(!canResolveFile)
                             .accessibilityIdentifier("YouziSimpleResultsPage.Button.1662d00fd4")
                     }
+                    Divider()
+                    deleteButton(artifact)
                 } label: { Image(systemName: "ellipsis") }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 .accessibilityLabel(i18n.text(zh: "文件操作", en: "File actions") + " " + artifact.title)
                     .accessibilityIdentifier("YouziSimpleResultsPage.Menu.283e51db34")
             }
         }
+        .contextMenu { deleteButton(artifact) }
         .accessibilityIdentifier("YouziSimple.Result.Grid.\(artifact.id.uuidString)")
+    }
+
+    private func deleteButton(_ artifact: YouziArtifact) -> some View {
+        Button(role: .destructive) {
+            playback.stop()
+            artifactToDelete = artifact
+        } label: {
+            Label(i18n.text(zh: "删除…", en: "Delete…"), systemImage: "trash")
+        }
+        .accessibilityIdentifier("YouziSimple.Results.Delete.\(artifact.id)")
     }
 
     private var filterToolbar: some View {

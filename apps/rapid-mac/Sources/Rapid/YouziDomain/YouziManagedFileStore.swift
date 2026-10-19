@@ -39,17 +39,22 @@ final class YouziManagedFileStore: @unchecked Sendable {
     private let fileManager: FileManager
     private let workspaces: YouziWorkspaceAccessCoordinator
     private let bookmarks: YouziSecurityScopedBookmarkAccess
+    private let trashItem: (URL) throws -> Void
 
     init(
         root: URL = ApplicationSupportLocator.youziManagedFilesDirectory(),
         fileManager: FileManager = .default,
         workspaceAccess: YouziWorkspaceAccessCoordinator = YouziWorkspaceAccessCoordinator(),
-        bookmarks: YouziSecurityScopedBookmarkAccess = .foundation
+        bookmarks: YouziSecurityScopedBookmarkAccess = .foundation,
+        trashItem: @escaping (URL) throws -> Void = { url in
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        }
     ) {
         self.root = root.standardizedFileURL
         self.fileManager = fileManager
         self.workspaces = workspaceAccess
         self.bookmarks = bookmarks
+        self.trashItem = trashItem
     }
 
     func importFile(
@@ -240,6 +245,33 @@ final class YouziManagedFileStore: @unchecked Sendable {
         } catch {
             throw YouziManagedFileStoreError.ioFailed(error.localizedDescription)
         }
+    }
+
+    /// User-facing deletion is recoverable. Never fall back to unlinking bytes
+    /// if the volume's Trash is unavailable. Missing files allow a retry after
+    /// a successful move followed by an interrupted metadata commit.
+    func trashManagedCopy(for file: YouziFile) throws {
+        guard case let .appManaged(relativePath) = file.location else {
+            throw YouziManagedFileStoreError.refusesToDeleteExternalFile
+        }
+        let components = relativePath.split(separator: "/")
+        guard components.count == 2,
+              components[0] == Substring(file.id.uuidString.lowercased()) else {
+            throw YouziManagedFileStoreError.invalidManagedLocation(relativePath)
+        }
+        let url = try checkedManagedURL(relativePath: relativePath)
+        guard fileManager.fileExists(atPath: url.path) else { return }
+        // A UUID directory may not be replaced with a symlink to another
+        // managed file/directory, even if both remain beneath the same root.
+        let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey])
+        let parentValues = try url.deletingLastPathComponent().resourceValues(forKeys: [.isSymbolicLinkKey])
+        guard values.isSymbolicLink != true, parentValues.isSymbolicLink != true else {
+            throw YouziManagedFileStoreError.invalidManagedLocation(relativePath)
+        }
+        guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+            throw YouziManagedFileStoreError.sourceIsNotRegularFile(url.path)
+        }
+        try trashItem(url)
     }
 
     static func safeName(_ rawName: String) -> String {

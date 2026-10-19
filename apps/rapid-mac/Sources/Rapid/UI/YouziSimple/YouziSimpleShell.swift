@@ -590,6 +590,7 @@ struct YouziSimpleShell: View {
                 Text(artifact.title)
                     .font(RapidFont.pageTitle)
                 Spacer(minLength: 0)
+                YouziArtifactDeleteButton(artifact: artifact, onDeleted: { selectedArtifactID = nil })
                 Button(i18n.text(zh: "关闭", en: "Close")) { selectedArtifactID = nil }
                     .buttonStyle(.bordered)
                     .accessibilityIdentifier("YouziSimpleShell.Button.85f0f314f8")

@@ -115,7 +115,7 @@ struct YouziChatArtifactCard: View {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(artifact.title).font(RapidFont.bodyEmphasis).lineLimit(2).help(artifact.title)
-                    Text(available ? i18n.text(zh: "已保存到我的文件", en: "Saved to My Files") : i18n.text(zh: "文件不可用", en: "File unavailable"))
+                    Text(artifact.state == .archived ? i18n.text(zh: "成果已删除", en: "Deliverable deleted") : available ? i18n.text(zh: "已保存到我的文件", en: "Saved to My Files") : i18n.text(zh: "文件不可用", en: "File unavailable"))
                         .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
                 }
                 Spacer(minLength: 0)

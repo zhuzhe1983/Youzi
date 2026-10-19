@@ -342,6 +342,19 @@ final class YouziProductModel: ChatConversationLifecycleObserver {
         capture { try lifecycle.removeFile(id, deleteManagedCopy: deleteManagedCopy) }
     }
 
+    func deleteArtifact(id: UUID) throws {
+        do {
+            document = try lifecycle.deleteArtifact(id)
+            lastPersistenceError = nil
+        } catch {
+            // A move or final metadata commit may have failed after revocation.
+            // Publish the durable state so all previews stop offering access.
+            if let persisted = try? lifecycle.load() { document = persisted }
+            lastPersistenceError = error.localizedDescription
+            throw error
+        }
+    }
+
     func seedTemplates(_ templates: [YouziTemplate]) {
         capture { try lifecycle.seedTemplates(templates) }
     }

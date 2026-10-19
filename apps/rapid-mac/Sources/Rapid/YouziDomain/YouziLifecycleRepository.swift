@@ -480,6 +480,45 @@ final class YouziLifecycleRepository: @unchecked Sendable {
         }
     }
 
+    /// Archive the durable receipt, preserving task/conversation backlinks.
+    /// A persisted unavailable state precedes a recoverable filesystem move;
+    /// failed moves remain visible and can be retried. External bytes stay put.
+    @discardableResult
+    func deleteArtifact(_ artifactID: UUID, at date: Date = Date()) throws -> YouziDomainDocument {
+        let current = try store.load()
+        guard let artifact = current.artifacts.first(where: { $0.id == artifactID }) else {
+            throw YouziLifecycleError.artifactNotFound(artifactID)
+        }
+        guard artifact.state != .archived else { return current }
+        guard let file = current.files.first(where: { $0.id == artifact.fileID }) else {
+            throw YouziLifecycleError.fileNotFound(artifact.fileID)
+        }
+        if case .appManaged = file.location {
+            _ = try store.update { document in
+                if let index = document.artifacts.firstIndex(where: { $0.id == artifactID }) {
+                    document.artifacts[index].state = .unavailable
+                    document.artifacts[index].updatedAt = date
+                }
+                if let index = document.files.firstIndex(where: { $0.id == file.id }) {
+                    document.files[index].availability = .revoked
+                    document.files[index].updatedAt = date
+                }
+            }
+            try fileStore.trashManagedCopy(for: file)
+        }
+        return try store.update { document in
+            if let index = document.artifacts.firstIndex(where: { $0.id == artifactID }) {
+                document.artifacts[index].state = .archived
+                document.artifacts[index].updatedAt = date
+            }
+            if case .appManaged = file.location,
+               let index = document.files.firstIndex(where: { $0.id == file.id }) {
+                document.files[index].availability = .missing
+                document.files[index].updatedAt = date
+            }
+        }
+    }
+
     @discardableResult
     func seedTemplates(_ templates: [YouziTemplate]) throws -> YouziDomainDocument {
         try store.update { document in

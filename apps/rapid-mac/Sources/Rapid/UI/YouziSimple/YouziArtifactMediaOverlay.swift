@@ -6,6 +6,7 @@ struct YouziArtifactMediaOverlay: View {
     @Environment(YouziI18nConfig.self) private var i18n
     let preview: YouziMediaPreview
     let onClose: () -> Void
+    var onDelete: (() -> Void)? = nil
     @State private var image: YouziDecodedImage?
     @State private var failed = false
     @State private var zoom = 1.0
@@ -40,6 +41,12 @@ struct YouziArtifactMediaOverlay: View {
                             Button { command = .init(action: .in) } label: { Image(systemName: "plus.magnifyingglass") }
                                 .help(i18n.text(zh: "放大", en: "Zoom in"))
                                 .accessibilityIdentifier("YouziArtifactMediaOverlay.Button.e0fd2cb53f")
+                        }
+                        if let onDelete {
+                            Button(role: .destructive, action: onDelete) { Image(systemName: "trash").frame(width: 28, height: 28) }
+                                .help(i18n.text(zh: "删除成果…", en: "Delete deliverable…"))
+                                .accessibilityLabel(i18n.text(zh: "删除成果", en: "Delete deliverable"))
+                                .accessibilityIdentifier("YouziSimple.Media.Delete")
                         }
                         Button(action: onClose) { Image(systemName: "xmark").frame(width: 28, height: 28) }
                             .keyboardShortcut(.escape, modifiers: [])
