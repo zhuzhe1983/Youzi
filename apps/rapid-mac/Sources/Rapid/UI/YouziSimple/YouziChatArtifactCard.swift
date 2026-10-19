@@ -11,6 +11,16 @@ enum YouziChatArtifactReceipt {
         let error: String?
     }
 
+    static func sizeAdjustment(content: String) -> (requested: String, effective: String)? {
+        guard content.utf8.count <= 128_000,
+              let root = try? JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any],
+              let generation = root["generation"] as? [String: Any], generation["size_adjusted"] as? Bool == true,
+              let requested = generation["requested_size"] as? String,
+              let effective = generation["effective_size"] as? String,
+              YouziImageSize(requested) != nil, YouziImageSize(effective) != nil else { return nil }
+        return (requested.replacingOccurrences(of: "x", with: "×"), effective.replacingOccurrences(of: "x", with: "×"))
+    }
+
     static func resolve(
         call: ToolCall, result: ChatMessage?, taskID: UUID?,
         artifact: (UUID) -> YouziArtifact?
@@ -115,6 +125,11 @@ struct YouziChatArtifactCard: View {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(artifact.title).font(RapidFont.bodyEmphasis).lineLimit(2).help(artifact.title)
+                    if let result, let adjustment = YouziChatArtifactReceipt.sizeAdjustment(content: result.content) {
+                        Text(i18n.text(zh: "尺寸已调整：", en: "Size adjusted: ") + adjustment.requested + " → " + adjustment.effective)
+                            .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
+                            .accessibilityIdentifier("YouziChatArtifact.SizeAdjustment")
+                    }
                     Text(artifact.state == .archived ? i18n.text(zh: "成果已删除", en: "Deliverable deleted") : available ? i18n.text(zh: "已保存到我的文件", en: "Saved to My Files") : i18n.text(zh: "文件不可用", en: "File unavailable"))
                         .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
                 }

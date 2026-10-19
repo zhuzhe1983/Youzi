@@ -111,6 +111,33 @@ struct YouziLocalModelToolsTests {
         #expect(f.capturedImage?.steps == nil && f.capturedImage?.guidance == nil)
     }
 
+    @Test("Common image dimensions align once and the receipt tells the user")
+    func flexibleImageSize() async throws {
+        let f = Fixture(); f.ready.insert(f.image.alias)
+        let result = try await f.call("youzi_generate_image", ["model": f.image.alias, "prompt": "moon", "size": "1920x1080"])
+        #expect(!result.isError && f.generations == 1)
+        #expect(f.capturedImage?.size == "1920x1088")
+        let generation = try #require(try json(result)["generation"] as? [String: Any])
+        #expect(generation["requested_size"] as? String == "1920x1080")
+        #expect(generation["effective_size"] as? String == "1920x1088")
+        #expect(generation["size_adjusted"] as? Bool == true)
+        #expect((generation["notice"] as? String)?.contains("Tell the user") == true)
+        let shown = try #require(YouziChatArtifactReceipt.sizeAdjustment(content: result.content))
+        #expect(shown.requested == "1920×1080" && shown.effective == "1920×1088")
+        #expect(YouziImageSize(" 1920 × 1080 ")?.effective == "1920x1088")
+        #expect(YouziImageSize("1920*1080")?.effective == "1920x1088")
+        #expect(YouziImageSize("1024x1024")?.adjusted == false)
+        #expect(YouziImageSize("1344x768")?.effective == "1344x768")
+        #expect(YouziImageSize("512x530")?.effective == "512x528")
+        #expect(YouziImageSize("1x9999")?.effective == "256x2048")
+        for bad in ["0x1080", "-1x1080", "9999999x512", "one x two", "1.5x1024", "512x512x512"] {
+            let failure = try await f.call("youzi_generate_image", ["model": f.image.alias, "prompt": "moon", "size": bad])
+            #expect(failure.isError && failure.content.contains("invalid_image_size"))
+            #expect(YouziLocalModelTools.failureMessage(content: failure.content, chinese: true)?.contains("尺寸") == true)
+        }
+        #expect(f.generations == 1)
+    }
+
     @Test("Invalid image controls fail before startup approval or generation")
     func invalidImageParameters() async throws {
         let f = Fixture()

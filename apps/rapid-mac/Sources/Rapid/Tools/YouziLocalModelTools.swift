@@ -38,7 +38,7 @@ final class YouziLocalModelTools {
         case catalog_unavailable, invalid_arguments, model_not_downloaded, model_not_ready
         case capability_not_supported, user_declined, load_failed, cancelled, automatic_model_unavailable
         case task_unavailable, file_unavailable, generation_failed, output_too_large, invalid_voice, video_timeout
-        case image_worker_failed, image_generation_failed, image_empty_output, image_parameters_unsupported
+        case image_worker_failed, image_generation_failed, image_empty_output, image_parameters_unsupported, invalid_image_size
     }
     let approval: YouziModelApprovalStore
     let dependencies: Dependencies
@@ -68,7 +68,7 @@ final class YouziLocalModelTools {
     static let definitions: [ToolDefinition] = [
         define("youzi_models", "List Youzi's local model catalog with downloaded/ready states and supported tool operations. Call before local media generation. No downloads, startup or settings changes.", [:], []),
         define("youzi_load_model", "Request human confirmation to start a downloaded image, speech or video model alongside chat. Never claim approval yourself. If denied do not retry. Does not download, restart chat or enable autostart.", ["model": string("Exact alias from youzi_models"), "reason": string("Short explanation of why this user's task needs the model")], ["model", "reason"]),
-        define("youzi_generate_image", "Generate ONE local illustration; request startup approval if stopped. Saves an artifact to this task and returns artifact_id and actual generation parameters when reported by the runtime. Omit model to use the automatic image pool. Optional parameters override this call only; omit them for configured size and model defaults.", ["model": string("Optional exact image alias; omit to use the automatic pool"), "prompt": string("Detailed illustration prompt"), "size": string("Optional WIDTHxHEIGHT, 256..2048, multiples of 64; must be supported by model"), "seed": number("integer", 0, 2147483647, "Optional fixed seed; omit for random"), "steps": number("integer", 1, 50, "Optional denoising steps; omit for model default (Qwen-Image 2.1: 40). Some models require fixed steps."), "guidance": number("number", 0, 20, "Optional model-specific guidance. Qwen-Image 2.1: omit for 1.0, or use >1 with negative_prompt for CFG."), "negative_prompt": string("Optional exclusions, up to 4000 characters. Qwen-Image 2.1 requires guidance >1; some models do not support this.")], ["prompt"]),
+        define("youzi_generate_image", "Generate ONE local illustration; request startup approval if stopped. Saves an artifact to this task and returns artifact_id and actual generation parameters when reported by the runtime. Omit model to use the automatic image pool. Optional parameters override this call only; omit them for configured size and model defaults.", ["model": string("Optional exact image alias; omit to use the automatic pool"), "prompt": string("Detailed illustration prompt"), "size": string("Optional requested WIDTHxHEIGHT. The tool adjusts each side to the nearest supported value (256..2048, multiples of 16) and reports requested/effective sizes. Tell the user whenever the size changes."), "seed": number("integer", 0, 2147483647, "Optional fixed seed; omit for random"), "steps": number("integer", 1, 50, "Optional denoising steps; omit for model default (Qwen-Image 2.1: 40). Some models require fixed steps."), "guidance": number("number", 0, 20, "Optional model-specific guidance. Qwen-Image 2.1: omit for 1.0, or use >1 with negative_prompt for CFG."), "negative_prompt": string("Optional exclusions, up to 4000 characters. Qwen-Image 2.1 requires guidance >1; some models do not support this.")], ["prompt"]),
         define("youzi_speech_voices", "List supported speaker IDs for a downloaded speech model. Does not load weights or generate audio. Omit voice in synthesis to use the configured default. Language names are not voices.", ["model": string("Exact speech alias from youzi_models")], ["model"]),
         define("youzi_synthesize_speech", "Generate local narration with a downloaded speech model; reuse it if ready, otherwise request human startup approval. Omit model to use the automatic speech pool. Saves audio to this task and returns artifact_id. Uses configured default voice if omitted. Maximum 2000 characters per call.", ["model": string("Optional exact speech alias; omit to use the automatic pool"), "text": string("Text to speak"), "voice": string("Omit by default. Otherwise exact speaker ID from youzi_speech_voices; never Chinese/English")], ["text"]),
         define("youzi_video_capabilities", "Inspect the exact ready video model's modes, sizes and duration presets. Omit model for the automatic video pool. Does not start/download a model. If stopped, generation can request human startup approval.", ["model": string("Optional exact video alias; omit for the automatic pool")], []),
@@ -181,12 +181,10 @@ final class YouziLocalModelTools {
                 try validateKeys(args, allowed: ["model", "prompt", "size", "seed", "steps", "guidance", "negative_prompt"])
                 guard Self.operations(entry).contains("image_generation") else { throw Failure.capability_not_supported }
                 let prompt = try text(args, "prompt", max: 4000)
-                let size = try optionalText(args, "size", max: 12)
-                if let size {
-                    let dimensions = size.split(separator: "x", omittingEmptySubsequences: false)
-                    let parts = dimensions.compactMap { Int($0) }
-                    guard dimensions.count == 2, parts.count == 2, parts.allSatisfy({ (256...2048).contains($0) && $0 % 64 == 0 }) else { throw Failure.invalid_arguments }
-                }
+                let requestedSize = try optionalText(args, "size", max: 24)
+                let sizeAdjustment = requestedSize.flatMap(YouziImageSize.init)
+                if requestedSize != nil, sizeAdjustment == nil { throw Failure.invalid_image_size }
+                let size = sizeAdjustment?.effective
                 let options = ImageGenerationOptions(size: size,
                     seed: try optionalNumber(args, "seed", range: 0...2147483647, integer: true).map(Int.init),
                     steps: try optionalNumber(args, "steps", range: 1...50, integer: true).map(Int.init),
@@ -203,6 +201,14 @@ final class YouziLocalModelTools {
                     let encoded = try JSONEncoder().encode(parameters)
                     let values = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] ?? [:]
                     generation.merge(values) { _, reported in reported }
+                }
+                if let sizeAdjustment {
+                    generation["requested_size"] = sizeAdjustment.requested
+                    generation["effective_size"] = image.parameters?.size ?? sizeAdjustment.effective
+                    generation["size_adjusted"] = sizeAdjustment.requested != (image.parameters?.size ?? sizeAdjustment.effective)
+                    if generation["size_adjusted"] as? Bool == true {
+                        generation["notice"] = "Size adjusted from \(sizeAdjustment.requested) to \(image.parameters?.size ?? sizeAdjustment.effective). Tell the user both sizes. Do not claim the original dimensions were generated."
+                    }
                 }
                 return savedResult(saved, id: call.id, generation: generation)
             case "youzi_generate_video":
@@ -344,6 +350,8 @@ final class YouziLocalModelTools {
               let object = try? JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any],
               let code = object["error"] as? String else { return nil }
         switch code {
+        case "invalid_image_size": return chinese ? "图片尺寸格式无效，请使用宽×高（例如 1920×1080）。柚子会自动调整到最接近的可用尺寸，并告知调整结果。" : "Use WIDTHxHEIGHT (for example 1920x1080). Youzi adjusts to the nearest supported size and reports the change."
+        case "invalid_arguments": return chinese ? "工具参数格式或取值无效，请检查参数后重试。" : "A tool parameter has an invalid format or value. Check the parameters before retrying."
         case "image_parameters_unsupported": return chinese ? "当前图片模型不支持这组参数，未生成图片。请检查步数、引导系数与负提示词的组合。" : "This image model does not support these parameters; no image was generated. Check steps, guidance and negative prompt together."
         case "image_worker_failed": return chinese ? "图片模型的 GPU 执行线程异常，未生成图片。这不是提示词问题；请更新客户端，并重新加载图片模型后再试。" : "The image model's GPU worker failed; no image was generated. This is not a prompt error. Update the client and reload the image model before retrying."
         case "image_generation_failed": return chinese ? "图片生成服务未完成请求，未保存图片。请检查图片模型状态和服务日志，不要连续重复提交。" : "The image service could not finish; no image was saved. Check the image model and service logs instead of repeatedly resubmitting."
@@ -361,6 +369,7 @@ final class YouziLocalModelTools {
     private func failure(_ error: Failure, id: String) -> ToolCallResult {
         let action: String
         switch error {
+        case .invalid_image_size: action = "Use a positive WIDTHxHEIGHT, e.g. 1920x1080. Do not repeat malformed values. The tool automatically aligns valid dimensions to 16 pixels within 256..2048 and returns the actual requested/effective size; inform the user of any adjustment."
         case .image_parameters_unsupported: action = "No image was generated. Check the model-specific parameter contract. Qwen-Image 2.1 requires guidance >1 and a nonempty negative_prompt together for CFG; omit both for default 1.0. Other models may reject these controls or require fixed steps. Do not silently remove user-requested parameters or retry automatically."
         case .image_worker_failed: action = "Image GPU worker/thread failure, not invalid input. No image was saved. Ask the user to update the client and reload the image model. Do not restart chat, retry automatically or invent an artifact."
         case .image_generation_failed, .image_empty_output: action = "No image was saved. Ask the user to check the image service and logs. Do not retry automatically or invent an artifact."
