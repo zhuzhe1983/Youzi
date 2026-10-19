@@ -10,6 +10,7 @@ struct GeneratedImage: Identifiable, Hashable, Sendable {
     /// True when this came from ``/v1/images/edits`` (vs. generations).
     let isEdit: Bool
     var parameters: ImageGenerationParameters? = nil
+    var submittedParameters: [String: CodableJSON]? = nil
 }
 
 /// Per-call overrides; nil leaves the configured size and backend defaults intact.
@@ -157,11 +158,16 @@ struct ImageClient {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         applyBearer(&req, remote == nil ? bearer : remote?.apiKey)
+        let resolvedSize = size ?? generationDefaults.imageSize
         req.httpBody = try JSONEncoder().encode(
-            GenerationBody(model: remote?.modelID ?? model, prompt: prompt, n: count, size: size ?? generationDefaults.imageSize, response_format: remote == nil || remote?.configuration.imageResponseFormat == "b64_json" ? "b64_json" : nil, seed: remote == nil ? seed : nil, steps: steps, guidance: guidance, negative_prompt: negativePrompt)
+            GenerationBody(model: remote?.modelID ?? model, prompt: prompt, n: count, size: resolvedSize, response_format: remote == nil || remote?.configuration.imageResponseFormat == "b64_json" ? "b64_json" : nil, seed: remote == nil ? seed : nil, steps: steps, guidance: guidance, negative_prompt: negativePrompt)
         )
         let images = try await sendAndDecode(req, remote: remote != nil)
-        return images.map { GeneratedImage(pngData: $0.png, prompt: prompt, isEdit: false, parameters: $0.parameters) }
+        var submitted: [String: CodableJSON] = ["size": .string(resolvedSize)]
+        if remote == nil {
+            submitted.merge(YouziLocalModelTools.imageOptions(.init(size: resolvedSize, seed: seed, steps: steps, guidance: guidance, negativePrompt: negativePrompt))) { _, new in new }
+        }
+        return images.map { GeneratedImage(pngData: $0.png, prompt: prompt, isEdit: false, parameters: $0.parameters, submittedParameters: submitted) }
     }
 
     // MARK: - Edits

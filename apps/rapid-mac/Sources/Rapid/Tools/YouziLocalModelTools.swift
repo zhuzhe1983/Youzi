@@ -8,6 +8,10 @@ final class YouziLocalModelTools {
         let taskID: UUID
         let projectID: UUID?
         var turnID: UUID? = nil
+        var generation: YouziArtifactGeneration? = nil
+        func recording(_ record: YouziArtifactGeneration) -> Self {
+            var copy = self; copy.generation = record; return copy
+        }
     }
     struct Asset: Sendable {
         let id: UUID
@@ -32,17 +36,24 @@ final class YouziLocalModelTools {
         var read: @MainActor (UUID, Context) throws -> Asset
         var video: @MainActor (YouziLocalVideoTool.Input, ModelEntry) async throws -> Data = { _, _ in throw Failure.capability_not_supported }
         var videoCapabilities: @MainActor (ModelEntry) async throws -> VideoCapabilities = { _ in throw Failure.capability_not_supported }
+        var source: @MainActor (ModelEntry) throws -> YouziGenerationSource = { entry in
+            entry.isRemote ? .init(location: .remote, modelAlias: entry.alias, modelName: entry.alias) : .local(entry)
+        }
+        var videoResult: (@MainActor (YouziLocalVideoTool.Input, ModelEntry) async throws -> YouziLocalVideoTool.Output)? = nil
         var voices: @MainActor (ModelEntry) async throws -> [String] = { _ in [] }
     }
     enum Failure: String, Error {
         case catalog_unavailable, invalid_arguments, model_not_downloaded, model_not_ready
         case capability_not_supported, user_declined, load_failed, cancelled, automatic_model_unavailable
         case task_unavailable, file_unavailable, generation_failed, output_too_large, invalid_voice, video_timeout
-        case image_worker_failed, image_generation_failed, image_empty_output, image_parameters_unsupported, invalid_image_size
+        case source_changed,
+             image_worker_failed, image_generation_failed, image_empty_output, image_parameters_unsupported, invalid_image_size
     }
     let approval: YouziModelApprovalStore
     let dependencies: Dependencies
     let preferences: UserDefaults
+    var requiredSource: YouziGenerationSource? = nil
+    var rerollParentID: UUID? = nil
     private var executing = false
     private var deniedContext: Context?
     private var deniedModels: Set<String> = []
@@ -197,11 +208,16 @@ final class YouziLocalModelTools {
                     guidance: try optionalNumber(args, "guidance", range: 0...20),
                     negativePrompt: try optionalText(args, "negative_prompt", max: 4000))
                 try await ensureReady(entry, snapshot: snapshot, reason: "Generate an illustration for the current task")
+                var record = try generationRecord(operation: .image, prompt: prompt, args: args, entry: entry)
                 let image = try await dependencies.image(prompt, entry, options)
+                record.submitted = image.submittedParameters ?? Self.imageOptions(options)
+                if let parameters = image.parameters {
+                    record.reported = try JSONDecoder().decode([String: CodableJSON].self, from: JSONEncoder().encode(parameters))
+                }
                 let png = image.pngData
                 try Task.checkCancellation()
                 guard !png.isEmpty, png.count <= YouziStorybook.maxAssetBytes else { throw Failure.output_too_large }
-                saved = try dependencies.save(png, "illustration-\(UUID().uuidString.prefix(8)).png", "public.png", .image, context)
+                saved = try dependencies.save(png, "illustration-\(UUID().uuidString.prefix(8)).png", "public.png", .image, context.recording(record))
                 var generation: [String: Any] = ["model": entry.alias, "parameters_reported": image.parameters != nil]
                 if let parameters = image.parameters {
                     let encoded = try JSONEncoder().encode(parameters)
@@ -218,7 +234,7 @@ final class YouziLocalModelTools {
                 }
                 return savedResult(saved, id: call.id, generation: generation)
             case "youzi_generate_video":
-                try validateKeys(args, allowed: ["model", "prompt", "size", "seconds", "reference_image_id"])
+                try validateKeys(args, allowed: rerollParentID == nil ? ["model", "prompt", "size", "seconds", "reference_image_id"] : ["model", "prompt", "size", "seconds", "reference_image_id", "seed"])
                 guard Self.operations(entry).contains("video_generation") else { throw Failure.capability_not_supported }
                 let prompt = try text(args, "prompt", max: 4000)
                 let size = try optionalText(args, "size", max: 12)
@@ -245,22 +261,31 @@ final class YouziLocalModelTools {
                 let mode: VideoModelCapability = reference == nil ? .textToVideo : .imageToVideo
                 guard entry.videoCapabilities.contains(mode) else { throw Failure.capability_not_supported }
                 try await ensureReady(entry, snapshot: snapshot, reason: "Generate a short video for the current task")
-                let video = try await dependencies.video(.init(prompt: prompt, size: size, seconds: seconds, reference: reference), entry)
+                var record = try generationRecord(operation: .video, prompt: prompt, args: args, entry: entry)
+                let seed = rerollParentID == nil ? nil : try optionalNumber(args, "seed", range: 0...2147483647, integer: true).map(Int.init)
+                let input = YouziLocalVideoTool.Input(prompt: prompt, size: size, seconds: seconds, reference: reference, seed: seed)
+                let video: Data
+                if let generate = dependencies.videoResult {
+                    let result = try await generate(input, entry)
+                    video = result.data; record.submitted = result.submitted
+                } else { video = try await dependencies.video(input, entry) }
                 try Task.checkCancellation()
                 guard video.count <= YouziLocalVideoTool.maximumOutputBytes else { throw Failure.output_too_large }
                 guard YouziLocalVideoTool.isMP4(video) else { throw Failure.generation_failed }
-                saved = try dependencies.save(video, "video-\(UUID().uuidString.prefix(8)).mp4", "public.mpeg-4", .video, context)
+                saved = try dependencies.save(video, "video-\(UUID().uuidString.prefix(8)).mp4", "public.mpeg-4", .video, context.recording(record))
             case "youzi_synthesize_speech":
                 try validateKeys(args, allowed: ["model", "text", "voice"])
                 guard Self.operations(entry).contains("speech_synthesis") else { throw Failure.capability_not_supported }
                 let input = try text(args, "text", max: 2000)
                 let voice = try optionalText(args, "voice", max: 100)
                 try await ensureReady(entry, snapshot: snapshot, reason: "Generate narration for the current task")
+                var record = try generationRecord(operation: .speech, prompt: input, args: args, entry: entry)
                 let audio = try await dependencies.speech(input, entry, voice)
+                record.submitted = audio.submittedParameters ?? record.requested
                 try Task.checkCancellation()
                 guard !audio.data.isEmpty, audio.data.count <= YouziStorybook.maxAssetBytes else { throw Failure.output_too_large }
                 guard audio.fileExtension == "wav", audio.contentType.lowercased().contains("wav") else { throw Failure.generation_failed }
-                saved = try dependencies.save(audio.data, "narration-\(UUID().uuidString.prefix(8)).wav", "com.microsoft.waveform-audio", .audio, context)
+                saved = try dependencies.save(audio.data, "narration-\(UUID().uuidString.prefix(8)).wav", "com.microsoft.waveform-audio", .audio, context.recording(record))
             default: throw Failure.capability_not_supported
             }
             return savedResult(saved, id: call.id)
@@ -270,6 +295,23 @@ final class YouziLocalModelTools {
             return failure(Task.isCancelled ? .cancelled : Self.imageFailure(error), id: call.id)
         }
         catch { return failure(.generation_failed, id: call.id) } // Never echo raw runtime paths, keys or responses.
+    }
+
+    private func generationRecord(operation: YouziArtifactGeneration.Operation, prompt: String, args: [String: Any], entry: ModelEntry) throws -> YouziArtifactGeneration {
+        let source = try dependencies.source(entry)
+        if let requiredSource, !requiredSource.matches(source) { throw Failure.source_changed }
+        return .init(operation: operation, source: source, prompt: prompt,
+                     requested: YouziArtifactGeneration.values(args, keys: operation.keys), parentArtifactID: rerollParentID)
+    }
+
+    nonisolated static func imageOptions(_ options: ImageGenerationOptions) -> [String: CodableJSON] {
+        var values: [String: CodableJSON] = [:]
+        if let size = options.size { values["size"] = .string(size) }
+        if let seed = options.seed { values["seed"] = .number(Double(seed)) }
+        if let steps = options.steps { values["steps"] = .number(Double(steps)) }
+        if let guidance = options.guidance { values["guidance"] = .number(guidance) }
+        if let prompt = options.negativePrompt { values["negative_prompt"] = .string(prompt) }
+        return values
     }
 
     /// On-demand admission uses the same consent and preservation path as the
@@ -362,6 +404,7 @@ final class YouziLocalModelTools {
         case "invalid_arguments": return chinese ? "工具参数格式或取值无效，请检查参数后重试。" : "A tool parameter has an invalid format or value. Check the parameters before retrying."
         case "image_parameters_unsupported": return chinese ? "当前图片模型不支持这组参数，未生成图片。请检查步数、引导系数与负提示词的组合。" : "This image model does not support these parameters; no image was generated. Check steps, guidance and negative prompt together."
         case "image_worker_failed": return chinese ? "图片模型的 GPU 执行线程异常，未生成图片。这不是提示词问题；请更新客户端，并重新加载图片模型后再试。" : "The image model's GPU worker failed; no image was generated. This is not a prompt error. Update the client and reload the image model before retrying."
+        case "source_changed": return chinese ? "原模型或服务器配置已改变，未提交生成请求。请恢复原配置后重试。" : "The original model or server configuration changed; no generation was submitted. Restore it before retrying."
         case "image_generation_failed": return chinese ? "图片生成服务未完成请求，未保存图片。请检查图片模型状态和服务日志，不要连续重复提交。" : "The image service could not finish; no image was saved. Check the image model and service logs instead of repeatedly resubmitting."
         case "image_empty_output": return chinese ? "图片服务没有返回图片，未保存成果。请检查图片模型状态。" : "The image service returned no image; no artifact was saved. Check the image model's status."
         case "video_timeout": return chinese ? "视频等待超时，未保存成果。已尝试取消排队任务；已经开始的生成可能仍在视频工作区运行，请勿重复提交。" : "Video wait timed out; no artifact saved. Queued work was canceled when possible; running generation may continue in Videos. Do not resubmit automatically."

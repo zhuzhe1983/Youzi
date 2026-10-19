@@ -420,7 +420,8 @@ struct YouziLocalModelToolsTests {
         #expect(f.capturedVideo?.size == nil && f.capturedVideo?.seconds == nil)
         let saved = try #require(f.saved.values.first)
         #expect(saved.0.kind == .video && saved.0.name.hasSuffix(".mp4"))
-        #expect(saved.1 == owner && saved.1.taskID != f.context.taskID)
+        #expect(saved.1.taskID == owner.taskID && saved.1.projectID == owner.projectID && saved.1.turnID == owner.turnID)
+        #expect(saved.1.taskID != f.context.taskID && saved.1.generation?.operation == .video)
         #expect(try json(result)["artifact_id"] as? String == saved.0.id.uuidString)
     }
 

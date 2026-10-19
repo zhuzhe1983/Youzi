@@ -16,6 +16,7 @@ struct YouziSimpleResultsPage: View {
     @AppStorage("youzi.results.cardSize") private var cardSize: YouziArtifactCardSize = .medium
     @State private var playback = YouziArtifactPlayback()
     @State private var artifactToDelete: YouziArtifact?
+    @State private var artifactToInspect: YouziArtifact?
 
     var body: some View {
         ZStack {
@@ -64,11 +65,16 @@ struct YouziSimpleResultsPage: View {
                         playback.stop()
                         artifactToDelete = artifact
                     }
+                }, onDetails: {
+                    artifactToInspect = artifacts.first { $0.id == preview.id }
                 })
                     .id(preview.id).zIndex(1)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(item: $artifactToInspect) { artifact in
+            YouziArtifactGenerationDetail(artifact: artifact)
+        }
         .sheet(item: $artifactToDelete) { artifact in
             YouziArtifactDeleteConfirmation(artifact: artifact)
         }
@@ -143,7 +149,14 @@ struct YouziSimpleResultsPage: View {
                     }
                     .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary).lineLimit(1)
                 }
+                Button { artifactToInspect = artifact } label: { Image(systemName: "info.circle") }
+                    .buttonStyle(.plain)
+                    .help(i18n.text(zh: "生成信息与重新生成", en: "Generation details and reroll"))
+                    .accessibilityLabel(i18n.text(zh: "生成信息", en: "Generation details") + " " + artifact.title)
+                    .accessibilityIdentifier("YouziSimple.Results.GenerationInfo")
                 Menu {
+                    Button(i18n.text(zh: "生成信息 / 重新生成…", en: "Generation details / Reroll…")) { artifactToInspect = artifact }
+                    Divider()
                     Button(i18n.text(zh: "预览", en: "Preview")) {
                         if [.image, .video, .audio].contains(artifact.kind) {
                             Task { await playback.open(artifact, lease: { try await mediaLease(artifact) }) }
@@ -166,7 +179,10 @@ struct YouziSimpleResultsPage: View {
                     .accessibilityIdentifier("YouziSimpleResultsPage.Menu.283e51db34")
             }
         }
-        .contextMenu { deleteButton(artifact) }
+        .contextMenu {
+            Button(i18n.text(zh: "生成信息 / 重新生成…", en: "Generation details / Reroll…")) { artifactToInspect = artifact }
+            deleteButton(artifact)
+        }
         .accessibilityIdentifier("YouziSimple.Result.Grid.\(artifact.id.uuidString)")
     }
 

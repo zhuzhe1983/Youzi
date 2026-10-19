@@ -60,6 +60,11 @@ final class YouziConversationBridge: @unchecked Sendable {
                         )
                     )
                 }
+                if let task = document.tasks.first(where: { $0.conversationID == conversation.id }) {
+                    for index in document.artifacts.indices where document.artifacts[index].taskID == task.id && document.artifacts[index].generation == nil {
+                        document.artifacts[index].generation = YouziArtifactGeneration.recover(artifact: document.artifacts[index], messages: conversation.allMessages)
+                    }
+                }
             }
         }
     }

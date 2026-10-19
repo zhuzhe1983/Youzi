@@ -279,6 +279,7 @@ final class YouziProductModel: ChatConversationLifecycleObserver {
         taskID: UUID,
         projectID: UUID? = nil,
         previewText: String? = nil,
+        generation: YouziArtifactGeneration? = nil,
         at date: Date = Date()
     ) -> YouziArtifact? {
         captureValue {
@@ -290,9 +291,14 @@ final class YouziProductModel: ChatConversationLifecycleObserver {
                 taskID: taskID,
                 projectID: projectID,
                 previewText: previewText,
+                generation: generation,
                 at: date
             )
         }
+    }
+
+    func embedGeneration(artifactID: UUID) throws {
+        document = try lifecycle.embedGeneration(artifactID: artifactID)
     }
 
     /// Closure-scoped so security-scoped access remains balanced for previews,

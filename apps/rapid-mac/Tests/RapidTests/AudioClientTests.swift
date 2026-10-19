@@ -224,7 +224,8 @@ struct AudioClientTests {
             bearer: "token"
         )
 
-        #expect(result == SynthesizedAudio(data: wav, contentType: "audio/wav"))
+        #expect(result.data == wav && result.contentType == "audio/wav")
+        #expect(result.submittedParameters?["voice"] != nil)
         let request = try #require(AudioStubProtocol.requests.first)
         #expect(request.url?.path == "/v1/audio/speech")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer token")
@@ -262,9 +263,10 @@ struct AudioClientTests {
         viewModel.voices = ["Vivian", "Serena"]
         viewModel.selectedVoice = "Vivian"
 
-        let result = await viewModel.previewVoice("Serena")
+        let result = try #require(await viewModel.previewVoice("Serena"))
 
-        #expect(result == SynthesizedAudio(data: wav, contentType: "audio/wav"))
+        #expect(result.data == wav && result.contentType == "audio/wav")
+        #expect(result.submittedParameters?["voice"] != nil)
         #expect(viewModel.selectedVoice == "Vivian")
         #expect(viewModel.previewingVoice == nil)
         let body = try JSONSerialization.jsonObject(

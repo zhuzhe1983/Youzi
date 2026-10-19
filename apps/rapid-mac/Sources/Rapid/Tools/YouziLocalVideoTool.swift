@@ -31,7 +31,10 @@ struct YouziLocalVideoTool {
         let size: String?
         let seconds: Int?
         let reference: YouziLocalModelTools.Asset?
+        var seed: Int? = nil
     }
+
+    struct Output: Sendable { let data: Data; let submitted: [String: CodableJSON] }
 
     var client: any YouziVideoToolClient
     var session: @MainActor () -> Session?
@@ -59,6 +62,10 @@ struct YouziLocalVideoTool {
     }
 
     func generate(_ input: Input, entry: ModelEntry) async throws -> Data {
+        try await generateResult(input, entry: entry).data
+    }
+
+    func generateResult(_ input: Input, entry: ModelEntry) async throws -> Output {
         guard let captured = session() else { throw Failure.model_not_ready }
         let caps = try await capabilities(entry, session: captured)
         let size = input.size ?? defaults.resolveVideoSize(available: caps.sizePresets)
@@ -75,7 +82,7 @@ struct YouziLocalVideoTool {
             mime = nil
         }
         let request = VideoCreateRequest(prompt: input.prompt, model: entry.alias, seconds: seconds, size: size,
-            seed: 42, reference: input.reference?.data, referenceFileName: "reference-image", referenceMIMEType: mime)
+            seed: input.seed ?? 42, reference: input.reference?.data, referenceFileName: "reference-image", referenceMIMEType: mime)
         var ownedID: String?
         var ownedJobIsPending = false
         let started = now()
@@ -112,7 +119,10 @@ struct YouziLocalVideoTool {
             guard Self.isMP4(data) else { throw Failure.generation_failed }
             // Keep the completed server job for the Video workspace. Artifact
             // persistence is owned by the caller's captured conversation/task.
-            return data
+            var submitted: [String: CodableJSON] = ["size": .string(size), "seconds": .number(Double(seconds))]
+            if !entry.isRemote { submitted["seed"] = .number(Double(request.seed)) }
+            if let reference = input.reference { submitted["reference_image_id"] = .string(reference.id.uuidString) }
+            return Output(data: data, submitted: submitted)
         } catch {
             if let id = ownedID, ownedJobIsPending, session() == captured {
                 // Parent may be canceled. This bounded transport task may cancel

@@ -802,6 +802,7 @@ struct YouziArtifact: Identifiable, Codable, Equatable, Sendable {
     var title: String
     var kind: YouziArtifactKind
     var previewText: String?
+    var generation: YouziArtifactGeneration?
     /// The one authoritative file backing this deliverable. Exported copies
     /// are intentionally not tracked as additional artifact ownership.
     var fileID: UUID
@@ -816,6 +817,7 @@ struct YouziArtifact: Identifiable, Codable, Equatable, Sendable {
         title: String,
         kind: YouziArtifactKind,
         previewText: String? = nil,
+        generation: YouziArtifactGeneration? = nil,
         fileID: UUID,
         state: YouziRecordState = .active,
         createdAt: Date = Date(),
@@ -827,6 +829,7 @@ struct YouziArtifact: Identifiable, Codable, Equatable, Sendable {
         self.title = title
         self.kind = kind
         self.previewText = previewText
+        self.generation = generation
         self.fileID = fileID
         self.state = state
         self.createdAt = createdAt
@@ -834,7 +837,7 @@ struct YouziArtifact: Identifiable, Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, taskID, projectID, title, kind, previewText, fileID
+        case id, taskID, projectID, title, kind, previewText, generation, fileID
         case state, createdAt, updatedAt
     }
 }

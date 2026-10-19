@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 enum YouziFileAttachmentTarget: Equatable, Sendable {
     case task(UUID)
@@ -308,10 +309,13 @@ final class YouziLifecycleRepository: @unchecked Sendable {
         taskID: UUID,
         projectID: UUID? = nil,
         previewText: String? = nil,
+        generation: YouziArtifactGeneration? = nil,
         at date: Date = Date()
     ) throws -> (YouziArtifact, YouziDomainDocument) {
         let file = try fileStore.write(
-            data,
+            // A provider may return a different valid container (e.g. JPEG).
+            // Preserve its output and durable record if embedding is unsupported.
+            generation.flatMap { try? YouziGenerationEmbedding.embed($0, in: data, kind: kind) } ?? data,
             named: name,
             contentTypeIdentifier: contentTypeIdentifier,
             role: .artifact,
@@ -325,6 +329,7 @@ final class YouziLifecycleRepository: @unchecked Sendable {
             title: name,
             kind: kind,
             previewText: previewText,
+            generation: generation,
             fileID: file.id,
             createdAt: date,
             updatedAt: date
@@ -349,6 +354,41 @@ final class YouziLifecycleRepository: @unchecked Sendable {
         } catch {
             try? fileStore.removeManagedCopy(for: file)
             throw error
+        }
+    }
+
+    /// Explicit historical backfill. Only app-owned files may be rewritten;
+    /// persistence failure restores the original bytes atomically.
+    func embedGeneration(artifactID: UUID) throws -> YouziDomainDocument {
+        let document = try store.load()
+        guard let artifact = document.artifacts.first(where: { $0.id == artifactID }),
+              artifact.state == .active, let generation = artifact.generation,
+              let file = document.files.first(where: { $0.id == artifact.fileID }),
+              case .appManaged = file.location else { throw YouziLifecycleError.artifactNotFound(artifactID) }
+        return try fileStore.withAccess(to: file, workspaces: [:]) { url, _ in
+            let attributes = try url.resourceValues(forKeys: [.fileSizeKey, .isSymbolicLinkKey])
+            guard attributes.isSymbolicLink != true, let count = attributes.fileSize, count <= 80 * 1024 * 1024 else {
+                throw YouziGenerationEmbedding.Failure.tooLarge
+            }
+            let original = try Data(contentsOf: url)
+            if try YouziGenerationEmbedding.read(original, kind: artifact.kind) == generation { return document }
+            let updated = try YouziGenerationEmbedding.embed(generation, in: original, kind: artifact.kind)
+            try updated.write(to: url, options: .atomic)
+            do {
+                return try store.update { latest in
+                    guard let index = latest.files.firstIndex(where: { $0.id == file.id }),
+                          latest.files[index] == file,
+                          latest.artifacts.first(where: { $0.id == artifactID }) == artifact else {
+                        throw YouziLifecycleError.artifactNotFound(artifactID)
+                    }
+                    latest.files[index].byteCount = Int64(updated.count)
+                    latest.files[index].sha256 = SHA256.hash(data: updated).map { String(format: "%02x", $0) }.joined()
+                    latest.files[index].updatedAt = Date()
+                }
+            } catch {
+                try original.write(to: url, options: .atomic)
+                throw error
+            }
         }
     }
 

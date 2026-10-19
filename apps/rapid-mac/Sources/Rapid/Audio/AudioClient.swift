@@ -10,6 +10,7 @@ struct AudioTranscriptionResult: Equatable, Sendable {
 struct SynthesizedAudio: Equatable, Sendable {
     let data: Data
     let contentType: String
+    var submittedParameters: [String: CodableJSON]? = nil
 
     var fileExtension: String {
         switch contentType.lowercased() {
@@ -64,6 +65,7 @@ struct AudioClient {
     var session: URLSession = AudioClient.sharedSession
     var generationDefaults = ModelGenerationDefaults()
     var remoteRepository = RemoteModelRepository()
+    var expectedRemoteConfiguration: RemoteModelConfiguration? = nil
     var remoteSession: URLSession = RemoteModelEndpoint.session
 
     private struct TranscriptionWire: Decodable {
@@ -284,6 +286,9 @@ struct AudioClient {
             resolvedVoice = preferred
         }
         let remote = try remoteRepository.endpoint(alias: model, slot: .speech)
+        if let expectedRemoteConfiguration, remote?.configuration != expectedRemoteConfiguration {
+            throw RemoteModelError.changedEndpointKey
+        }
         var request = URLRequest(url: remote?.url("audio/speech")
             ?? Self.loopbackURL(port: port).appendingPathComponent("v1/audio/speech"))
         request.httpMethod = "POST"
@@ -291,8 +296,9 @@ struct AudioClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("audio/wav", forHTTPHeaderField: "Accept")
         applyBearer(&request, remote == nil ? bearer : remote?.apiKey)
+        let resolvedSpeed = speed ?? generationDefaults.speed
         request.httpBody = try JSONEncoder().encode(
-            SpeechBody(model: remote?.modelID ?? model, input: text, voice: resolvedVoice, speed: speed ?? generationDefaults.speed)
+            SpeechBody(model: remote?.modelID ?? model, input: text, voice: resolvedVoice, speed: resolvedSpeed)
         )
         let (data, response) = try await send(request, remote: remote != nil)
         if remote != nil, let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw RemoteModelError.http(http.statusCode) }
@@ -300,7 +306,7 @@ struct AudioClient {
         guard !data.isEmpty else { throw AudioClientError.emptyAudio }
         let contentType = (response as? HTTPURLResponse)?
             .value(forHTTPHeaderField: "Content-Type") ?? "audio/wav"
-        return SynthesizedAudio(data: data, contentType: contentType)
+        return SynthesizedAudio(data: data, contentType: contentType, submittedParameters: ["voice": .string(resolvedVoice), "speed": .number(resolvedSpeed)])
     }
 
     private static func loopbackURL(port: Int) -> URL {

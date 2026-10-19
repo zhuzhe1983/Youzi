@@ -3,7 +3,7 @@ import Foundation
 extension YouziLocalModelTools {
     /// Preserve alias-keyed settings while addressing older runtimes by HF ID.
     static func synthesizeLocally(text: String, entry: ModelEntry, voice: String?, port: Int,
-                                  bearer: String?, client: AudioClient = AudioClient()) async throws -> SynthesizedAudio {
+                                  bearer: String?, client: AudioClient = AudioClient(), speed: Double? = nil) async throws -> SynthesizedAudio {
         let modelID = speechModelID(entry)
         let available = try await client.voices(model: modelID, port: port, bearer: bearer)
         let resolvedVoice: String?
@@ -17,12 +17,13 @@ extension YouziLocalModelTools {
         } else {
             resolvedVoice = client.generationDefaults.voice(for: entry.alias, available: available)
         }
-        return try await client.synthesize(text: text, model: modelID, voice: resolvedVoice, port: port, bearer: bearer)
+        return try await client.synthesize(text: text, model: modelID, voice: resolvedVoice, speed: speed, port: port, bearer: bearer)
     }
 
     /// Weak captures avoid app → chat → tools → app cycles. Every call captures
     /// its task before awaits; changing the selected chat cannot redirect output.
-    static func desktop(server: ServerManager, chat: ChatViewModel, product: YouziProductModel, downloads: DownloadManager) -> YouziLocalModelTools {
+    static func desktop(server: ServerManager, chat: ChatViewModel, product: YouziProductModel, downloads: DownloadManager,
+                        contextOverride: Context? = nil, speechSpeed: Double? = nil) -> YouziLocalModelTools {
         YouziLocalModelTools(dependencies: Dependencies(
             catalog: { [weak server, weak downloads] in
                 guard let server else { throw Failure.catalog_unavailable }
@@ -55,10 +56,13 @@ extension YouziLocalModelTools {
             },
             speech: { [weak server] text, entry, voice in
                 guard let server, entry.isRemote || server.servingAlias != nil else { throw Failure.model_not_ready }
+                var client = AudioClient()
+                if entry.isRemote { client.expectedRemoteConfiguration = server.remoteModelSettings.document.model(alias: entry.alias) }
                 return try await synthesizeLocally(text: text, entry: entry, voice: voice,
-                    port: server.activePort, bearer: server.activeBearer)
+                    port: server.activePort, bearer: server.activeBearer, client: client, speed: speechSpeed)
             },
             context: { [weak chat, weak product] in
+                if let contextOverride { return contextOverride }
                 guard let chat, let product,
                       let task = product.tasks.first(where: { $0.conversationID == chat.activeConversationID }) else { return nil }
                 return Context(taskID: task.id, projectID: task.projectID, turnID: chat.messages.last(where: { $0.role == .user })?.id)
@@ -66,7 +70,7 @@ extension YouziLocalModelTools {
             save: { [weak product] data, name, contentType, kind, context in
                 guard let product, product.task(id: context.taskID) != nil,
                       let artifact = product.createArtifact(data: data, named: name, contentTypeIdentifier: contentType,
-                        kind: kind, taskID: context.taskID, projectID: context.projectID) else { throw Failure.file_unavailable }
+                        kind: kind, taskID: context.taskID, projectID: context.projectID, generation: context.generation) else { throw Failure.file_unavailable }
                 return Saved(artifactID: artifact.id, fileID: artifact.fileID, name: artifact.title)
             },
             read: { [weak product] id, context in
@@ -90,6 +94,20 @@ extension YouziLocalModelTools {
                 guard let server else { throw Failure.model_not_ready }
                 let runner = try videoRunner(entry, server: server)
                 return try await runner.describe(entry)
+            },
+            source: { [weak server] entry in
+                guard let server else { throw Failure.model_not_ready }
+                if entry.isRemote {
+                    guard let config = server.remoteModelSettings.document.model(alias: entry.alias),
+                          let address = YouziGenerationSource.safeServer(config.baseURL) else { throw Failure.source_changed }
+                    return .init(location: .remote, modelAlias: entry.alias, modelName: config.displayName,
+                                 modelID: config.modelID, server: address)
+                }
+                return .local(entry, port: server.activePort)
+            },
+            videoResult: { [weak server] input, entry in
+                guard let server else { throw Failure.model_not_ready }
+                return try await videoRunner(entry, server: server).generateResult(input, entry: entry)
             },
             voices: { [weak server] entry in
                 guard let server else { throw Failure.model_not_ready }
