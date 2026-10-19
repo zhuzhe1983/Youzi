@@ -227,7 +227,9 @@ struct SettingsVisualFoundationTests {
         // Controls moved to focused tabs, but retain their persisted keys.
         let panel = try strippedSource("Sources/Rapid/UI/SettingsModelsPanel.swift")
         #expect(panel.contains("@AppStorage(ModelPickerVisibility.showAllStorageKey)"))
-        #expect(panel.contains("@AppStorage(AutoStartPreference.storageKey)"))
+        // Startup now follows each model's Automatic/Manual policy. The
+        // removed global switch must not reappear alongside those controls.
+        #expect(!panel.contains("@AppStorage(AutoStartPreference.storageKey)"))
     }
 
     // MARK: - Shared components are actually used

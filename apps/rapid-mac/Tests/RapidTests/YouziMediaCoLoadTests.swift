@@ -64,7 +64,10 @@ struct YouziMediaCoLoadTests {
         let suite = "YouziMediaCoLoadTests." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set(true, forKey: YouziResidentServicePreference.enabledKey)
+        // Per-model automatic selection enables pinning; the old pool toggle
+        // is no longer an input to loading behavior.
+        defaults.set(false, forKey: YouziResidentServicePreference.enabledKey)
+        defaults.set("media", forKey: YouziResidentServicePreference.Slot.image.key)
         let server = makeServer(kind: .image, defaults: defaults)
         defer { server._testClearChild() }
         #expect(await server.ensureServing(
