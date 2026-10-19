@@ -154,34 +154,26 @@ protocol RemoteModelSecrets: Sendable {
 }
 struct RemoteModelKeychain: RemoteModelSecrets {
     private let service = "com.youzi.remote-models.api-key.v1"
-    private func query(_ id: UUID) -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: id.uuidString, kSecAttrSynchronizable as String: false]
-    }
+    var items: any KeychainItemAccessing = SecurityKeychainItems()
+
+    // Availability discovery runs during launch. Reuse the application's
+    // non-interactive adapter: a locked/inaccessible credential is an error,
+    // never a SecurityAgent prompt that can block the main thread indefinitely.
     func read(_ id: UUID) throws -> String? {
-        var request = query(id)
-        request[kSecReturnData as String] = true
-        request[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(request as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else { throw RemoteModelError.keychain(status) }
-        return String(data: data, encoding: .utf8)
+        switch items.query(account: id.uuidString, service: service) {
+        case .found(let value): return value
+        case .missing: return nil
+        case .unavailable: throw RemoteModelError.keychain(errSecInteractionNotAllowed)
+        }
     }
     func write(_ value: String?, for id: UUID) throws {
-        let request = query(id)
-        guard let value, !value.isEmpty else {
-            let status = SecItemDelete(request as CFDictionary)
-            guard status == errSecSuccess || status == errSecItemNotFound else { throw RemoteModelError.keychain(status) }
-            return
+        let success: Bool
+        if let value, !value.isEmpty {
+            success = items.upsert(account: id.uuidString, service: service, secret: value)
+        } else {
+            success = items.remove(account: id.uuidString, service: service)
         }
-        let fields = [kSecValueData as String: Data(value.utf8)]
-        var status = SecItemUpdate(request as CFDictionary, fields as CFDictionary)
-        if status == errSecItemNotFound {
-            var item = request.merging(fields) { _, new in new }
-            item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            status = SecItemAdd(item as CFDictionary, nil)
-        }
-        guard status == errSecSuccess else { throw RemoteModelError.keychain(status) }
+        guard success else { throw RemoteModelError.keychain(errSecInteractionNotAllowed) }
     }
 }
 /// Immutable references only; UserDefaults and Keychain serialize their storage.
