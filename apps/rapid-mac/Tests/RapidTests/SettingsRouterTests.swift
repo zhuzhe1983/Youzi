@@ -13,6 +13,19 @@ import Testing
 @MainActor
 @Suite("SettingsRouter — v0.4.37 deep-link contract")
 struct SettingsRouterTests {
+    @Test("Adding a local model opens its file category before presenting Settings", arguments: [ModelKind.chat, .audio, .image, .video])
+    func localModelFiles(kind: ModelKind) {
+        let router = SettingsRouter()
+        var opened = false
+        router.route(toModelFiles: kind) {
+            #expect(router.requestedCategory == .modelManagement)
+            #expect(router.requestedModelTab == .files)
+            #expect(router.requestedModelFileKind == kind)
+            opened = true
+        }
+        #expect(opened)
+    }
+
     @Test("Fresh router has no pending request — Settings opens on the user's last tab")
     func freshRouterIsNil() {
         let r = SettingsRouter()

@@ -16,7 +16,7 @@ struct SettingsResidentServicePanel: View {
     }
 
     var body: some View {
-        SettingsSection(i18n.text(zh: "可用模型", en: "Available models")) {
+        SettingsSection {
             VStack(alignment: .leading, spacing: 12) {
                 if slots.count > 1 {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -35,14 +35,9 @@ struct SettingsResidentServicePanel: View {
                         }
                     }
                 }
-                ResidentServiceSlotList(slot: slot, entries: entries, settings: server.remoteModelSettings).id(slot)
-                HStack {
-                    if server.isRestoringResidentServices || loadingCatalog { ProgressView().controlSize(.small) }
-                    Spacer()
-                    Button(i18n.text(zh: "刷新列表", en: "Refresh")) { Task { await refreshCatalog() } }
-                        .disabled(loadingCatalog)
-                        .accessibilityIdentifier("Settings.Models.Selection.Refresh")
-                }
+                ResidentServiceSlotList(slot: slot, entries: entries, settings: server.remoteModelSettings,
+                    refreshing: loadingCatalog, restoring: server.isRestoringResidentServices,
+                    refresh: { Task { await refreshCatalog() } }).id(slot)
             }.padding(16)
         }
         .task(id: server.binaryPath) { await refreshCatalog() }
@@ -62,8 +57,13 @@ struct ResidentServiceSlotList: View {
     let slot: YouziResidentServicePreference.Slot
     let entries: [ModelEntry]
     @State var settings: RemoteModelSettings = .shared
+    var refreshing = false
+    var restoring = false
+    var refresh: () -> Void = {}
     @Environment(ServerManager.self) private var server
     @Environment(YouziI18nConfig.self) private var i18n
+    @Environment(SettingsRouter.self) private var router: SettingsRouter?
+    @Environment(\.openWindow) private var openWindow
     @State private var preferred: String?
     @State private var query = ""
     @State private var loadingAlias: String?
@@ -88,9 +88,27 @@ struct ResidentServiceSlotList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextField(i18n.text(zh: "搜索本地或远程模型", en: "Search local or remote models"), text: $query)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityIdentifier("Settings.Models.Selection.Search.\(slot.rawValue)")
+            HStack(spacing: 10) {
+                TextField(i18n.text(zh: "搜索本地或远程模型", en: "Search local or remote models"), text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("Settings.Models.Selection.Search.\(slot.rawValue)")
+                if refreshing || restoring { ProgressView().controlSize(.small) }
+                Button(action: refresh) { Image(systemName: "arrow.clockwise") }
+                    .disabled(refreshing)
+                    .help(i18n.text(zh: "刷新列表", en: "Refresh models"))
+                    .accessibilityLabel(i18n.text(zh: "刷新列表", en: "Refresh models"))
+                    .accessibilityIdentifier("Settings.Models.Selection.Refresh")
+                Menu {
+                    Button(i18n.text(zh: "添加本地模型…", en: "Add local model…")) {
+                        router?.route(toModelFiles: slot.kind) { openWindow(id: "settings") }
+                    }.accessibilityIdentifier("Settings.Models.AddLocal.\(slot.kind.rawValue)")
+                    Button(i18n.text(zh: "添加远程模型…", en: "Add remote model…")) {
+                        var model = RemoteModelConfiguration(); model.slot = remoteSlot; editing = model
+                    }.accessibilityIdentifier("Settings.Remote.Add.\(slot.kind.rawValue)")
+                } label: { Label(i18n.text(zh: "添加模型", en: "Add model"), systemImage: "plus") }
+                    .fixedSize()
+                    .accessibilityIdentifier("Settings.Models.Add.\(slot.kind.rawValue)")
+            }
             if choices.isEmpty {
                 Text(i18n.text(zh: "没有匹配的模型。可在“模型文件”中下载，或添加远程模型。", en: "No matching models. Download one in Model Files or add a remote model."))
                     .font(RapidFont.caption).foregroundStyle(.secondary)
@@ -112,14 +130,6 @@ struct ResidentServiceSlotList: View {
                     }
                 }
             }
-            Button {
-                var model = RemoteModelConfiguration(); model.slot = remoteSlot; editing = model
-            } label: { Label(i18n.text(zh: "添加远程模型", en: "Add remote model"), systemImage: "plus") }
-                .accessibilityIdentifier("Settings.Remote.Add.\(slot.kind.rawValue)")
-            Text(i18n.text(
-                zh: "每个场景只选一个优先模型，供柚子默认使用。本地优先模型会自动加载，其他本地模型可手动加载。切换优先模型不会卸载已经加载的模型，也不会改变进行中的任务。",
-                en: "Choose one preferred model per workflow for Youzi to use by default. A preferred local model loads automatically; other local models can be loaded manually. Changing the preference does not unload models or change ongoing tasks."
-            )).font(RapidFont.caption).foregroundStyle(.secondary)
             if let failure = error ?? settings.loadError { Text(failure).font(RapidFont.caption).foregroundStyle(.red) }
         }
         .onAppear { sync() }

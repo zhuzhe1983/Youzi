@@ -32,9 +32,11 @@ struct RemoteModelEditor: View {
                         ForEach(RemoteModelSlot.allCases) { Text($0.title(chinese: i18n.isChinese)).tag($0) }
                     }
                     if !existing && !settings.document.models.isEmpty {
-                        Picker(i18n.text(zh: "复用已有服务", en: "Reuse saved service"), selection: $sourceID) {
+                        Picker(i18n.text(zh: "复用服务器配置", en: "Reuse server configuration"), selection: $sourceID) {
                             Text(i18n.text(zh: "手动填写", en: "Enter manually")).tag(nil as UUID?)
-                            ForEach(settings.document.models) { Text($0.displayName).tag(Optional($0.id)) }
+                            ForEach(settings.document.models) { source in
+                                Text(source.baseURL + " · " + source.displayName).tag(Optional(source.id))
+                            }
                         }.onChange(of: sourceID) { _, value in
                             invalidateDiscovery()
                             key = ""; replaceKey = false
@@ -44,6 +46,8 @@ struct RemoteModelEditor: View {
                             }
                         }
                         .accessibilityIdentifier("Settings.Remote.ReuseService")
+                        Text(i18n.text(zh: "只沿用服务器地址、API Key 和连接选项；模型名称与参数单独设置。", en: "Copies the server URL, API key and connection options only. Choose the model and its parameters separately."))
+                            .font(RapidFont.caption).foregroundStyle(.secondary)
                     }
                     TextField("Base URL", text: $model.baseURL, prompt: Text("https://api.example.com/v1"))
                         .accessibilityIdentifier("Settings.Remote.BaseURL")
@@ -58,7 +62,7 @@ struct RemoteModelEditor: View {
                     if (!existing && sourceID == nil) || replaceKey {
                         SecureField(i18n.text(zh: "API Key（可选）", en: "API key (optional)"), text: $key)
                             .accessibilityIdentifier("Settings.Remote.APIKey")
-                    } else { Text(i18n.text(zh: "使用该服务的钥匙串密钥", en: "Using the saved service credential")).foregroundStyle(.secondary) }
+                    } else { Text(i18n.text(zh: "使用该服务器已保存的 API Key", en: "Using the saved server API key")).foregroundStyle(.secondary) }
                     HStack {
                         Button(i18n.text(zh: "读取模型列表 / 测试连接", en: "Discover models / Test connection")) { discover() }.disabled(checking || model.baseURL.isEmpty)
                         if checking { ProgressView().controlSize(.small) }

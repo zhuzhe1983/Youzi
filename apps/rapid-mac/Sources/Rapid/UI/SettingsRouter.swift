@@ -48,6 +48,7 @@ final class SettingsRouter {
     /// land on the user's last selected tab."
     var requestedCategory: SettingsView.Category?
     var requestedModelTab: ModelSettingsTab?
+    var requestedModelFileKind: ModelKind?
 
     /// One-shot handoff used by Quickstart's Browse all round trip. The
     /// onboarding sheet must be lowered before opening a separate Settings
@@ -132,5 +133,10 @@ final class SettingsRouter {
         requestedModelTab = tab
         requestedCategory = tab.category
         open()
+    }
+
+    func route(toModelFiles kind: ModelKind, open: () -> Void) {
+        requestedModelFileKind = kind
+        route(to: .modelManagement, open: open)
     }
 }

@@ -1,13 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// Model Files: folders and storage above a native, sortable table shared by
+/// Model Files: a native, sortable table above folders and storage, shared by
 /// chat/audio/image/video. The table owns presentation filters; downloads,
 /// co-loading and confirmed file deletion retain their existing service paths.
 struct SettingsModelManagementPanel: View {
     @Environment(ServerManager.self) private var server
     @Environment(DownloadManager.self) private var downloads
     @Environment(YouziI18nConfig.self) private var i18n
+    @Environment(SettingsRouter.self) private var router: SettingsRouter?
 
     // Seeded from the process-wide cache rather than starting empty: an
     // empty start re-rendered the spinner on every visit regardless of
@@ -124,6 +125,8 @@ struct SettingsModelManagementPanel: View {
         // Loading, empty, and catalog branches are deliberately exclusive.
         // Animating this container retains both conditional trees during the
         // transition, which can overlay the spinner on stale model rows.
+        .onAppear { consumeRequestedKind() }
+        .onChange(of: router?.requestedModelFileKind) { _, _ in consumeRequestedKind() }
         .task {
             refreshLinkedModels()
             await refreshCatalog()
@@ -190,6 +193,12 @@ struct SettingsModelManagementPanel: View {
                 scores: capability == .chat ? BenchScoresCatalog.lookup(alias: entry.alias) : nil
             )
         }
+    }
+
+    private func consumeRequestedKind() {
+        guard let kind = router?.requestedModelFileKind else { return }
+        capability = kind
+        router?.requestedModelFileKind = nil
     }
 
     private var modelFilesTable: some View {

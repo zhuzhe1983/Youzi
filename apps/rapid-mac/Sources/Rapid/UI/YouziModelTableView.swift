@@ -238,11 +238,13 @@ struct YouziModelTableView: View {
                     .disabled(!row.canLoad)
                     .accessibilityIdentifier("Settings.ModelManagement.Load.\(row.id)")
             }
-            Button(role: .destructive) { delete(row.entry) } label: { Image(systemName: "trash") }
-                .disabled(!row.canDelete)
-                .help(text(row.entry.isExternal ? "外部模型文件不由柚子删除" : (row.loaded || row.loading ? "请先停止该模型，再删除文件" : "删除模型文件（需确认）"), row.entry.isExternal ? "External files cannot be deleted by Youzi" : (row.loaded || row.loading ? "Stop the model before deleting files" : "Delete model files (confirmation required)")))
-                .accessibilityLabel(text("删除 \(row.id)", "Delete \(row.id)"))
-                .accessibilityIdentifier("Settings.ModelManagement.Delete.\(row.id)")
+            if row.entry.cached && !row.entry.isExternal {
+                Button(role: .destructive) { delete(row.entry) } label: { Image(systemName: "trash") }
+                    .disabled(!row.canDelete)
+                    .help(text(row.loaded || row.loading ? "请先停止该模型，再删除文件" : "删除模型文件（需确认）", row.loaded || row.loading ? "Stop the model before deleting files" : "Delete model files (confirmation required)"))
+                    .accessibilityLabel(text("删除 \(row.id)", "Delete \(row.id)"))
+                    .accessibilityIdentifier("Settings.ModelManagement.Delete.\(row.id)")
+            }
         }.buttonStyle(.bordered).controlSize(.small).lineLimit(1)
     }
 
