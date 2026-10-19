@@ -130,7 +130,7 @@ final class SettingsRouter {
     }
     func route(toModelTab tab: ModelSettingsTab, open: () -> Void) {
         requestedModelTab = tab
-        requestedCategory = .modelManagement
+        requestedCategory = tab.category
         open()
     }
 }

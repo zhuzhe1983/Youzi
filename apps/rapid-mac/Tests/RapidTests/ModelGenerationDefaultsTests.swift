@@ -127,13 +127,18 @@ struct ModelGenerationDefaultsTests {
     @Test("Legacy deep links select Files, Chat or Video; explicit tabs are staged before opening")
     func routing() {
         let router = SettingsRouter()
-        #expect(ModelSettingsTab.allCases == [.service, .files, .chat, .audio, .image, .video])
+        #expect(ModelSettingsTab.loadingTabs == [.chat, .audio, .image, .video])
+        #expect(ModelSettingsTab.service.loadingTab == .chat)
+        #expect(ModelSettingsTab.files.loadingTab == .chat)
+        for tab in ModelSettingsTab.allCases {
+            router.route(toModelTab: tab) { #expect(router.requestedCategory == tab.category) }
+        }
         router.route(to: .performance) { #expect(router.requestedModelTab == .chat) }
         router.route(.openModelManagement) { #expect(router.requestedModelTab == .files) }
         router.route(to: .experimentalFeatures) { #expect(router.requestedModelTab == .video) }
         router.route(toModelTab: .audio) {
             #expect(router.requestedModelTab == .audio)
-            #expect(router.requestedCategory == .modelManagement)
+            #expect(router.requestedCategory == .modelLoading)
         }
         router.route(to: .appearance) { #expect(router.requestedModelTab == nil) }
     }

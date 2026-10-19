@@ -4,7 +4,7 @@ import Foundation
 /// are changed by filtering/sorting. Missing measurements always sort last.
 enum YouziModelTableData {
     enum Column: String, CaseIterable, Sendable {
-        case model, downloaded, actions, size, accuracy, quality, speed, parameters, quantization, value
+        case model, size, downloaded, actions, accuracy, quality, speed, parameters, quantization, value
 
         func title(chinese: Bool) -> String {
             switch self {

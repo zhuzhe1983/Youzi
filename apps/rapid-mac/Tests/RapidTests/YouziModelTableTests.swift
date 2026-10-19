@@ -138,7 +138,7 @@ struct YouziModelTableTests {
         #expect(table.numberOfRows == 2)
         table.sortDescriptors = [NSSortDescriptor(key: "size", ascending: false)]
         #expect(observed == [.init(column: .size, ascending: false)])
-        #expect(Data.Column.allCases.prefix(3) == [.model, .downloaded, .actions])
+        #expect(Data.Column.allCases.prefix(4) == [.model, .size, .downloaded, .actions])
         #expect(YouziNativeModelTable.width(.actions, scale: 1.32) >= 200)
     }
 

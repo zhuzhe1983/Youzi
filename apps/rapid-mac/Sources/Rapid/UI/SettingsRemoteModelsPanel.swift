@@ -1,24 +1,24 @@
 import SwiftUI
 
-/// Deliberately secondary: stays below the local model controls, no new top-level tab.
+/// Remote alternatives live alongside local models in each loading workflow.
 struct SettingsRemoteModelsPanel: View {
     var kind: ModelKind? = nil
     @Environment(YouziI18nConfig.self) private var i18n
     @State private var settings: RemoteModelSettings
-    @State private var expanded: Bool
+    var slot: RemoteModelSlot?
     @State private var editing: RemoteModelConfiguration?
     @State private var removing: RemoteModelConfiguration?
     @State private var error: String?
-    init(kind: ModelKind? = nil, settings: RemoteModelSettings = .shared, expanded: Bool = false) {
+    init(kind: ModelKind? = nil, slot: RemoteModelSlot? = nil, settings: RemoteModelSettings = .shared) {
         self.kind = kind
         _settings = State(initialValue: settings)
-        _expanded = State(initialValue: expanded)
+        self.slot = slot
     }
-    private var models: [RemoteModelConfiguration] { settings.document.models.filter { kind == nil || $0.slot.kind == kind } }
+    private var models: [RemoteModelConfiguration] { settings.document.models.filter { (kind == nil || $0.slot.kind == kind) && (slot == nil || $0.slot == slot) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(i18n.text(zh: "模型来源", en: "Model source")).font(RapidFont.bodyEmphasis)
+                Text(i18n.text(zh: "远程替代", en: "Remote alternatives")).font(RapidFont.bodyEmphasis)
                 Spacer()
                 Picker(i18n.text(zh: "自动选择优先级", en: "Automatic selection priority"), selection: Binding<String>(
                     get: { kind.map { settings.document.overrides[$0.rawValue]?.rawValue ?? "inherit" } ?? settings.document.globalPriority.rawValue },
@@ -35,19 +35,20 @@ struct SettingsRemoteModelsPanel: View {
             }
             Text(i18n.text(zh: "优先级即时保存，已有选择不变；可在模型菜单中按当前优先级重新选择。请求失败不会跨服务重试。", en: "Priority saves immediately. Existing choices stay unchanged; use the model menu to reselect by current priority. Failed requests never retry on another service."))
                 .font(RapidFont.caption).foregroundStyle(.secondary)
-            DisclosureGroup(isExpanded: $expanded) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(i18n.text(zh: "远程服务仅作补充，不占用本地模型内存。使用时会向服务商发送提示词及所需附件，可能产生费用。", en: "Remote services supplement local models without model RAM use. Requests send prompts and required attachments to the provider and may incur charges."))
-                        .font(RapidFont.caption).foregroundStyle(.secondary)
-                    if models.isEmpty { Text(i18n.text(zh: "尚未添加远程模型", en: "No remote models configured")).foregroundStyle(.secondary) }
-                    ForEach(models) { model in
+            VStack(alignment: .leading, spacing: 12) {
+                Text(i18n.text(zh: "远程服务仅作补充，不占用本地模型内存。使用时会向服务商发送提示词及所需附件，可能产生费用。", en: "Remote services supplement local models without model RAM use. Requests send prompts and required attachments to the provider and may incur charges."))
+                    .font(RapidFont.caption).foregroundStyle(.secondary)
+                if models.isEmpty { Text(i18n.text(zh: "尚未添加远程模型", en: "No remote models configured")).foregroundStyle(.secondary) }
+                ForEach(models) { model in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(model.displayName, systemImage: "network")
+                            .font(RapidFont.bodyEmphasis).lineLimit(2).textSelection(.enabled)
+                        HStack {
+                            Text("\(model.slot.title(chinese: i18n.isChinese)) · \(model.modelID) · \(URL(string: model.baseURL)?.host ?? "")")
+                                .font(RapidFont.caption).foregroundStyle(.secondary).lineLimit(2)
+                            Spacer(minLength: 0)
+                        }
                         HStack(spacing: 10) {
-                            Image(systemName: "network").foregroundStyle(.secondary)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(model.displayName).font(RapidFont.bodyEmphasis)
-                                Text("\(model.slot.title(chinese: i18n.isChinese)) · \(model.modelID) · \(URL(string: model.baseURL)?.host ?? "")")
-                                    .font(RapidFont.caption).foregroundStyle(.secondary).lineLimit(1)
-                            }
                             Spacer()
                             if settings.document.remote(for: model.slot)?.id == model.id {
                                 Text(i18n.text(zh: "远程首选", en: "Preferred remote")).font(RapidFont.caption).foregroundStyle(.secondary)
@@ -60,18 +61,14 @@ struct SettingsRemoteModelsPanel: View {
                             })).labelsHidden().toggleStyle(.switch).controlSize(.small)
                             Button { editing = model } label: { Image(systemName: "pencil") }.help(i18n.text(zh: "编辑", en: "Edit"))
                             Button { removing = model } label: { Image(systemName: "trash") }.help(i18n.text(zh: "移除配置", en: "Remove configuration"))
-                        }.padding(10).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
-                    }
-                    Button { var model = RemoteModelConfiguration(); model.slot = RemoteModelSlot.allCases.first { kind == nil || $0.kind == kind } ?? .chat; editing = model } label: {
-                        Label(i18n.text(zh: "添加远程模型", en: "Add remote model"), systemImage: "plus")
-                    }.accessibilityIdentifier("Settings.Remote.Add.\(kind?.rawValue ?? "global")")
-                    if let failure = error ?? settings.loadError { Text(failure).font(RapidFont.caption).foregroundStyle(.red) }
-                }.padding(.top, 12)
-            } label: {
-                Label(i18n.text(zh: "远程模型（可选） · \(models.count)", en: "Remote models (optional) · \(models.count)"), systemImage: "network")
-                    .foregroundStyle(.secondary)
-            }
-            .accessibilityIdentifier("Settings.Remote.Disclosure.\(kind?.rawValue ?? "global")")
+                        }
+                    }.padding(10).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                }
+                Button { var model = RemoteModelConfiguration(); model.slot = slot ?? RemoteModelSlot.allCases.first { kind == nil || $0.kind == kind } ?? .chat; editing = model } label: {
+                    Label(i18n.text(zh: "添加远程替代", en: "Add remote alternative"), systemImage: "plus")
+                }.accessibilityIdentifier("Settings.Remote.Add.\(kind?.rawValue ?? "global")")
+                if let failure = error ?? settings.loadError { Text(failure).font(RapidFont.caption).foregroundStyle(.red) }
+            }.padding(.top, 4)
         }
         .padding(16).background(.quaternary.opacity(0.2), in: RoundedRectangle(cornerRadius: 10))
         .sheet(item: $editing) { model in RemoteModelEditor(model: model, settings: settings) }
@@ -79,7 +76,7 @@ struct SettingsRemoteModelsPanel: View {
             Button(i18n.text(zh: "移除", en: "Remove"), role: .destructive) { if let model = removing { perform { try settings.remove(model.id) } }; removing = nil }
         }
     }
-    private func perform(_ action: () throws -> Void) { do { try action(); error = nil } catch { self.error = error.localizedDescription; expanded = true } }
+    private func perform(_ action: () throws -> Void) { do { try action(); error = nil } catch { self.error = error.localizedDescription } }
 }
 
 struct RemoteModelEditor: View {
@@ -109,7 +106,6 @@ struct RemoteModelEditor: View {
             Text(i18n.text(zh: "远程模型 · OpenAI 兼容", en: "Remote model · OpenAI compatible")).font(RapidFont.pageTitle)
             ScrollView {
                 Form {
-                    TextField(i18n.text(zh: "显示名称", en: "Display name"), text: $model.name)
                     Picker(i18n.text(zh: "场景", en: "Workflow"), selection: $model.slot) {
                         ForEach(RemoteModelSlot.allCases) { Text($0.title(chinese: i18n.isChinese)).tag($0) }
                     }
@@ -145,14 +141,14 @@ struct RemoteModelEditor: View {
                         Button(i18n.text(zh: "读取模型列表 / 测试连接", en: "Discover models / Test connection")) { discover() }.disabled(checking || model.baseURL.isEmpty)
                         if checking { ProgressView().controlSize(.small) }
                     }
-                    TextField(i18n.text(zh: "模型 ID", en: "Model ID"), text: $model.modelID)
+                    TextField(i18n.text(zh: "远程模型名称 / ID", en: "Remote model name / ID"), text: modelIDBinding)
                         .accessibilityIdentifier("Settings.Remote.ModelID")
                     if !discovered.isEmpty {
                         TextField(i18n.text(zh: "搜索模型", en: "Search models"), text: $search)
                         Toggle(i18n.text(zh: "显示全部场景及未识别模型", en: "Show all workflows and unknown models"), isOn: $showAll)
                         Text(i18n.text(zh: "\(discovered.count) 个模型 · 当前场景 \(discovered.filter { $0.slots.contains(model.slot) }.count) 个候选 · 显示 \(filteredModels.count) 个", en: "\(discovered.count) models · \(discovered.filter { $0.slots.contains(model.slot) }.count) workflow candidates · \(filteredModels.count) shown"))
                             .font(RapidFont.caption).foregroundStyle(.secondary)
-                        Picker(i18n.text(zh: "从列表选择", en: "Choose discovered model"), selection: $model.modelID) {
+                        Picker(i18n.text(zh: "从列表选择", en: "Choose discovered model"), selection: modelIDBinding) {
                             if !filteredModels.contains(where: { $0.id == model.modelID }) { Text(model.modelID.isEmpty ? "—" : model.modelID).tag(model.modelID) }
                             ForEach(filteredModels) { Text("\($0.id) · \($0.label(chinese: i18n.isChinese))").tag($0.id) }
                         }
@@ -166,6 +162,10 @@ struct RemoteModelEditor: View {
                                 .font(RapidFont.caption).foregroundStyle(.orange)
                         }
                     }
+                    TextField(i18n.text(zh: "本地显示名称", en: "Local display name"), text: $model.name, prompt: Text(model.modelID))
+                        .accessibilityIdentifier("Settings.Remote.DisplayName")
+                    Text(i18n.text(zh: "默认沿用远程模型名称，可修改；保存后显示在对应场景的模型列表中。", en: "Defaults to the remote model name. Rename it here for the workflow model list."))
+                        .font(RapidFont.caption).foregroundStyle(.secondary)
                     if model.slot == .image || model.slot == .video {
                         Text(model.slot == .image
                              ? i18n.text(zh: "需要兼容 /images/generations；图片理解能力不等于图片生成。", en: "Requires /images/generations compatibility; image input alone is not image generation.")
@@ -217,6 +217,9 @@ struct RemoteModelEditor: View {
         .onChange(of: replaceKey) { _, _ in invalidateDiscovery() }
         .onChange(of: model.allowInsecureHTTP) { _, _ in invalidateDiscovery() }
         .onDisappear { checkTask?.cancel() }
+    }
+    private var modelIDBinding: Binding<String> {
+        Binding(get: { model.modelID }, set: { model.selectModelID($0) })
     }
     private func invalidateDiscovery() {
         checkTask?.cancel(); discoveryRevision = UUID(); checking = false

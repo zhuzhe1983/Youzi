@@ -1,6 +1,6 @@
 # Youzi model loading policy and scenario selection
 
-Updated: 2026-09-07. Supersedes the separate **Default / Auto-load** design.
+Updated: 2026-10-19. Supersedes the separate **Default / Auto-load** design.
 Owner: integration; native settings and sidecar routing must ship together.
 
 ## Product contract
@@ -24,8 +24,27 @@ real empty selection, not permission to resurrect a legacy default.
 
 ## Settings and launch
 
-Service presents all scenes; Chat / Audio / Image / Video reuse the same list
-filtered to their scene. Audio has separate transcription and speech lanes.
+Settings → Models now has three children: **Model files**, **Model loading**,
+and **Model service**, in that order. Model files shows measured or explicitly
+estimated file size immediately beside the model name. Model loading owns the
+Chat / Audio / Image / Video tabs, local loading policies, startup preferences,
+and visible remote alternatives. Audio has separate transcription and speech lanes.
+Legacy file/performance/video/service deep links keep reaching their corresponding
+new page; old persisted service/files tab values normalize to Chat in Model loading.
+
+Remote configurations default their editable local display name to the provider
+model ID. A custom name survives provider-ID changes; requests still use the
+provider ID and the configuration retains its stable UUID. Enabled configurations
+appear in the matching workspace picker. Remote priority is selection priority,
+not retry/failover: a failed generation is never sent to another service.
+
+Model service contains only the loopback address, port, authentication and a
+read-only snapshot of the actual `/v1/models` response (refreshed every five seconds
+while visible). It has no model selectors, startup pool or remote configuration.
+Only loaded local models are exposed. Loading, registered, evicting and remote
+models do not become advertised just because they have saved settings. Errors
+clear the displayed snapshot rather than claiming stale models are still available.
+The API remains loaded-only; this UI change does not alter Python routing.
 Each downloaded row exposes **Automatic / On demand**. Automatic members show
 priority; promoting one reorders the same list rather than creating a default.
 The quick picker shows a bolt for membership and a check for actual readiness.

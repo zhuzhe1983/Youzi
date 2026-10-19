@@ -55,6 +55,50 @@ private final class RemoteFixtureProtocol: URLProtocol, @unchecked Sendable {
 @Suite("RemoteModel contracts", .serialized)
 @MainActor
 struct RemoteModelTests {
+    @Test func localNameFollowsModelUntilCustomizedAndPersists() throws {
+        let (settings, defaults, suite, _) = fixture()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var draft = RemoteModelConfiguration(baseURL: "https://provider.example/v1")
+        draft.selectModelID("provider-chat")
+        #expect(draft.name == "provider-chat")
+        draft.selectModelID("provider-chat-plus")
+        #expect(draft.name == "provider-chat-plus")
+        draft.name = "工作助手"
+        draft.selectModelID("provider-chat-latest")
+        #expect(draft.name == "工作助手")
+        try settings.save(draft, key: "")
+        let saved = try #require(settings.repository.load().model(alias: draft.alias))
+        #expect(saved.displayName == "工作助手")
+        #expect(saved.modelID == "provider-chat-latest")
+        #expect(settings.entries(kind: .chat).map(\.alias) == [draft.alias])
+        #expect(settings.entries(kind: .image).isEmpty)
+        draft.name = "  "
+        try settings.save(draft, key: nil)
+        #expect(try settings.repository.load().model(alias: draft.alias)?.name == draft.modelID)
+    }
+
+    @Test func publicServiceCatalogueOnlyReadsLocalServer() async throws {
+        let client = ModelServiceCatalogClient(session: session())
+        RemoteFixtureProtocol.reset(#"{"data":[{"id":"local-chat","capabilities":["text"]},{"id":"local-image","capabilities":["image"]}]}"#)
+        let models = try await client.models(port: 8123, bearer: "fixture-local-key")
+        #expect(models.map(\.id) == ["local-chat", "local-image"])
+        let request = try #require(RemoteFixtureProtocol.records.first?.request)
+        #expect(request.url?.absoluteString == "http://127.0.0.1:8123/v1/models")
+        #expect(request.httpMethod == "GET")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-local-key")
+        RemoteFixtureProtocol.reset(#"{"data":[]}"#)
+        #expect(try await client.models(port: 8123, bearer: "fixture-local-key").isEmpty)
+        RemoteFixtureProtocol.reset("{}", status: 401)
+        await #expect(throws: ModelServiceCatalogClient.Failure.self) {
+            try await client.models(port: 8123, bearer: "fixture-local-key")
+        }
+        RemoteFixtureProtocol.reset("{}")
+        await #expect(throws: ModelServiceCatalogClient.Failure.self) {
+            try await client.models(port: 8123, bearer: "")
+        }
+        #expect(RemoteFixtureProtocol.records.isEmpty)
+    }
+
     private func fixture() -> (RemoteModelSettings, UserDefaults, String, RemoteTestSecrets) {
         let name = "RemoteModelTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
@@ -608,9 +652,8 @@ struct RemoteModelTests {
             i18n.language = english ? .en : .zhHans
             window.appearance = NSAppearance(named: english ? .aqua : .darkAqua)
             var cases: [(String, AnyView, CGSize)] = [
-                ("collapsed", AnyView(SettingsRemoteModelsPanel(settings: settings).padding(20)), CGSize(width: 860, height: 680)),
-                ("expanded", AnyView(SettingsRemoteModelsPanel(settings: settings, expanded: true).padding(20)), CGSize(width: 860, height: 680)),
-                ("audio", AnyView(SettingsRemoteModelsPanel(kind: .audio, settings: settings, expanded: true).padding(20)), CGSize(width: 860, height: 680)),
+                ("chat", AnyView(SettingsRemoteModelsPanel(kind: .chat, settings: settings).padding(20)), CGSize(width: 480, height: 680)),
+                ("audio", AnyView(SettingsRemoteModelsPanel(kind: .audio, settings: settings).padding(20)), CGSize(width: 860, height: 680)),
             ]
             for slot in RemoteModelSlot.allCases {
                 cases.append(("editor-\(slot.rawValue)", AnyView(RemoteModelEditor(model: model(slot), settings: settings)), CGSize(width: 620, height: 650)))

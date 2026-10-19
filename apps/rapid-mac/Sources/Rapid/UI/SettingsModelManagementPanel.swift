@@ -232,7 +232,7 @@ struct SettingsModelManagementPanel: View {
     @ViewBuilder
     private var header: some View {
         SectionHeader(
-            i18n.text(zh: "模型", en: "Model Management"),
+            i18n.text(zh: "模型文件", en: "Model files"),
             subtitle: i18n.text(
                 zh: "管理本地磁盘上的模型缓存。在后台下载所需模型，删除不需要的模型以释放空间。",
                 en: "Manage the on-disk model cache. Download what you need in the background; delete what you don't to reclaim space."

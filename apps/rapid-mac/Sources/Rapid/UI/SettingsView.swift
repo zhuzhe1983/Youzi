@@ -54,7 +54,7 @@ struct SettingsView: View {
     /// rather than rebuilding the entire Settings shell and all environment
     /// lookups on every click.
     @State private var categorySelection = CategorySelection()
-    @AppStorage("youzi.settings.models.tab.v1") private var modelTab: ModelSettingsTab = .service
+    @AppStorage("youzi.settings.models.tab.v1") private var modelTab: ModelSettingsTab = .chat
     // v0.6.7's NavigationSplitView-with-locked-Binding shape kept the
     // sidebar visible but couldn't kill the title-bar sidebar-toggle
     // pictogram on macOS 14 — `.toolbar(removing: .sidebarToggle)`
@@ -70,6 +70,7 @@ struct SettingsView: View {
         /// the older stand-alone "Models" tab was folded in here so
         /// users don't face two competing model surfaces.
         case modelManagement
+        case modelFiles, modelLoading, modelService
         /// Global system-prompt default applied before any conversation-specific
         /// override. Stored locally in UserDefaults under the legacy key.
         case instructions
@@ -113,6 +114,9 @@ struct SettingsView: View {
         var title: String {
             switch self {
             case .modelManagement: return "模型"
+            case .modelFiles: return "模型文件"
+            case .modelLoading: return "模型加载"
+            case .modelService: return "模型服务"
             case .instructions: return "个性化"
             case .memory: return "记忆"
             case .tools: return "智能体"
@@ -130,8 +134,16 @@ struct SettingsView: View {
         }
 
         func localizedTitle(isChinese: Bool) -> String {
-            YouziLocalization.localized(title, isChinese: isChinese)
+            switch self {
+            case .modelFiles: return isChinese ? "模型文件" : "Model files"
+            case .modelLoading: return isChinese ? "模型加载" : "Model loading"
+            case .modelService: return isChinese ? "模型服务" : "Model service"
+            default: break
+            }
+            return YouziLocalization.localized(title, isChinese: isChinese)
         }
+
+        var isModelSettings: Bool { [.modelFiles, .modelLoading, .modelService].contains(Self.railDestination(for: self)) }
 
         /// Visible Settings rail. Hidden cases stay in ``allCases`` for
         /// deep links and tests, then normalize through ``railDestination(for:)``.
@@ -142,7 +154,8 @@ struct SettingsView: View {
         static var railSections: [(title: String?, categories: [Category])] {
             var sections: [(title: String?, categories: [Category])] = [
                 ("设置", [.appearance]),
-                ("功能", [.instructions, .memory, .tools, .modelManagement]),
+                ("功能", [.instructions, .memory, .tools]),
+                ("模型", [.modelFiles, .modelLoading, .modelService]),
                 ("数据与安全", [.dataManagement, .privacy]),
                 ("关于", [.app]),
             ]
@@ -154,9 +167,10 @@ struct SettingsView: View {
 
         static func railDestination(for category: Category) -> Category {
             switch category {
-            case .experimentalFeatures: return .modelManagement
+            case .modelManagement: return .modelFiles
+            case .experimentalFeatures: return .modelLoading
             case .connectors: return .tools
-            case .performance: return .modelManagement
+            case .performance: return .modelLoading
             default: return category
             }
         }
@@ -164,6 +178,9 @@ struct SettingsView: View {
         var iconName: String {
             switch self {
             case .modelManagement: return "externaldrive.fill"
+            case .modelFiles: return "externaldrive.fill"
+            case .modelLoading: return "square.stack.3d.up.fill"
+            case .modelService: return "server.rack"
             case .instructions: return "text.bubble.fill"
             case .memory: return "brain"
             case .tools: return "wrench.and.screwdriver.fill"
@@ -472,7 +489,7 @@ struct SettingsView: View {
             appearance?.apply()
             NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: nil)
             do {
-                if selection.selected == .modelManagement {
+                if selection.selected.isModelSettings {
                     try await server?.applySavedAuthentication()
                     try await server?.applySavedModelPolicy()
                 }
@@ -637,7 +654,7 @@ struct SettingsView: View {
                 modelTab = .video
             }
             router.requestedModelTab = nil
-            categorySelection.selected = Category.railDestination(for: target)
+            categorySelection.selected = target == .modelManagement ? modelTab.category : Category.railDestination(for: target)
             router.requestedCategory = nil
         }
     }
@@ -645,15 +662,19 @@ struct SettingsView: View {
     @ViewBuilder
     private func detailPanel(for category: Category) -> some View {
         switch Category.railDestination(for: category) {
-        case .modelManagement:
+        case .modelLoading:
             modelsPanel
+        case .modelFiles:
+            SettingsModelManagementPanel()
+        case .modelService:
+            SettingsModelServicePanel()
         case .instructions:
             instructionsPanel
         case .memory:
             SettingsMemoryPanel()
         case .tools:
             agentsPanel
-        case .connectors, .performance, .experimentalFeatures:
+        case .modelManagement, .connectors, .performance, .experimentalFeatures:
             EmptyView()
         case .appearance:
             appearancePanel
@@ -686,7 +707,7 @@ struct SettingsView: View {
     }
 
     private var modelsPanel: some View {
-        SettingsModelsPanel(selection: $modelTab)
+        SettingsModelsPanel(selection: Binding(get: { modelTab.loadingTab }, set: { modelTab = $0 }))
     }
 
     private var instructionsPanel: some View {

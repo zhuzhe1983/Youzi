@@ -1,22 +1,26 @@
 import AppKit
 import SwiftUI
 
-/// Six focused pages, sharing Settings' single scroll canvas and Save footer.
+/// Four loading workflows, sharing the same local pool and remote configurations.
 struct SettingsModelsPanel: View {
     @Binding var selection: ModelSettingsTab
     @Environment(YouziI18nConfig.self) private var i18n
     @Environment(ServerManager.self) private var server
     @State private var generation = ModelGenerationSettings.shared
+    @AppStorage(AutoStartPreference.storageKey) private var autoStart = AutoStartPreference.defaultValue
+    @AppStorage(ModelSwitchConfirmationPreference.storageKey) private var confirmSwitch = ModelSwitchConfirmationPreference.defaultValue
+    @State private var remote = RemoteModelSettings.shared
+    @State private var priorityError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
-            SectionHeader(i18n.text(zh: "模型", en: "Models"),
-                          subtitle: i18n.text(zh: "服务与文件集中管理，各场景分别设置。", en: "Manage services and files, with defaults for each workflow."), emphasis: .page)
-            // Horizontal scrolling keeps all six destinations reachable at the
+            SectionHeader(i18n.text(zh: "模型加载", en: "Model loading"),
+                          subtitle: i18n.text(zh: "按场景管理本地加载策略和远程替代。", en: "Manage local loading and remote alternatives for each workflow."), emphasis: .page)
+            // Horizontal scrolling keeps all four workflows reachable at the
             // minimum window width and the largest global font size.
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 4) {
-                    ForEach(ModelSettingsTab.allCases) { tab in
+                    ForEach(ModelSettingsTab.loadingTabs) { tab in
                         Button { selection = tab } label: {
                             Text(tab.title(isChinese: i18n.isChinese))
                                 .font(RapidFont.bodyEmphasis)
@@ -34,30 +38,41 @@ struct SettingsModelsPanel: View {
             }
             .accessibilityIdentifier("Settings.Models.Tabs")
             Group {
-                switch selection {
-                case .service:
-                    SettingsModelServicePanel()
-                    SettingsRemoteModelsPanel()
-                case .files: SettingsModelManagementPanel(showsPageHeader: false)
+                switch selection.loadingTab {
+                case .service, .files: EmptyView()
                 case .chat:
                     SettingsResidentServicePanel(slots: [.chat], showsLaunchGuidance: false)
                     SettingsChatModelPanel()
-                    SettingsRemoteModelsPanel(kind: .chat)
                 case .audio:
                     SettingsResidentServicePanel(slots: [.transcription, .speech], showsLaunchGuidance: false)
                     SettingsAudioDefaultsPanel(generation: generation)
-                    SettingsRemoteModelsPanel(kind: .audio)
                 case .image:
                     SettingsResidentServicePanel(slots: [.image], showsLaunchGuidance: false)
                     imageDefaults
-                    SettingsRemoteModelsPanel(kind: .image)
                 case .video:
                     SettingsResidentServicePanel(slots: [.video], showsLaunchGuidance: false)
                     SettingsVideoDefaultsPanel(generation: generation)
-                    SettingsRemoteModelsPanel(kind: .video)
                 }
             }
             .id(selection)
+            SettingsSection(i18n.text(zh: "通用加载选项", en: "Shared loading options")) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle(i18n.text(zh: "打开应用时自动启动聊天模型", en: "Auto-start chat model on launch"), isOn: $autoStart)
+                        .accessibilityIdentifier("Settings.Models.AutoStartOnLaunchToggle")
+                    Toggle(i18n.text(zh: "中断正在处理的请求前先确认", en: "Confirm before interrupting active requests"), isOn: $confirmSwitch)
+                        .accessibilityIdentifier("Settings.Models.ConfirmActiveRequestSwitchToggle")
+                    Picker(i18n.text(zh: "全局模型来源优先级", en: "Global model source priority"), selection: Binding(
+                        get: { remote.document.globalPriority },
+                        set: { priority in
+                            do { try remote.update { $0.globalPriority = priority }; priorityError = nil }
+                            catch { priorityError = error.localizedDescription }
+                        }
+                    )) {
+                        ForEach(ModelSourcePriority.allCases, id: \.self) { Text($0.title(chinese: i18n.isChinese)).tag($0) }
+                    }
+                    if let priorityError { Text(priorityError).foregroundStyle(.red).font(RapidFont.caption) }
+                }
+            }
         }
     }
 
@@ -86,16 +101,16 @@ struct SettingsModelsPanel: View {
     }
 }
 
-private struct SettingsModelServicePanel: View {
+struct SettingsModelServicePanel: View {
     @Environment(ServerManager.self) private var server
     @Environment(YouziI18nConfig.self) private var i18n
     @AppStorage(ModelServicePreference.portKey) private var preferredPort = 0
-    @AppStorage(AutoStartPreference.storageKey) private var autoStart = AutoStartPreference.defaultValue
-    @AppStorage(ModelSwitchConfirmationPreference.storageKey) private var confirmSwitch = ModelSwitchConfirmationPreference.defaultValue
     @State private var portText = ""
     @State private var portError: String?
     var body: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.lg) {
+            SectionHeader(i18n.text(zh: "模型服务", en: "Model service"),
+                          subtitle: i18n.text(zh: "向本机其他应用提供已加载的本地模型。", en: "Expose loaded local models to other apps on this Mac."), emphasis: .page)
             SettingsSection(i18n.text(zh: "模型服务", en: "Model service")) {
                 VStack(alignment: .leading, spacing: 16) {
                     ViewThatFits(in: .horizontal) {
@@ -120,15 +135,7 @@ private struct SettingsModelServicePanel: View {
                         .font(RapidFont.caption).foregroundStyle(.secondary)
                 }
             }
-            SettingsResidentServicePanel()
-            SettingsSection(i18n.text(zh: "启动选项", en: "Startup")) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Toggle(i18n.text(zh: "打开应用时自动启动聊天模型", en: "Auto-start chat model on launch"), isOn: $autoStart)
-                        .accessibilityIdentifier("Settings.Models.AutoStartOnLaunchToggle")
-                    Toggle(i18n.text(zh: "中断正在处理的请求前先确认", en: "Confirm before interrupting active requests"), isOn: $confirmSwitch)
-                        .accessibilityIdentifier("Settings.Models.ConfirmActiveRequestSwitchToggle")
-                }
-            }
+            SettingsServedModelsPanel()
         }
         .onAppear { portText = preferredPort == 0 ? "" : String(preferredPort) }
         .onChange(of: portText) { _, _ in applyPort() }

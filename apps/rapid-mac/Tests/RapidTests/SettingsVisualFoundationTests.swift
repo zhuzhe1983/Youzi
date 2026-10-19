@@ -81,7 +81,7 @@ struct SettingsVisualFoundationTests {
         // change deliberate and reviewed, not to freeze the list forever —
         // update this literal alongside the enum when a feature adds one.
         var expected: Set<String> = [
-            "modelManagement", "instructions", "memory", "tools", "connectors", "performance",
+            "modelManagement", "modelFiles", "modelLoading", "modelService", "instructions", "memory", "tools", "connectors", "performance",
             "experimentalFeatures", "appearance", "dataManagement", "privacy", "app",
         ]
         // `swift test` builds debug, so the debug-only category is present
@@ -108,7 +108,7 @@ struct SettingsVisualFoundationTests {
     @Test("Category order is deliberate, so arrow-key navigation stays stable")
     func categoryOrderIsStable() {
         var expectedOrder = [
-            "modelManagement", "instructions", "memory", "tools", "connectors", "performance",
+            "modelManagement", "modelFiles", "modelLoading", "modelService", "instructions", "memory", "tools", "connectors", "performance",
             "experimentalFeatures", "appearance", "dataManagement", "privacy", "app",
         ]
         #if DEBUG
@@ -117,17 +117,18 @@ struct SettingsVisualFoundationTests {
         #expect(SettingsView.Category.allCases.map(\.rawValue) == expectedOrder)
 
         var expectedRail = [
-            "appearance", "instructions", "memory", "tools", "modelManagement", "dataManagement", "privacy", "app",
+            "appearance", "instructions", "memory", "tools", "modelFiles", "modelLoading", "modelService", "dataManagement", "privacy", "app",
         ]
         #if DEBUG
         expectedRail.append("developer")
         #endif
         #expect(SettingsView.Category.railCategories.map(\.rawValue) == expectedRail)
 
-        var expectedSectionTitles: [String?] = ["设置", "功能", "数据与安全", "关于"]
+        var expectedSectionTitles: [String?] = ["设置", "功能", "模型", "数据与安全", "关于"]
         var expectedSectionCategories: [[String]] = [
             ["appearance"],
-            ["instructions", "memory", "tools", "modelManagement"],
+            ["instructions", "memory", "tools"],
+            ["modelFiles", "modelLoading", "modelService"],
             ["dataManagement", "privacy"],
             ["app"],
         ]
@@ -151,18 +152,18 @@ struct SettingsVisualFoundationTests {
         #expect(SettingsView.Category.performance.title == "性能")
         #expect(SettingsView.Category.experimentalFeatures.title == "实验功能")
 
-        #expect(SettingsView.Category.railDestination(for: .experimentalFeatures) == .modelManagement)
+        #expect(SettingsView.Category.railDestination(for: .experimentalFeatures) == .modelLoading)
         #expect(SettingsView.Category.railDestination(for: .connectors) == .tools)
-        #expect(SettingsView.Category.railDestination(for: .performance) == .modelManagement)
+        #expect(SettingsView.Category.railDestination(for: .performance) == .modelLoading)
         #expect(SettingsView.Category.railDestination(for: .appearance) == .appearance)
 
         // Arrow keys walk the visible rail. Hidden cases first normalize
         // through ``railDestination(for:)``.
-        #expect(SettingsView.category(.connectors, movedBy: 1) == .modelManagement)
-        #expect(SettingsView.category(.performance, movedBy: 1) == .dataManagement)
-        #expect(SettingsView.category(.experimentalFeatures, movedBy: 1) == .dataManagement)
+        #expect(SettingsView.category(.connectors, movedBy: 1) == .modelFiles)
+        #expect(SettingsView.category(.performance, movedBy: 1) == .modelService)
+        #expect(SettingsView.category(.experimentalFeatures, movedBy: 1) == .modelService)
         #expect(SettingsView.category(.appearance, movedBy: -1) == nil)
-        #expect(SettingsView.category(.modelManagement, movedBy: 1) == .dataManagement)
+        #expect(SettingsView.category(.modelManagement, movedBy: 1) == .modelLoading)
         #expect(SettingsView.category(.modelManagement, movedBy: -1) == .tools)
         #if DEBUG
         #expect(SettingsView.category(.app, movedBy: 1) == .developer)

@@ -48,6 +48,13 @@ struct RemoteModelConfiguration: Codable, Equatable, Identifiable, Sendable {
     var usesCLIProxyVideo: Bool { slot == .video && videoAPI == .cliProxyAPI }
     var alias: String { "youzi-remote/" + id.uuidString.lowercased() }
     var displayName: String { name.isEmpty ? modelID : name }
+    /// Follow the provider ID until the user gives this configuration a custom name.
+    mutating func selectModelID(_ value: String) {
+        if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name == modelID {
+            name = value
+        }
+        modelID = value
+    }
     var voiceNames: [String] { Self.items(voices) }
     var sizes: [String] { Self.items(videoSizes) }
     var durations: [Int] { Self.items(videoSeconds).compactMap(Int.init).filter { $0 > 0 && $0 <= 600 } }
@@ -61,6 +68,7 @@ struct RemoteModelConfiguration: Codable, Equatable, Identifiable, Sendable {
         copy.modelID = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !copy.modelID.isEmpty, copy.modelID.count <= 256,
               !copy.modelID.contains(where: { $0.isNewline || $0.asciiValue.map { $0 < 32 } == true }) else { throw RemoteModelError.invalidModel }
+        if copy.name.isEmpty { copy.name = copy.modelID }
         copy.baseURL = try RemoteModelEndpoint.normalizedBaseURL(baseURL, allowHTTP: allowInsecureHTTP).absoluteString
         guard ["auto", "b64_json"].contains(imageResponseFormat) else { throw RemoteModelError.invalidResponse }
         if slot == .speech && voiceNames.isEmpty { throw RemoteModelError.invalidVoice }

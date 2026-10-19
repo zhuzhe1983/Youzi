@@ -3,6 +3,16 @@ import Foundation
 enum ModelSettingsTab: String, CaseIterable, Identifiable {
     case service, files, chat, audio, image, video
     var id: String { rawValue }
+    // Keep the legacy service/files values for persisted tabs and deep links.
+    static let loadingTabs: [Self] = [.chat, .audio, .image, .video]
+    var loadingTab: Self { Self.loadingTabs.contains(self) ? self : .chat }
+    var category: SettingsView.Category {
+        switch self {
+        case .files: .modelFiles
+        case .service: .modelService
+        default: .modelLoading
+        }
+    }
     func title(isChinese: Bool) -> String {
         switch self {
         case .service: return isChinese ? "模型服务" : "Service"
