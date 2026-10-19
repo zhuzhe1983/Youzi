@@ -43,3 +43,23 @@ the filtered directory. For this gateway choose CLIProxyAPI video mode. Actual
 remote generation requires a user-requested task; no billed QA was run. Harbor
 retains the complete app/runtime backup for local rollout and rollback. Public
 release remains outside this task.
+
+## Local delivery, 2026-10-19
+
+The native release candidate `candidate-f330e83c` is installed in the existing
+Workspace Preview app. Its unchanged, previously verified 0.14.4 runtime retains
+mflux 0.20.0 and Qwen-Image 2.1. Complete app/runtime/preferences backups and
+verification logs are retained in the local Client Backups directory; see the
+operations guide for rollback. Existing main-worktree edits are unchanged.
+
+Native Settings successfully reused the saved gateway and filtered its actual
+100-ID catalog into 10 image and 10 video candidates. The CLIProxyAPI selector
+and supported-model limitations were inspected. The draft was cancelled; no
+configuration or generation was submitted. Settings was closed afterward.
+
+The local Qwen chat service was restarted through the model-file load action;
+the remote chat selection and all model preferences remain unchanged. SDK list
+and real Responses checks are included in the local verification evidence.
+Authenticated model-detail parsing was not repeated because the test process
+cannot read the app's keychain item; the unchanged runtime passed this check in
+the previous delivery, and anonymous model-detail requests still return 401.
