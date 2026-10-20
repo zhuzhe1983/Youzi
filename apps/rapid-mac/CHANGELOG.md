@@ -17,6 +17,17 @@ can actually understand.
 
 ## [Unreleased]
 
+## [0.14.6] — 2026-10-20
+
+- Simplified Settings with a persistent explanation toggle and centralized expert, skill, built-in tool and MCP connection management.
+- Moved remote model API keys into Youzi settings. Unavailable legacy keys now require explicit re-entry without repeated Keychain authorization.
+- Fixed single-request KV cache retention, added bounded memory recovery, and stopped runaway multimodal repetition while preserving valid partial replies.
+- Preserved `seed`, `top_k` and `min_p` on the multimodal lane; improved native tool-call parsing, streaming markup handling and accurate truncation finish reasons.
+- Preserved uploaded audio container hints for transcription, translation and alignment; rejected invalid image requests before loading model weights.
+- Kept interrupted replies visible, allowed conversation titles to finish after switching chats, and created private store files with owner-only permissions from the start.
+
+See `docs/release-notes/youzi-v0.14.6.md` for installation requirements and known limitations.
+
 ## [0.14.5] — 2026-10-20
 
 - Unified local and remote model preferences across chat, audio, images and video, with direct file-category navigation and accurate file actions.
@@ -3707,7 +3718,9 @@ Older versions: see the
 [GitHub Releases page](https://github.com/machinefi/rapid-desktop/releases)
 for auto-generated notes against earlier tags.
 
-[Unreleased]: https://github.com/raullenchai/Rapid-MLX/compare/rapid-mac-v0.13.4...HEAD
+[Unreleased]: https://github.com/zhuzhe1983/Youzi/compare/youzi-v0.14.6...HEAD
+[0.14.6]: https://github.com/zhuzhe1983/Youzi/compare/youzi-v0.14.5...youzi-v0.14.6
+[0.14.5]: https://github.com/zhuzhe1983/Youzi/releases/tag/youzi-v0.14.5
 [0.13.4]: https://github.com/raullenchai/Rapid-MLX/compare/rapid-mac-v0.13.3...rapid-mac-v0.13.4
 [0.13.3]: https://github.com/raullenchai/Rapid-MLX/compare/rapid-mac-v0.13.2...rapid-mac-v0.13.3
 [0.13.2]: https://github.com/raullenchai/Rapid-MLX/compare/rapid-mac-v0.13.2-rc1...rapid-mac-v0.13.2

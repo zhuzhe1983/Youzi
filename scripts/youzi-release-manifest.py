@@ -18,11 +18,28 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def release_notes(root: Path, version: str) -> str:
+    """Use only this version's Youzi notes; never reuse an older summary."""
+    notes = root / "docs/release-notes" / f"youzi-v{version}.md"
+    if notes.is_file():
+        content = notes.read_text(encoding="utf-8").strip()
+        if not content:
+            raise ValueError(f"Release notes are empty: {notes}")
+        return content
+    return (
+        f"Youzi {version}. Release notes: "
+        f"https://github.com/zhuzhe1983/Youzi/releases/tag/youzi-v{version}. "
+        "Apple Silicon only. Ad-hoc signed, not notarized."
+    )
+
+
 def build_manifest(root: Path, out: Path) -> dict:
     app = root / "apps/rapid-mac/build/Rapid-MLX Desktop.app/Contents"
     with (app / "Info.plist").open("rb") as stream:
         version = plistlib.load(stream)["CFBundleShortVersionString"]
     engine_version = (app / "Resources/rapid-mlx/VERSION").read_text().strip()
+    if engine_version != version:
+        raise ValueError("App and bundled runtime versions differ")
     sidecar = out / "rapid-mlx-sidecar.tar.gz"
     # build.sh stamps VERSION in the final app, not its intermediate stage.
     # The updater tarball must contain that same stamp or runtime installation
@@ -46,7 +63,7 @@ def build_manifest(root: Path, out: Path) -> dict:
         "tag_name": tag,
         "html_url": release + "/tag/" + tag,
         "published_at": datetime.now(timezone.utc).isoformat(),
-        "notes": "Youzi 0.14.5: unified model settings, artifact generation details and reroll, inline voice calls, and Qwen-Image 2.1. Apple Silicon only. Ad-hoc signed, not notarized.",
+        "notes": release_notes(root, version),
         "dmg_url": release + "/download/" + tag + "/" + dmg.name,
         "dmg_sha256": sha256(dmg),
         "dmg_size": dmg.stat().st_size,

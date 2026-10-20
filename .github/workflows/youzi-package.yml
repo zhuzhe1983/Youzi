@@ -84,6 +84,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: youzi-macos-arm64-${{ github.sha }}
@@ -96,6 +99,8 @@ jobs:
           TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          NOTES_FILE="docs/release-notes/$RELEASE_TAG.md"
+          test -s "$NOTES_FILE"
           gh release create "$RELEASE_TAG" dist-youzi/* \
             --target "$TARGET_SHA" --draft --title "Youzi $RELEASE_TAG" \
-            --notes 'Personal-use Apple Silicon build for M-series Macs. Minimum recommended memory: 24 GB; 64 GB or more recommended. Ad-hoc signed; NOT Apple-notarized. Includes the full inference runtime, but no model weights. TTS speaker validation, secondary video service routing, and square artifact gallery. Wan/LTX weights load during generation; video service readiness is not a GPU-residency claim. Built by GitHub Actions; publish only after local client acceptance.'
+            --notes-file "$NOTES_FILE"
