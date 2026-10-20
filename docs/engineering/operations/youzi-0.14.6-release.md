@@ -49,8 +49,10 @@ Runtime adapter 文档属于未来提案，不作为本次已交付功能。
 通用说明，空 notes 文件则报错。应用、内置 runtime 和 sidecar 归档版本必须一致。
 
 沿用 `.github/workflows/youzi-package.yml` 和 0.14.5 的 Youzi 发布路径，
-目标 tag 为 `youzi-v0.14.6`。草稿流程从同一源码提交检出对应 notes，
-通过 `--notes-file` 创建草稿；本次没有触发上游 `rapid-mac-v*` 发布流程。
+目标 tag 为 `youzi-v0.14.6`。本次通过本地 `gh release create --notes-file`
+读取同一源码提交的版本说明，没有触发上游 `rapid-mac-v*` 发布流程。
+GitHub OAuth 不含 `workflow` scope，推送工作流文案更新被拒绝；因此保留原工作流。
+其草稿说明仍是旧模板，未来使用该工作流时需要先更新授权或人工替换说明。
 仅 Apple Silicon、ad-hoc 签名，未经 Apple 公证；完整运行时随包分发，不含模型权重。
 
 Atlas 应从最终集成提交构建完整应用，并在确认版本、源码标识、签名、资源、
@@ -73,7 +75,6 @@ Python 3.12.13 / pytest 9.1.1，使用独立测试环境，未安装或替换应
 ```
 
 Manifest 与版本同步共 33 项测试通过，检查器确认 0.14.6 一致。
-Ruff lint、format 与 `git diff --check` 通过。另用临时目录及假的 `gh`
-执行草稿脚本，确认 notes 来自对应版本文件、目标源码参数保留，
-notes 缺失时不调用 GitHub CLI；所有 workflow shell 段通过 `bash -n`。
+Ruff lint、format 与 `git diff --check` 通过。曾用临时目录与假的 `gh`
+验证草稿脚本，但工作流改动因上述授权限制未纳入最终发布。
 这些是元数据与脚本验证，不代表真实构建或 GitHub 草稿已执行。
