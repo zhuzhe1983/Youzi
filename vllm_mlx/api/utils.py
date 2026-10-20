@@ -500,6 +500,99 @@ def sanitize_content_for_stream(text: str | None) -> str:
     return _sanitize_for_stream(text, _FINAL_SANITIZER)
 
 
+# Partial forms of _FINAL_SANITIZER's angle tokens and [Calling\s+tool.
+_CONTENT_PARTIAL_TOKEN = re.compile(
+    r'<(?:\|[a-z_"]*\|?|[a-z_"]*\|?|/(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?)'
+)
+_CONTENT_PARTIAL_CALLING = re.compile(r"\[Calling\s+(?:t(?:o(?:o)?)?)?")
+
+
+def _tail(text: str, size: int) -> str:
+    """The last ``size`` characters of ``text`` (none when ``size`` is 0)."""
+    return text[len(text) - size :] if size else ""
+
+
+class StreamingContentSanitizer:
+    """Hold unresolved markup so content sanitization ignores chunking (#4925)."""
+
+    def __init__(self) -> None:
+        self._pending = ""
+        #: Held chunks of an open suppressed block, waiting for its closer.
+        #: Kept as a list so a long unclosed block is not rescanned or
+        #: recopied on every delta.
+        self._open_parts: list[str] = []
+        self._open_closer = ""
+        #: Last len(closer) - 1 held characters, for a closer split across deltas.
+        self._open_tail = ""
+        #: Characters fed so far; lets callers tell which deltas it saw.
+        self.consumed: int = 0
+
+    def _take_held(self) -> str:
+        if self._open_parts:
+            self._pending = "".join(self._open_parts)
+            self._open_parts = []
+            self._open_closer = ""
+            self._open_tail = ""
+        text, self._pending = self._pending, ""
+        return text
+
+    def process(self, delta: str) -> str:
+        """Emit the resolved prefix, following the sanitizer's re.sub scan."""
+        self.consumed += len(delta)
+        if self._open_parts:
+            # The held block cannot close unless its closer ends in this
+            # delta; until then nothing before it can resolve either.
+            window = self._open_tail + delta
+            if self._open_closer not in window:
+                self._open_parts.append(delta)
+                self._open_tail = _tail(window, len(self._open_closer) - 1)
+                return ""
+        text = self._take_held() + delta
+        cut = 0
+        while cut < len(text):
+            if text[cut] not in "<[":
+                cut += 1
+                continue
+            # A complete opener may still become a full suppressed block.
+            if (
+                text.startswith("<|tool_call>", cut)
+                and text.find("<tool_call|>", cut + len("<|tool_call>")) < 0
+            ):
+                self._open_closer = "<tool_call|>"
+                break
+            match = _FINAL_SANITIZER.match(text, cut)
+            if match:
+                # The optional ] lets this greedy match grow until closed.
+                if text.startswith("[Calling", cut) and not match[0].endswith("]"):
+                    self._open_closer = "]"
+                    break
+                cut = match.end()
+                continue
+            tail = text[cut:]
+            if (
+                _CONTENT_PARTIAL_TOKEN.fullmatch(tail)
+                or "[Calling".startswith(tail)
+                or _CONTENT_PARTIAL_CALLING.fullmatch(tail)
+            ):
+                break
+            cut += 1
+        if self._open_closer:
+            self._open_parts = [text[cut:]]
+            self._open_tail = _tail(text[cut:], len(self._open_closer) - 1)
+        else:
+            self._pending = text[cut:]
+        return sanitize_content_for_stream(text[:cut])
+
+    @property
+    def holding(self) -> bool:
+        """Whether unresolved text is waiting for a later delta."""
+        return bool(self._pending or self._open_parts)
+
+    def flush(self) -> str:
+        """Resolve any trailing prefix at the end of a content segment."""
+        return sanitize_content_for_stream(self._take_held())
+
+
 def _sanitize_for_stream(text: str | None, pattern: re.Pattern[str]) -> str:
     """Shared body for the per-delta streaming sanitizers."""
     if not text:
@@ -855,9 +948,17 @@ class StreamingToolCallFilter:
         extra_tags: Additional (open, close) tag pairs to suppress, beyond
                     the global _TOOL_CALL_TAGS. Useful for per-request or
                     per-agent customization without mutating global state.
+        enabled: When False, pass deltas through unchanged for requests
+                 without declared tools; their markup is ordinary text.
     """
 
-    def __init__(self, extra_tags: list[tuple[str, str]] | None = None):
+    def __init__(
+        self,
+        extra_tags: list[tuple[str, str]] | None = None,
+        *,
+        enabled: bool = True,
+    ):
+        self._enabled = enabled
         self._buffer = ""
         self._in_block = False
         self._close_tag = ""
@@ -872,6 +973,8 @@ class StreamingToolCallFilter:
 
     def process(self, delta: str) -> str:
         """Process a streaming delta. Returns text to emit (may be empty)."""
+        if not self._enabled:
+            return delta
         self._buffer += delta
 
         if self._in_block:

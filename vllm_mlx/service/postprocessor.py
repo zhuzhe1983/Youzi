@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import Mock
 
 from ..api.tool_calling import parse_tool_calls
-from ..api.utils import sanitize_output, strip_special_tokens
+from ..api.utils import StreamingContentSanitizer, sanitize_output, strip_special_tokens
 from ..domain.events import StreamEvent
 
 if TYPE_CHECKING:
@@ -398,21 +398,19 @@ class StreamingPostProcessor:
             if callable(reset_parser):
                 reset_parser()
 
-        # ``tool_choice="none"`` forbids tool calls this turn (OpenAI
-        # contract). The tool parser still RUNS — that is what strips wire
-        # markup out of ``content`` (the R12 sanitizer invariant) — but any
-        # call it resolves is DROPPED at the emission points rather than
-        # forwarded as a phantom the client cannot execute. This flag is
-        # read by ``_detect_tool_calls`` (text-parser incremental /
-        # finalize paths) and ``_process_channel_routed`` (harmony/gemma4
-        # structured channel), mirroring the non-streaming
-        # ``_parse_tool_calls_with_parser`` drop.
+        # No declared tools or tool_choice="none" forbids calls this turn.
+        # Declared-but-disabled calls still pass through the text parser to
+        # remove their wire markup; structured calls are never emitted.
         from .helpers import tool_choice_is_none
 
-        self._suppress_tool_calls = tool_choice_is_none(request)
+        self._suppress_tool_calls = (
+            tool_choice_is_none(request) or not self.tools_requested
+        )
 
         # State
         self.accumulated_text = ""
+        self._content_sanitizer = StreamingContentSanitizer()
+        self._content_sanitizer_accumulates = False
         self.tool_accumulated_text = ""
         # Accumulated reasoning content (split out by the reasoning parser
         # from the raw model output). Surfaced on the streaming Usage
@@ -2410,6 +2408,8 @@ class StreamingPostProcessor:
         because that would clear another active stream's parser state.
         """
         self.accumulated_text = ""
+        self._content_sanitizer = StreamingContentSanitizer()
+        self._content_sanitizer_accumulates = False
         self.tool_accumulated_text = ""
         self.accumulated_reasoning = ""
         self.tool_calls_detected = False
@@ -2531,8 +2531,45 @@ class StreamingPostProcessor:
 
         Returns a list of StreamEvents (may be empty if content is suppressed).
         """
+        events = self._process_chunk_events(output)
+        if any(event.type == "tool_call" for event in events):
+            tail = self._content_sanitizer.flush()
+            if self._content_sanitizer_accumulates:
+                self.accumulated_text += tail
+            self._insert_content_before_tool_call(events, tail, released_held=True)
+        return events
+
+    @staticmethod
+    def _insert_content_before_tool_call(
+        events: list[StreamEvent], content: str, *, released_held: bool = False
+    ):
+        """Keep resolved content ahead of the next structured call, or at EOF."""
+        if content:
+            index = next(
+                (i for i, event in enumerate(events) if event.type == "tool_call"),
+                len(events),
+            )
+            events.insert(
+                index,
+                StreamEvent(
+                    type="content", content=content, released_held=released_held
+                ),
+            )
+
+    @property
+    def content_held(self) -> bool:
+        """Whether streamed content text is held back pending later deltas."""
+        return self._content_sanitizer.holding
+
+    @property
+    def content_consumed(self) -> int:
+        """Characters of content text that have entered the hold-back."""
+        return self._content_sanitizer.consumed
+
+    def _process_chunk_events(self, output: GenerationOutput) -> list[StreamEvent]:
+        """Build events before resolving content held across a tool boundary."""
         delta_text = output.new_text
-        if not delta_text:
+        if not delta_text and not getattr(output, "tool_calls", None):
             # Handle finish-only chunks
             if output.finished:
                 # #447 round-4 NIT (PR #948): if a stream emitted an
@@ -2548,7 +2585,11 @@ class StreamingPostProcessor:
                 # supports an optional ``content`` payload; merging
                 # here keeps the terminal chunk count unchanged.
                 if self._ambiguous_prefix_held:
-                    flush = self._ambiguous_prefix_held
+                    # #4925: these bytes follow any content the sanitizer
+                    # still holds; resolve them in order and drain it, since
+                    # this finish event is the terminal content position.
+                    flush = self._content_sanitizer.process(self._ambiguous_prefix_held)
+                    flush += self._content_sanitizer.flush()
                     self._ambiguous_prefix_held = ""
                     finish_event = self._make_finish_event(output)
                     # Prepend the held bytes to whatever content the
@@ -2710,8 +2751,8 @@ class StreamingPostProcessor:
         # round-14 BLOCKING — tool calls whose JSON args contain
         # literal harmony sentinels were corrupted by sentinel-
         # anchored regex parsing).
-        # ``tool_choice="none"`` forbids tool calls this turn (OpenAI
-        # contract). The channel-routed structured path bypasses the text
+        # No declared tools or ``tool_choice="none"`` forbids calls this turn.
+        # The channel-routed structured path bypasses the text
         # ``self.tool_parser``, so it needs its own suppression. Drop the
         # ENTIRE ``tool_call`` channel — completed structured calls AND
         # partial in-flight deltas — so no call reaches the wire and the raw
@@ -2740,7 +2781,22 @@ class StreamingPostProcessor:
         # channel-routed path.
         if engine_tool_calls:
             engine_tool_calls = self._apply_forced_tool_choice_filter(engine_tool_calls)
-        if output.channel == "tool_call" and engine_tool_calls:
+        if (
+            engine_tool_calls
+            and not self._suppress_tool_calls
+            and output.channel != "reasoning"
+        ):
+            # Routers may deliver narration and a structured call together.
+            # Preserve the narration even when the parallel-call cap is full.
+            structured_events = []
+            if output.channel != "tool_call" and delta_text:
+                narration = self._sanitize_content(
+                    strip_special_tokens(delta_text), accumulate=True
+                )
+                if narration:
+                    structured_events.append(
+                        StreamEvent(type="content", content=narration)
+                    )
             # ``parallel_tool_calls=false`` is a hard external contract:
             # the non-streaming path caps the parsed list at one
             # (routes/chat.py); the streaming path must do the same or
@@ -2790,14 +2846,14 @@ class StreamingPostProcessor:
                 # recovers a call via the cross-format fallback.
                 self.tool_calls_detected = True
                 if output.finished:
-                    return [
+                    return structured_events + [
                         StreamEvent(
                             type="finish",
                             finish_reason=self._compute_finish_reason(output),
                             tool_calls_detected=True,
                         )
                     ]
-                return []
+                return structured_events
             # Monotonic indices across the whole response so clients
             # can disambiguate calls that arrive in separate router
             # chunks. ``OpenAI`` clients merge ``tool_calls`` deltas
@@ -2823,11 +2879,13 @@ class StreamingPostProcessor:
             # ``delta.tool_calls`` SSE chunk on the wire, so the invariant
             # "finish_reason=tool_calls ⇒ ≥1 tool_call delta sent" holds.
             self._tool_calls_emitted_to_wire += len(structured)
-            return [
+            return structured_events + [
                 StreamEvent(
                     type="tool_call",
                     tool_calls=structured,
-                    finish_reason="tool_calls" if output.finished else None,
+                    finish_reason=self._compute_finish_reason(output)
+                    if output.finished
+                    else None,
                     tool_calls_detected=True,
                 )
             ]
@@ -2884,7 +2942,7 @@ class StreamingPostProcessor:
                 # rules out the tool half — otherwise enabling
                 # ``parallel_tool_calls=false`` silently drops
                 # assistant prose (codex r6 MAJOR). Apply the same
-                # strip_special_tokens + sanitize_output pipeline the
+                # strip_special_tokens + streaming sanitizer pipeline the
                 # plain-content branch (lines 850-852) uses so mixed
                 # preface/trailing content can't leak special markup
                 # to the client — codex r7 MAJOR.
@@ -2893,7 +2951,9 @@ class StreamingPostProcessor:
                 if isinstance(mixed_content, str) and mixed_content:
                     mixed_content = strip_special_tokens(mixed_content)
                     if mixed_content:
-                        mixed_content = sanitize_output(mixed_content)
+                        mixed_content = self._sanitize_content(
+                            mixed_content, accumulate=True
+                        )
                     if mixed_content:
                         events.append(
                             StreamEvent(type="content", content=mixed_content)
@@ -2956,7 +3016,9 @@ class StreamingPostProcessor:
                     StreamEvent(
                         type="tool_call",
                         tool_calls=allowed_tcs,
-                        finish_reason="tool_calls" if output.finished else None,
+                        finish_reason=self._compute_finish_reason(output)
+                        if output.finished
+                        else None,
                         tool_calls_detected=True,
                     )
                 )
@@ -2965,7 +3027,7 @@ class StreamingPostProcessor:
 
         if self.tool_calls_detected:
             if self._preserve_post_tool_content and content:
-                content = sanitize_output(content)
+                content = self._sanitize_content(content, accumulate=True)
                 if content:
                     if output.finished:
                         return [
@@ -3009,7 +3071,7 @@ class StreamingPostProcessor:
             return []
 
         if content:
-            content = sanitize_output(content)
+            content = self._sanitize_content(content, accumulate=True)
             if not content:
                 content = None
 
@@ -3021,8 +3083,6 @@ class StreamingPostProcessor:
         # then sees ``reasoning_text=None`` and omits the field entirely,
         # creating stream/non-stream usage shape drift. Verified on
         # gemma-4-26b-4bit + gpt-oss-20b-mxfp4-q8 during the v0.6.66 onboarding sweep.
-        if content:
-            self.accumulated_text += content
         if reasoning:
             self.accumulated_reasoning += reasoning
 
@@ -3293,7 +3353,7 @@ class StreamingPostProcessor:
                 # tool half (codex r6 MAJOR: enabling
                 # ``parallel_tool_calls=false`` used to silently drop
                 # the preface when cap rejected the call). Apply the
-                # same strip_special_tokens + sanitize_output pipeline
+                # same strip_special_tokens + streaming sanitizer pipeline
                 # the plain-content branch (lines 835-839) uses so
                 # mixed preface/trailing content can't leak special
                 # markup to the client — codex r7 MAJOR.
@@ -3302,7 +3362,7 @@ class StreamingPostProcessor:
                 if isinstance(mixed_content, str) and mixed_content:
                     mixed_content = strip_special_tokens(mixed_content)
                     if mixed_content:
-                        mixed_content = sanitize_output(mixed_content)
+                        mixed_content = self._sanitize_content(mixed_content)
                     if mixed_content:
                         events.append(
                             StreamEvent(type="content", content=mixed_content)
@@ -3365,7 +3425,9 @@ class StreamingPostProcessor:
                     StreamEvent(
                         type="tool_call",
                         tool_calls=allowed_tcs,
-                        finish_reason="tool_calls" if output.finished else None,
+                        finish_reason=self._compute_finish_reason(output)
+                        if output.finished
+                        else None,
                         tool_calls_detected=True,
                     )
                 )
@@ -3374,7 +3436,7 @@ class StreamingPostProcessor:
 
         if self.tool_calls_detected:
             if self._preserve_post_tool_content and content:
-                content = sanitize_output(content)
+                content = self._sanitize_content(content)
                 if content:
                     if output.finished:
                         return [
@@ -3418,7 +3480,7 @@ class StreamingPostProcessor:
             return []
 
         if content:
-            content = sanitize_output(content)
+            content = self._sanitize_content(content)
             if not content:
                 content = None
 
@@ -3508,7 +3570,7 @@ class StreamingPostProcessor:
                 # Combined content+tool delta — emit content half
                 # regardless of how the parallel-cap rules out the
                 # tool half (codex r6 MAJOR). Match the plain-content
-                # branch (line 1265) with ``sanitize_output`` so mixed
+                # branch with the streaming sanitizer so mixed
                 # preface/trailing content can't leak special markup
                 # — codex r7 MAJOR.
                 mixed_content = result.get("content")
@@ -3516,7 +3578,7 @@ class StreamingPostProcessor:
                 if isinstance(mixed_content, str) and mixed_content:
                     mixed_content = strip_special_tokens(mixed_content)
                     if mixed_content:
-                        mixed_content = sanitize_output(mixed_content)
+                        mixed_content = self._sanitize_content(mixed_content)
                     if mixed_content:
                         # R10-C7: mixed content+tool deltas also count
                         # as standard-path plain-content emission for
@@ -3592,7 +3654,9 @@ class StreamingPostProcessor:
                     StreamEvent(
                         type="tool_call",
                         tool_calls=allowed_tcs,
-                        finish_reason="tool_calls" if output.finished else None,
+                        finish_reason=self._compute_finish_reason(output)
+                        if output.finished
+                        else None,
                         tool_calls_detected=True,
                     )
                 )
@@ -3601,7 +3665,7 @@ class StreamingPostProcessor:
 
         if self.tool_calls_detected:
             if self._preserve_post_tool_content and content:
-                content = sanitize_output(content)
+                content = self._sanitize_content(content)
                 if content:
                     if output.finished:
                         return [
@@ -3644,7 +3708,7 @@ class StreamingPostProcessor:
             return []
 
         if content:
-            content = sanitize_output(content)
+            content = self._sanitize_content(content)
             if not content:
                 content = None
 
@@ -3679,6 +3743,19 @@ class StreamingPostProcessor:
                 self._standard_content_observed = True
             return [StreamEvent(type="content", content=content)]
         return []
+
+    def _sanitize_content(self, content: str, *, accumulate: bool = False) -> str:
+        """Sanitize one content stream without losing split markup.
+
+        Channel-routed content accumulates sanitized output; the reasoning path
+        already accumulates raw parser input and the standard path does not
+        accumulate content. Remember which contract owns the held tail.
+        """
+        self._content_sanitizer_accumulates = accumulate
+        content = self._content_sanitizer.process(content)
+        if accumulate:
+            self.accumulated_text += content
+        return content
 
     def finalize(self) -> list[StreamEvent]:
         """Finalize stream — flush remaining tool calls, emit corrections.
@@ -4028,7 +4105,7 @@ class StreamingPostProcessor:
         if (
             self.tool_parser
             and self.tool_accumulated_text
-            and not self.tool_calls_detected
+            and (not self.tool_calls_detected or self._preserve_post_tool_content)
         ):
             held = self.tool_parser.flush_held_content(self.tool_accumulated_text)
             # Strict-string check: ``flush_held_content`` is part of the
@@ -4038,6 +4115,31 @@ class StreamingPostProcessor:
             # downstream.
             if isinstance(held, str) and held:
                 events.append(StreamEvent(type="content", content=held))
+
+        # Every EOF content release (reasoning-parser tails, parser-held
+        # bytes) is later in the same content stream than the sanitizer's
+        # held tail. Feed them through it in order, then drain it once, so
+        # split markup resolves exactly as in the buffered reply (#4925).
+        # The resolved text is emitted as one content event ahead of any
+        # recovered tool call, since all of it precedes the call on the wire.
+        resolved_parts = []
+        resolved_events = []
+        for event in events:
+            if event.type == "content":
+                if event.content:
+                    resolved_parts.append(
+                        self._content_sanitizer.process(event.content)
+                    )
+                continue
+            resolved_events.append(event)
+        events = resolved_events
+        resolved_parts.append(self._content_sanitizer.flush())
+        resolved_content = "".join(resolved_parts)
+        if self._content_sanitizer_accumulates:
+            # Accumulate exactly what this path emits at EOF, after split
+            # markup has resolved, so stripped bytes never land here.
+            self.accumulated_text += resolved_content
+        self._insert_content_before_tool_call(events, resolved_content)
 
         # H-07: ```json fence-strip on the finalize event list AND
         # drain any held tail in the SAME pass. The route's
@@ -4229,7 +4331,7 @@ class StreamingPostProcessor:
         # cross-format fallback (see ``routes/chat.py`` buffered-finish
         # merge), so this gate is the floor — the route-layer override
         # only fires UP from ``output.finish_reason``, never DOWN.
-        if self._tool_calls_emitted_to_wire > 0:
+        if self._tool_calls_emitted_to_wire > 0 and output.finish_reason != "length":
             return "tool_calls"
         # ``tool_choice="none"``: no call can ever reach the wire this turn,
         # so a channel-routed engine's ``finish_reason="tool_calls"`` (stamped

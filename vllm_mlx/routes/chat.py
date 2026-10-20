@@ -320,7 +320,65 @@ def _forced_tool_call_prefix(parser_name: str | None, function_name: str) -> str
     return None
 
 
-def _compute_forced_tool_prefix(cfg, request) -> str | None:
+def _template_renders_native_xml_tool_call(engine, request, name) -> bool | None:
+    """Probe the served template's assistant tool-call wire format."""
+    template = served_chat_template(engine) if engine is not None else None
+    if isinstance(template, dict):
+        template = template.get("tool_use") or template.get("default")
+    if not isinstance(template, str):
+        return None
+    if "<function=" not in template or "<parameter=" not in template:
+        return False
+    # Templates can contain inactive XML branches. Probe the rendered
+    # assistant call with this request's template kwargs rather than
+    # choosing a format solely from source literals.
+    from jinja2 import TemplateError
+    from transformers.utils.chat_template_utils import render_jinja_template
+
+    from ..utils.chat_template import _normalize_assistant_tool_call_arguments
+
+    probe_messages = [m.model_dump(exclude_none=True) for m in request.messages]
+    probe_messages.append(
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {"name": name, "arguments": {}},
+                }
+            ],
+        }
+    )
+    probe_messages = _normalize_assistant_tool_call_arguments(probe_messages)
+    probe_kwargs = dict(request.chat_template_kwargs or {})
+    resolved_thinking = _resolve_enable_thinking(request)
+    if resolved_thinking is not None:
+        probe_kwargs["enable_thinking"] = resolved_thinking
+    try:
+        rendered, _ = render_jinja_template(
+            [probe_messages[:-1], probe_messages],
+            tools=[t.model_dump(exclude_none=True) for t in request.tools],
+            chat_template=template,
+            **probe_kwargs,
+        )
+    except (TypeError, ValueError, TemplateError):
+        # An unprobeable template has no verified forced wire format.
+        # Let native generation choose it rather than guess JSON.
+        return None
+    # Inspect only bytes added by the synthetic assistant turn. A marker
+    # in user/tool history cannot establish the assistant wire format.
+    if len(rendered) != 2 or not rendered[1].startswith(rendered[0]):
+        return None
+    assistant_render = rendered[1][len(rendered[0]) :]
+    return bool(
+        assistant_render.rsplit("<tool_call>", 1)[-1]
+        .lstrip()
+        .startswith(f"<function={name}>")
+    )
+
+
+def _compute_forced_tool_prefix(cfg, request, engine=None) -> str | None:
     """The forced-function assistant-turn prefix for a forced/named ``tool_choice``,
     or ``None`` when the request is not a forced single/named choice or the parser
     has no audited wire opener.
@@ -346,6 +404,27 @@ def _compute_forced_tool_prefix(cfg, request) -> str | None:
         _forced_name = request.tools[0].function.get("name")
     if not _forced_name:
         return None
+    # A permissive parser can accept both JSON and XML, but the prefill must
+    # agree with the template the model was trained to continue (#4428).
+    template = served_chat_template(engine) if engine is not None else None
+    if isinstance(template, dict):
+        template = template.get("tool_use") or template.get("default")
+    if (
+        cfg.tool_call_parser in {"hermes", "nous", "qwen3_coder"}
+        and isinstance(template, str)
+        and "<function=" in template
+        and "<parameter=" in template
+    ):
+        # XML names are literal wire bytes, unlike JSON-escaped names.
+        if not _SAFE_DEEPSEEK_TOOL_NAME_RE.fullmatch(_forced_name):
+            return None
+        native_xml = _template_renders_native_xml_tool_call(
+            engine, request, _forced_name
+        )
+        if native_xml is None:
+            return None
+        if native_xml:
+            return f"<tool_call>\n<function={_forced_name}>\n"
     return _forced_tool_call_prefix(cfg.tool_call_parser, _forced_name)
 
 
@@ -446,6 +525,9 @@ _TOOL_GRAMMAR_MAX_INFLIGHT = 8  # admitted (running + queued) cap before fallbac
 _TOOL_GRAMMAR_MAX_SCHEMA_BYTES = 64 * 1024  # 64 KiB serialized per tools list
 _TOOL_GRAMMAR_MAX_SCHEMA_DEPTH = 32  # nested object/array nesting cap
 _TOOL_GRAMMAR_MAX_TOOLS = 256  # per-request tool-count cap (alternation width)
+_TOOL_NATIVE_WIRE_PROBE_MAX_SCHEMA_BYTES = 4 * _TOOL_GRAMMAR_MAX_SCHEMA_BYTES
+_TOOL_NATIVE_WIRE_PROBE_MAX_SCHEMA_DEPTH = 2 * _TOOL_GRAMMAR_MAX_SCHEMA_DEPTH
+_TOOL_NATIVE_WIRE_PROBE_MAX_TOOLS = 4 * _TOOL_GRAMMAR_MAX_TOOLS
 _tool_grammar_build_executor = None
 _tool_grammar_executor_init_lock = threading.Lock()
 _tool_grammar_inflight = 0
@@ -551,7 +633,12 @@ def _charge_json_scalar_bytes(value, budget: list[int]) -> None:
         raise _BoundsExceededError
 
 
-def _walk_size_and_depth(obj, budget: list[int], depth: int) -> None:
+def _walk_size_and_depth(
+    obj,
+    budget: list[int],
+    depth: int,
+    max_depth: int = _TOOL_GRAMMAR_MAX_SCHEMA_DEPTH,
+) -> None:
     """Estimate serialized size + nesting depth, aborting the INSTANT a cap trips.
 
     Walks a JSON-like object accumulating an APPROXIMATE serialized byte count
@@ -578,7 +665,7 @@ def _walk_size_and_depth(obj, budget: list[int], depth: int) -> None:
     # depth-``MAX`` container would be rejected at depth ``MAX+1`` even though no
     # further object/array exists). Each container checks the cap on ENTRY.
     if isinstance(obj, dict):
-        if depth > _TOOL_GRAMMAR_MAX_SCHEMA_DEPTH:
+        if depth > max_depth:
             raise _BoundsExceededError
         budget[0] -= 2  # {}
         if budget[0] < 0:
@@ -593,9 +680,9 @@ def _walk_size_and_depth(obj, budget: list[int], depth: int) -> None:
                 raise _BoundsExceededError
             # ``"key"`` — O(1)-safe charge of the (possibly Unicode) key.
             _charge_json_scalar_bytes(k if isinstance(k, str) else str(k), budget)
-            _walk_size_and_depth(v, budget, depth + 1)
+            _walk_size_and_depth(v, budget, depth + 1, max_depth)
     elif isinstance(obj, (list, tuple)):
-        if depth > _TOOL_GRAMMAR_MAX_SCHEMA_DEPTH:
+        if depth > max_depth:
             raise _BoundsExceededError
         budget[0] -= 2  # []
         if budget[0] < 0:
@@ -605,14 +692,21 @@ def _walk_size_and_depth(obj, budget: list[int], depth: int) -> None:
                 budget[0] -= 1  # ``,`` only BETWEEN elements
                 if budget[0] < 0:
                     raise _BoundsExceededError
-            _walk_size_and_depth(v, budget, depth + 1)
+            _walk_size_and_depth(v, budget, depth + 1, max_depth)
     else:
         # Scalar leaf: string / number / bool / None. O(1)-safe true-byte charge;
         # NOT a nesting level, so it is exempt from the container-depth cap.
         _charge_json_scalar_bytes(obj, budget)
 
 
-def _tools_within_grammar_bounds(tools) -> bool:
+def _tools_within_grammar_bounds(
+    tools,
+    *,
+    max_tools: int = _TOOL_GRAMMAR_MAX_TOOLS,
+    max_schema_bytes: int = _TOOL_GRAMMAR_MAX_SCHEMA_BYTES,
+    max_schema_depth: int = _TOOL_GRAMMAR_MAX_SCHEMA_DEPTH,
+    whole_tool: bool = False,
+) -> bool:
     """True iff the client tools list is small/shallow enough to compile safely.
 
     Bounds the COMPLETE flattened grammar input — tool COUNT, tool NAMES, and
@@ -624,14 +718,15 @@ def _tools_within_grammar_bounds(tools) -> bool:
     (even one giant single tool) is rejected after touching only a bounded
     prefix. A rejected request falls back to free-form (never hard-fails) — the
     grammar constraint is best-effort, so refusing to compile a giant schema
-    simply loses the structural guarantee, not the request.
+    simply loses the structural guarantee, not the request. ``whole_tool``
+    instead bounds the complete tool objects rendered by the template probe.
     """
     tools = tools or ()
-    if len(tools) > _TOOL_GRAMMAR_MAX_TOOLS:
+    if len(tools) > max_tools:
         logger.warning(
             "tool-grammar: %d tools exceeds %d-tool cap; free-form",
             len(tools),
-            _TOOL_GRAMMAR_MAX_TOOLS,
+            max_tools,
         )
         return False
     # One shared byte budget across ALL tools so the cap bounds the total
@@ -640,11 +735,22 @@ def _tools_within_grammar_bounds(tools) -> bool:
     # tools) up front so the cap bounds the ACTUAL serialized envelope exactly,
     # not just the tool bodies (codex #558-PR3 nit — charge N-1 commas, not N).
     envelope = 2 + max(0, len(tools) - 1)
-    budget = [_TOOL_GRAMMAR_MAX_SCHEMA_BYTES - envelope]
+    budget = [max_schema_bytes - envelope]
     if budget[0] < 0:
         return False
     try:
         for t in tools:
+            if whole_tool:
+                if isinstance(t, dict):
+                    complete_tool = t
+                else:
+                    complete_tool = {
+                        "type": getattr(t, "type", None),
+                        "function": getattr(t, "function", None),
+                    }
+                    complete_tool.update(getattr(t, "model_extra", None) or {})
+                _walk_size_and_depth(complete_tool, budget, 0, max_schema_depth)
+                continue
             fn = t.function if hasattr(t, "function") else t.get("function", t)
             if isinstance(fn, dict):
                 name = fn.get("name")
@@ -652,12 +758,14 @@ def _tools_within_grammar_bounds(tools) -> bool:
             else:
                 name = getattr(fn, "name", None)
                 params = getattr(fn, "parameters", None)
-            _walk_size_and_depth({"name": name, "parameters": params}, budget, 0)
+            _walk_size_and_depth(
+                {"name": name, "parameters": params}, budget, 0, max_schema_depth
+            )
     except _BoundsExceededError:
         logger.warning(
             "tool-grammar: tools input exceeds %d-byte / depth-%d cap; free-form",
-            _TOOL_GRAMMAR_MAX_SCHEMA_BYTES,
-            _TOOL_GRAMMAR_MAX_SCHEMA_DEPTH,
+            max_schema_bytes,
+            max_schema_depth,
         )
         return False
     except Exception:
@@ -804,8 +912,9 @@ def _tool_grammar_eligible(cfg, request) -> bool:
     optional-call auto grammar. An oversized schema is NOT silently dropped here
     when the constraint is active: it stays ineligible for the OFFLOAD (so we
     never enter the compile pool), but the route raises HTTP 400 via
-    ``_enforce_tool_grammar_bounds_or_400`` (#561) rather than falling back —
-    the free-form fallback is reserved for the explicit opt-OUT path.
+    ``_enforce_tool_grammar_bounds_or_400`` (#561) rather than falling back,
+    except when its separately capped exact template probe proves the builder
+    will decline an auto grammar for a mismatched native wire.
     """
     if not _tool_grammar_constraint_active(cfg, request):
         return False
@@ -814,6 +923,53 @@ def _tool_grammar_eligible(cfg, request) -> bool:
     # restored in PR-3b). When the constraint is active this returning False is
     # paired with a route-level HTTP 400 (#561), not a silent free-form fallback.
     return _tools_within_grammar_bounds(getattr(request, "tools", None))
+
+
+def _auto_tool_grammar_declined_for_native_wire(
+    engine, cfg, request, parser=None
+) -> bool:
+    """Whether auto grammar is declined by the builder's exact native-wire probe.
+
+    Name discovery scans at most the native-wire probe tool-count cap and never
+    reads client parameter schemas. The caller separately bounds oversized render
+    work. Parser construction, structure lookup, template probing, and wire-info
+    failures propagate so each caller preserves its established fallback: the
+    builder falls back to free-form, while the oversized async gate keeps its 400.
+    """
+    choice = _normalize_tool_choice_for_grammar(getattr(request, "tool_choice", None))
+    if choice is None or choice["mode"] != "auto":
+        return False
+
+    if parser is None:
+        from ..tool_parsers import ToolParserManager
+
+        parser_cls = ToolParserManager.get_tool_parser(cfg.tool_call_parser)
+        parser = parser_cls(tokenizer=getattr(engine, "tokenizer", None))
+    info = parser.structure_info()
+    if info is None:
+        return False
+
+    probe_name = None
+    for index, tool in enumerate(getattr(request, "tools", None) or ()):
+        if index >= _TOOL_NATIVE_WIRE_PROBE_MAX_TOOLS:
+            break
+        function = (
+            tool.function if hasattr(tool, "function") else tool.get("function", tool)
+        )
+        name = (
+            function.get("name")
+            if isinstance(function, dict)
+            else getattr(function, "name", None)
+        )
+        if isinstance(name, str) and _SAFE_DEEPSEEK_TOOL_NAME_RE.fullmatch(name):
+            probe_name = name
+            break
+    if probe_name is None:
+        return False
+
+    return _template_renders_native_xml_tool_call(
+        engine, request, probe_name
+    ) is True and not info(probe_name).begin.startswith("<tool_call>\n<function=")
 
 
 def _enforce_tool_grammar_bounds_or_400(cfg, request) -> None:
@@ -843,6 +999,75 @@ def _enforce_tool_grammar_bounds_or_400(cfg, request) -> None:
                 "free-form tool calling."
             ),
         )
+
+
+async def _offload_native_wire_decline_probe(engine, cfg, request) -> bool:
+    """Run the exact native-wire decline probe in the bounded build executor."""
+    if not _try_admit_tool_grammar_build():
+        logger.warning(
+            "tool-grammar: compile-admission pool full (>= %d in-flight); "
+            "oversized native-wire probe declined",
+            _TOOL_GRAMMAR_MAX_INFLIGHT,
+        )
+        return False
+    try:
+        fut = _get_tool_grammar_build_executor().submit(
+            _auto_tool_grammar_declined_for_native_wire,
+            engine,
+            cfg,
+            request,
+        )
+    except Exception:
+        _release_tool_grammar_build()
+        logger.exception("tool-grammar: native-wire probe submission failed")
+        return False
+    fut.add_done_callback(lambda _f: _release_tool_grammar_build())
+    track_build = getattr(engine, "track_tool_grammar_build", None)
+    if callable(track_build):
+        try:
+            track_build(fut)
+        except Exception:
+            logger.exception("tool-grammar: failed to track native-wire probe")
+    try:
+        return bool(await asyncio.shield(asyncio.wrap_future(fut)))
+    except Exception:
+        logger.exception("tool-grammar: off-loop native-wire probe failed")
+        return False
+
+
+async def _enforce_tool_grammar_bounds_or_400_async(cfg, request, engine) -> None:
+    """Allow a bounded oversized auto request only when its wire probe declines."""
+    try:
+        _enforce_tool_grammar_bounds_or_400(cfg, request)
+        return
+    except HTTPException as exc:
+        if exc.status_code != 400:
+            raise
+
+        choice = _normalize_tool_choice_for_grammar(
+            getattr(request, "tool_choice", None)
+        )
+        tools = getattr(request, "tools", None)
+        within_probe_bounds = (
+            choice is not None
+            and choice["mode"] == "auto"
+            and _tools_within_grammar_bounds(
+                tools,
+                max_tools=_TOOL_NATIVE_WIRE_PROBE_MAX_TOOLS,
+                max_schema_bytes=_TOOL_NATIVE_WIRE_PROBE_MAX_SCHEMA_BYTES,
+                max_schema_depth=_TOOL_NATIVE_WIRE_PROBE_MAX_SCHEMA_DEPTH,
+                whole_tool=True,
+            )
+        )
+        if within_probe_bounds and await _offload_native_wire_decline_probe(
+            engine, cfg, request
+        ):
+            logger.info(
+                "Oversized tool schema proceeding free-form: auto grammar "
+                "declined for template native wire"
+            )
+            return
+        raise
 
 
 # Conservative token allowance for the wire envelope a forced call always needs
@@ -1624,6 +1849,14 @@ def _maybe_build_tool_grammar_processor(
             return None
         parser_cls = ToolParserManager.get_tool_parser(cfg.tool_call_parser)
         parser = parser_cls(tokenizer=tokenizer)
+
+        if _auto_tool_grammar_declined_for_native_wire(
+            engine, cfg, request, parser=parser
+        ):
+            logger.debug(
+                "Skipping auto tool grammar: parser wire differs from native XML"
+            )
+            return None
 
         # Flatten OpenAI tools -> [{name, parameters}] for the grammar builder.
         flat_tools = []
@@ -4528,11 +4761,12 @@ async def _create_chat_completion_impl(
     # the request is ineligible, admission is at capacity, or the build fails.
     #
     # #561: reject an oversized/over-deep/over-count schema with HTTP 400 BEFORE
-    # the offload when the constraint is active (default-on). This must run
-    # before ``_offload_tool_grammar_build`` — the offload treats an oversized
-    # schema as ineligible and returns ``None`` (silent free-form), which under
-    # default-on would drop the structural guarantee the operator asked for.
-    _enforce_tool_grammar_bounds_or_400(cfg, request)
+    # the offload when the constraint is active (default-on), unless a separately
+    # capped exact probe proves auto grammar will be declined for a mismatched
+    # native wire. The oversized exemption probe runs in the admission-gated
+    # executor. This must precede ``_offload_tool_grammar_build`` — that offload
+    # treats an oversized schema as ineligible and returns ``None``.
+    await _enforce_tool_grammar_bounds_or_400_async(cfg, request, engine)
     # LINE① (#558): decide reasoning-gated forced-grammar eligibility. Engage only
     # when a thinking budget is set AND the template PREFILLS an unclosed
     # ``<think>`` (seed state "open") — the exact condition under which the coupled
@@ -4597,7 +4831,7 @@ async def _create_chat_completion_impl(
     # the grammar is the stronger, self-sufficient lever.
     _forced_prefix = None
     if _glp is None:
-        _forced_prefix = _compute_forced_tool_prefix(cfg, request)
+        _forced_prefix = _compute_forced_tool_prefix(cfg, request, engine)
     if _forced_prefix:
         chat_kwargs["forced_assistant_prefix"] = _forced_prefix
 
@@ -4678,7 +4912,7 @@ async def _create_chat_completion_impl(
         _glp = None
         _line1_gate_engaged = False
         _line1_prefix = _LINE1_SEED_UNSET
-        _restored_prefix = _compute_forced_tool_prefix(cfg, request)
+        _restored_prefix = _compute_forced_tool_prefix(cfg, request, engine)
         if _restored_prefix:
             chat_kwargs["forced_assistant_prefix"] = _restored_prefix
 
@@ -4719,7 +4953,7 @@ async def _create_chat_completion_impl(
         chat_kwargs.pop("grammar_logits_processor", None)
         _glp = None
         _line1_gate_engaged = False
-        _restored_prefix = _compute_forced_tool_prefix(cfg, request)
+        _restored_prefix = _compute_forced_tool_prefix(cfg, request, engine)
         if _restored_prefix:
             chat_kwargs["forced_assistant_prefix"] = _restored_prefix
 
@@ -6270,7 +6504,11 @@ async def _create_chat_completion_impl(
             logger.warning(f"JSON output parsing failed: {e}")
 
     # Determine finish reason
-    finish_reason = "tool_calls" if tool_calls else output.finish_reason
+    finish_reason = (
+        "tool_calls"
+        if tool_calls and output.finish_reason != "length"
+        else output.finish_reason
+    )
     if is_cancellation_finish_reason(finish_reason):
         return Response(status_code=499)
 
@@ -6593,6 +6831,22 @@ async def stream_chat_completion(
                 # list we used to drive the extractor.
                 for entry in entries:
                     entry.top_logprobs = []
+            return ChoiceLogProbs(content=entries)
+
+        # #4925: the postprocessor can hold a token's text back until a later
+        # delta resolves possible markup. Keep that token's logprobs with it
+        # and release them on the chunk that finally carries the text.
+        _held_logprob_entries: list = []
+
+        def _with_held_logprobs(
+            logprobs: ChoiceLogProbs | None,
+        ) -> ChoiceLogProbs | None:
+            if not _held_logprob_entries:
+                return logprobs
+            entries = _held_logprob_entries + (
+                (logprobs.content or []) if logprobs else []
+            )
+            _held_logprob_entries.clear()
             return ChoiceLogProbs(content=entries)
 
         # Pre-compute SSE template parts that don't change per-token.
@@ -6918,7 +7172,24 @@ async def stream_chat_completion(
             if _chunk_matched_stop:
                 stream_matched_stop = _chunk_matched_stop
 
-            for event in processor.process_chunk(output):
+            _consumed_before = processor.content_consumed
+            _chunk_events = processor.process_chunk(output)
+            # Hold token logprobs until their corresponding text is released.
+            _defer_logprobs = (
+                want_logprobs
+                and processor.content_consumed != _consumed_before
+                and not any(e.type == "finish" for e in _chunk_events)
+                and (
+                    processor.content_held
+                    or not any(e.type == "content" for e in _chunk_events)
+                )
+            )
+            if _defer_logprobs:
+                _held_logprobs = _build_chunk_logprobs(output)
+                if _held_logprobs and _held_logprobs.content:
+                    _held_logprob_entries.extend(_held_logprobs.content)
+            _output_logprobs_pending = want_logprobs and not _defer_logprobs
+            for event in _chunk_events:
                 # Telemetry: stamp TTFT on the first real output token
                 # (content / reasoning / tool_call). Cheap monotonic read
                 # gated to fire once; never touches the wire.
@@ -6934,9 +7205,23 @@ async def stream_chat_completion(
                 ):
                     first_token_ts = time.perf_counter()
                 if event.type == "content":
-                    _event_logprobs = (
-                        _build_chunk_logprobs(output) if want_logprobs else None
-                    )
+                    if (
+                        event.released_held
+                        and not _defer_logprobs
+                        and processor.content_consumed == _consumed_before
+                    ):
+                        # Released text belongs to the previously held tokens,
+                        # not to the structured call that caused its release.
+                        _event_logprobs = (
+                            _with_held_logprobs(None) if want_logprobs else None
+                        )
+                    else:
+                        _event_logprobs = (
+                            _with_held_logprobs(_build_chunk_logprobs(output))
+                            if _output_logprobs_pending
+                            else None
+                        )
+                        _output_logprobs_pending = False
                     if _buffer_forced_content:
                         if _forced_wire_quarantine:
                             # A channel boundary bisected marker-shaped content.
@@ -7243,21 +7528,17 @@ async def stream_chat_completion(
                 # #1256: on the streaming surface headers are already on the
                 # wire so we cannot 422 mid-flight. If the synthesised call's
                 # arguments fail the target tool's schema, DON'T fabricate it —
-                # leave ``fallback_tool_calls`` empty so the turn finishes with
-                # its REAL terminal reason (``stop`` normally, or ``length`` if
-                # the model truncated — we deliberately don't mask that) instead
-                # of shipping a ``tool_calls`` chunk the client would execute as
-                # a broken call. Mirrors the non-stream 422 in spirit within the
-                # route's "no mid-stream 422" constraint.
+                # leave ``fallback_tool_calls`` empty. The terminal gate below
+                # reports a forced-choice error unless generation hit ``length``;
+                # never ship a broken call that the client might execute.
                 _synth_err = _forced_synth_schema_error(
                     _synth_target, _synth_call.function.arguments, request.tools
                 )
                 if _synth_err:
                     logger.warning(
                         "[SSE-FORCED-SYNTH-#1256] refusing to synthesize a "
-                        "schema-invalid forced call to %r: %s; finishing "
-                        "without a fabricated tool_call (real terminal reason "
-                        "preserved).",
+                        "schema-invalid forced call to %r: %s; "
+                        "no fabricated tool_call will be emitted.",
                         _synth_target,
                         _synth_err,
                     )
@@ -7330,6 +7611,29 @@ async def stream_chat_completion(
                             first_token_ts = time.perf_counter()
                         yield _content_sse_chunk(_text, _logprobs)
                 _forced_content_pending.clear()
+
+        # Required/named requests must never report a successful stop after
+        # dropping every call. Headers are already sent, so signal a stream
+        # error rather than fabricating arguments.
+        if (
+            _stream_tool_choice
+            and _stream_tool_choice.get("mode") in {"required", "named"}
+            and processor._tool_calls_emitted_to_wire == 0
+            and not fallback_tool_calls
+            and (
+                buffered_finish is None or buffered_finish[0].finish_reason != "length"
+            )
+        ):
+            error = {
+                "error": {
+                    "message": "Forced tool choice produced no valid tool call.",
+                    "type": "server_error",
+                    "code": "tool_choice_violation",
+                }
+            }
+            yield f"data: {json.dumps(error)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
 
         # Emit the terminal chunk. Three cases:
         #   (a) Streaming parser already emitted tool_calls during the
@@ -7688,9 +7992,12 @@ async def stream_chat_completion(
                         finish_reason=(
                             "tool_calls"
                             if fallback_tool_calls
+                            and finish_event.finish_reason != "length"
                             else finish_event.finish_reason
                         ),
-                        logprobs=_build_chunk_logprobs(finish_output),
+                        logprobs=_with_held_logprobs(
+                            _build_chunk_logprobs(finish_output)
+                        ),
                     )
                 ],
                 # See "Usage placement" note on the tool_call branch

@@ -1073,7 +1073,11 @@ async def create_anthropic_message(
         # mode). The Anthropic adapter downstream renders the
         # rescued ``content`` into a TextBlock; without this it would
         # emit a completely empty ``content=[]`` Messages response.
-        finish_reason = "tool_calls" if tool_calls else output.finish_reason
+        finish_reason = (
+            "tool_calls"
+            if tool_calls and output.finish_reason != "length"
+            else output.finish_reason
+        )
         # PR #715 bundle, fuzz finding C: detect helper Case-4 blank
         # (parser routed whole no-tag output to reasoning, helper
         # cleared cleaned_text=""). See chat.py route for the full
@@ -2000,7 +2004,7 @@ async def _stream_anthropic_messages(
     # non-streaming branch uses (PR #515 codex round-12/14 BLOCKING
     # closure).
     accumulated_structured_tool_calls: list[dict] = []
-    tool_filter = StreamingToolCallFilter()
+    tool_filter = StreamingToolCallFilter(enabled=bool(chat_kwargs.get("tools")))
     # ``tokenizer`` is on the BaseEngine contract; the old ``hasattr``
     # guard predated the abstract declaration and is the same silent-skip
     # shape that produced #500. The inner ``chat_template`` guard stays
@@ -3148,10 +3152,10 @@ async def _stream_anthropic_messages(
     # the engine becomes ``max_tokens`` for spec-compliant
     # continuation; the ``stop_sequence`` ladder below preserves H-03
     # behaviour for user-supplied ``stop_sequences`` matches.
-    if tool_calls:
-        stop_reason = "tool_use"
-    elif stream_finish_reason == "length":
+    if stream_finish_reason == "length":
         stop_reason = "max_tokens"
+    elif tool_calls:
+        stop_reason = "tool_use"
     else:
         stop_reason = "end_turn"
     # H-03: when a user-supplied ``stop_sequences`` entry fired (and the

@@ -55,7 +55,7 @@ from ..api.utils import (
 )
 from ..config import get_config
 from ..engine import BaseEngine, GenerationOutput
-from ..errors import BackpressureError
+from ..errors import BackpressureError, MetalMemoryBackpressureError
 from ..tool_parsers import ToolParserManager
 from ..utils.chat_template import (
     detect_native_reasoning_effort_levels,
@@ -189,15 +189,22 @@ def _raise_backpressure_503(exc: Exception) -> None:
     sees an opaque ``Internal server error`` body, defeating the
     point of admission control.
     """
+    # The Metal-memory gate and the concurrency gate both raise
+    # ``BackpressureError``; label the 503 by its actual cause (#4108 — an
+    # idle server at its memory limit used to claim "max concurrent
+    # requests reached").
+    if isinstance(exc, MetalMemoryBackpressureError):
+        reason = "Server is at its Metal memory limit."
+    elif "max_concurrent_requests=" in str(exc):
+        reason = "Server is busy (max concurrent requests reached)."
+    else:
+        reason = "Server is busy."
     raise HTTPException(
         status_code=503,
         # 1s is a sensible default — the cap usually clears within
         # a few tokens of decode on the saturated batch.
         headers={"Retry-After": "1"},
-        detail=(
-            "Server is busy (max concurrent requests reached). "
-            f"Retry after the Retry-After delay. ({exc})"
-        ),
+        detail=f"{reason} Retry after the Retry-After delay. ({exc})",
     )
 
 
@@ -3023,7 +3030,7 @@ def _parse_tool_calls_with_parser(
 ) -> tuple[str, list | None]:
     """Parse tool calls, then honor ``tool_choice="none"`` by dropping them.
 
-    The parser still RUNS under ``"none"`` — that is what strips the wire
+    With tools declared, the parser still RUNS under ``"none"`` to strip the wire
     markup out of ``content`` (the R12 sanitizer invariant: raw
     ``<tool_call>…</tool_call>`` / ``[name({…})]`` must never leak to the
     client). What ``"none"`` forbids is *surfacing a call*: the OpenAI
@@ -3063,7 +3070,11 @@ def _run_tool_parser(
     the user-facing content directly in that case.
     """
     cfg = get_config()
-    request_dict = request.model_dump() if request else None
+    request_dict = request.model_dump() if hasattr(request, "model_dump") else request
+    # A request without tools must never invent an executable tool call,
+    # including when the engine returns calls on a structured channel.
+    if not request_dict or not request_dict.get("tools"):
+        return output_text or "", None
     declared: set[str] | None = None
     if cfg.tool_call_parser == "qwen3_coder_xml":
         declared = _request_declared_tool_names(request_dict)

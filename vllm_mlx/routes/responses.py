@@ -2231,7 +2231,11 @@ async def _non_stream(
         if rf is not None and final_content:
             final_content = extract_json_from_response(final_content)
 
-    finish_reason = "tool_calls" if tool_calls else output.finish_reason
+    finish_reason = (
+        "tool_calls"
+        if tool_calls and output.finish_reason != "length"
+        else output.finish_reason
+    )
     if is_cancellation_finish_reason(finish_reason):
         return Response(status_code=499)
 
@@ -2892,7 +2896,7 @@ async def _stream_responses(
         # cover legitimate immediate-stop / zero-budget /
         # stop-sequence turns whose ``finish_reason`` is ``"stop"``).
         last_finish_reason: str | None = None
-        tool_filter = StreamingToolCallFilter()
+        tool_filter = StreamingToolCallFilter(enabled=bool(chat_kwargs.get("tools")))
 
         # Yuki F6 codex r1 BLOCKING #2 (PR #817): when the request
         # forces a tool_choice (``required`` or named-function), the

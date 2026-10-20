@@ -1061,14 +1061,16 @@ def test_wrapper_close_is_accounted_before_following_prose():
     assert (prose or {}).get("content") == " after"
 
 
-def test_gating_is_off_when_the_request_declares_no_tools():
-    """A request with no tools keeps the position-only behaviour.
-
-    Nothing is authorised either way, so tightening here would only change
-    how text parses for callers that cannot execute anything.
-    """
+def test_no_tools_service_preserves_text_without_changing_low_level_scanner():
+    """Serving requires declared tools; the low-level scanner remains reusable."""
     from vllm_mlx.api.tool_calling import parse_tool_calls
+    from vllm_mlx.config import reset_config
+    from vllm_mlx.service.helpers import _parse_tool_calls_with_parser
 
+    cfg = reset_config()
+    cfg.enable_auto_tool_choice = True
+    cfg.tool_call_parser = "nemotron"
     text = _render_xml_body("whatever", _KEY, "x")
     _, calls = parse_tool_calls(text, None)
     assert [c.function.name for c in calls] == ["whatever"]
+    assert _parse_tool_calls_with_parser(text, None) == (text, None)

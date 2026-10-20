@@ -57,7 +57,12 @@ async def test_video_lease_prevents_eviction_without_changing_chat(monkeypatch):
         return registry.get_entry("video")
 
     manager = ResidentModelManager(
-        registry=registry, loader=load, memory_limit_bytes=10**9
+        registry=registry,
+        loader=load,
+        memory_limit_bytes=10**9,
+        # This lease test uses fake engines; unrelated MLX allocations from
+        # other tests must not consume its simulated residency budget.
+        memory_reader=lambda: 0,
     )
     manager.register_primary(registry.get_entry("chat"), estimated_bytes=100)
     await manager.load("video", estimated_bytes=100)

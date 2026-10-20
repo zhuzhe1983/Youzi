@@ -45,3 +45,7 @@ class StreamEvent:
 
     metadata: dict = field(default_factory=dict)
     """Optional metadata (e.g. usage info, prompt_tokens, completion_tokens)."""
+
+    released_held: bool = False
+    """Content event carrying only text released from the streaming hold-back
+    ahead of a structured tool call (#4957); its logprobs are the held ones."""
