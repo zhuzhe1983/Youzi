@@ -1,16 +1,8 @@
 import SwiftUI
 
-/// Settings → Tools. Owns everything about the built-in tools the model can
-/// call:
-///
-///   * Per-tool on/off switches (persisted in ``UserDefaults`` by
-///     ``ChatViewModel.setToolEnabled``). A disabled tool is stripped from the
-///     request body AND refused at dispatch, so a model that names it anyway
-///     gets a clean error instead of a silent run.
-///   * The ``web_search`` backend + its API key. Keys live in the Keychain
-///     (``WebSearchConfig``), never in UserDefaults.
-///   * The ``browse`` approval mode — per-fetch prompt (default) or
-///     auto-approve for unattended use.
+/// Shared tool controls and search-service configuration. The capability hub
+/// hosts `.builtinTools`; Settings hosts `.searchService`. Both use the same
+/// persisted tool switches and Keychain-backed search configuration.
 struct SettingsToolsPanel: View {
     @Environment(ChatViewModel.self) private var chat
     @Environment(WebSearchConfig.self) private var webSearch
@@ -33,37 +25,40 @@ struct SettingsToolsPanel: View {
     ///   which has to capture the disclosure OPEN and cannot drive
     ///   private `@State` from outside. Production always uses the
     ///   default (all rows collapsed).
-    /// - Parameter showsPageHeader: the combined 智能体 page supplies its
-    ///   own title; hide this panel's page header in that embedding.
-    init(initiallyExpanded: Set<String> = [], showsPageHeader: Bool = true) {
+    /// - Parameter showsPageHeader: omit the page title when embedded in the capability hub.
+    enum ContentMode { case all, builtinTools, searchService }
+
+    init(initiallyExpanded: Set<String> = [], showsPageHeader: Bool = true, mode: ContentMode = .all) {
         _expandedTools = State(initialValue: initiallyExpanded)
         self.showsPageHeader = showsPageHeader
+        self.mode = mode
     }
 
     private let showsPageHeader: Bool
+    private let mode: ContentMode
 
     var body: some View {
         VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
             if showsPageHeader {
                 SectionHeader(
-                    i18n.text(zh: "工具与智能体", en: "Tools"),
-                    subtitle: i18n.text(
+                    mode == .searchService ? i18n.text(zh: "联网搜索", en: "Web Search") : i18n.text(zh: "内置工具", en: "Built-in Tools"),
+                    subtitle: mode == .searchService ? nil : i18n.text(
                         zh: "模型在对话中可调用的内置工具。关闭后模型将不再提供该能力，即使主动调用也会被拦截。",
                         en: "Tools the model can call during a chat. Turn one off and it is never offered — and never runs, even if the model asks for it by name."
                     ),
                     emphasis: .page
                 )
             }
-            toolsSection
-            webSearchSection
-            browseSection
+            if mode != .searchService { toolsSection }
+            if mode != .builtinTools { webSearchSection }
+            if mode == .all { browseSection }
         }
     }
 
     // MARK: - Available tools
 
     private var toolsSection: some View {
-        SettingsSection(i18n.text(zh: "可用工具", en: "Available tools")) {
+        SettingsSection(i18n.text(zh: "内置工具", en: "Built-in Tools")) {
             let definitions = chat.builtinDefinitions
             ForEach(Array(definitions.enumerated()), id: \.element.function.name) { index, def in
                 if index > 0 { SettingsRowDivider() }
@@ -151,7 +146,7 @@ struct SettingsToolsPanel: View {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    Text("Details")
+                    Text(i18n.text(zh: "详情", en: "Details"))
                         .font(RapidFont.caption)
                 }
                 .contentShape(Rectangle())
@@ -332,6 +327,7 @@ struct SettingsToolsPanel: View {
                         .font(RapidFont.caption)
                         .foregroundStyle(RapidTheme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .settingsExplanation()
 
                     // ``acceptsKey``, not ``requiresKey``: Keenable's
                     // key is optional (it lifts the shared keyless

@@ -24,6 +24,7 @@ import SwiftUI
 /// from 11pt to 15pt.
 struct SectionHeader: View {
     @Environment(YouziI18nConfig.self) private var i18n: YouziI18nConfig?
+    @Environment(\.settingsShowsExplanations) private var showsExplanations
 
     private var resolvedTitle: String {
         let isZh = i18n?.isChinese ?? YouziI18nConfig.shared.isChinese
@@ -73,9 +74,9 @@ struct SectionHeader: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: RapidTheme.Space.md) {
-            VStack(alignment: .leading, spacing: subtitle == nil ? 0 : RapidTheme.Space.xs) {
+            VStack(alignment: .leading, spacing: subtitle == nil || !showsExplanations ? 0 : RapidTheme.Space.xs) {
                 titleText
-                if let resolvedSubtitle {
+                if showsExplanations, let resolvedSubtitle {
                     Text(resolvedSubtitle)
                         .font(RapidFont.secondary)
                         .foregroundStyle(.secondary)

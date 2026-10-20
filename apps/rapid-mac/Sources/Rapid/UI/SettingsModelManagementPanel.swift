@@ -301,6 +301,7 @@ struct SettingsModelManagementPanel: View {
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .settingsExplanation()
             }
         }
     }
@@ -365,6 +366,7 @@ struct SettingsModelManagementPanel: View {
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .settingsExplanation()
             }
         }
     }

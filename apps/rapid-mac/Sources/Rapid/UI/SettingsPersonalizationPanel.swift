@@ -27,6 +27,7 @@ struct SettingsPersonalizationPanel: View {
                 .accessibilityIdentifier("Settings.Personalization.ReplyStyle")
                 Text(t("这是默认偏好，你仍可以在对话中提出不同要求。", "A default preference; you can ask for a different style in a conversation."))
                     .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
+                    .settingsExplanation()
             }
             InstructionEditorSection(
                 t("自定义指令", "Custom Instructions"),
@@ -52,6 +53,7 @@ struct SettingsPersonalizationPanel: View {
                         .accessibilityIdentifier("Settings.Personalization.WaitingText")
                     Text(t("默认：还在等待模型回复，你可以继续等待，或点击停止。最多 160 字，仅作为界面提示，不发给模型。", "Default: Still waiting for the model. You can keep waiting or click Stop. Up to 160 characters, shown only in the interface, never sent to the model."))
                         .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
+                    .settingsExplanation()
                 }
             }
             EffectiveSystemPromptDisclosure(global: config.global, conversation: "",
@@ -68,6 +70,7 @@ struct SettingsPersonalizationPanel: View {
                 .accessibilityIdentifier("Settings.Personalization.UserAddress")
             Text(t("自然使用，不会每次回答都叫一遍。", "Used naturally, not in every answer."))
                 .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
+                    .settingsExplanation()
         }.frame(minWidth: 200, maxWidth: .infinity, alignment: .leading)
         VStack(alignment: .leading, spacing: RapidTheme.Space.xs) {
             Text(t("AI 的名字", "AI's Name")).font(RapidFont.bodyEmphasis)
@@ -76,6 +79,7 @@ struct SettingsPersonalizationPanel: View {
                 .accessibilityIdentifier("Settings.Personalization.AssistantName")
             Text(t("对话中的名字，不改变应用名称。", "A conversational name, not the app name."))
                 .font(RapidFont.caption).foregroundStyle(RapidTheme.textSecondary)
+                    .settingsExplanation()
         }.frame(minWidth: 200, maxWidth: .infinity, alignment: .leading)
     }
 

@@ -621,6 +621,7 @@ struct RapidApp: App {
         Window("Settings", id: "settings") {
             SettingsView()
                 .tint(RapidTheme.brandAmber)
+                .environment(experienceMode)
                 .environment(chatViewModel)
                 .environment(youziProductModel)
                 .environment(youziSharingCenter)

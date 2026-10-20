@@ -81,6 +81,7 @@ struct SettingsModelsPanel: View {
                     .font(RapidFont.bodyEmphasis)
                 Text(i18n.text(zh: "更大的尺寸需要更多内存和生成时间。默认 512 × 512；模型不支持时会返回错误，不会静默放大或修改单次参数。", en: "Larger sizes need more memory and time. Default: 512 × 512. Unsupported explicit sizes are not silently changed."))
                     .font(RapidFont.caption).foregroundStyle(.secondary)
+                    .settingsExplanation()
             }.padding(16)
         }
     }
@@ -240,6 +241,7 @@ private struct SettingsAudioDefaultsPanel: View {
                     if let error = audio.errorMessage { Text(error).foregroundStyle(.red).font(RapidFont.caption) }
                     Text(i18n.text(zh: "打开此页不会自动加载模型。不支持的已保存音色会回退到当前模型的可用音色。", en: "Opening this page never loads a model. Unavailable saved voices fall back to an actual voice of the current model."))
                         .font(RapidFont.caption).foregroundStyle(.secondary)
+                        .settingsExplanation()
                 } else { ProgressView().controlSize(.small) }
                 HStack {
                     Text(i18n.text(zh: "默认语速", en: "Default speed"))
@@ -278,6 +280,7 @@ private struct SettingsAudioDefaultsPanel: View {
                     }
                     Text(i18n.text(zh: "使用当前音色与语速。自动试听默认关闭；切换模型也会遵循此开关。停止会取消本地等待与播放，已提交的模型计算可能仍会完成。", en: "Uses the current voice and speed. Auto-preview is off by default and also applies to model changes. Stop cancels local waiting and playback; already-submitted model computation may still finish."))
                         .font(RapidFont.caption).foregroundStyle(.secondary)
+                        .settingsExplanation()
                 }
             }.padding(16)
         }
@@ -391,6 +394,7 @@ private struct SettingsVideoDefaultsPanel: View {
                 if let error { Text(error).font(RapidFont.caption).foregroundStyle(.red) }
                 Text(i18n.text(zh: "未启动视频模型时保留已保存值，不会为了读取参数自动加载或下载模型。", en: "Stored values are kept while the video model is stopped. Reading capabilities never starts or downloads a model."))
                     .font(RapidFont.caption).foregroundStyle(.secondary)
+                    .settingsExplanation()
             }.padding(16)
         }
     }

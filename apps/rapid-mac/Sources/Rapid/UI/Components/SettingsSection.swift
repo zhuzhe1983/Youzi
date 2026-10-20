@@ -176,6 +176,7 @@ extension View {
 /// what a switch does is the wrong trade.
 struct SettingsRowLabel: View {
     @Environment(YouziI18nConfig.self) private var i18n: YouziI18nConfig?
+    @Environment(\.settingsShowsExplanations) private var showsExplanations
     let title: String
     var description: String? = nil
 
@@ -196,7 +197,7 @@ struct SettingsRowLabel: View {
                 .font(RapidFont.bodyEmphasis)
                 .foregroundStyle(RapidTheme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
-            if let resolvedDescription {
+            if showsExplanations, let resolvedDescription {
                 Text(resolvedDescription)
                     .font(RapidFont.caption)
                     .foregroundStyle(RapidTheme.textSecondary)

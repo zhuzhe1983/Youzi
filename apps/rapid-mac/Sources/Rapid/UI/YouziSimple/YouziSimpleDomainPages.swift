@@ -219,29 +219,27 @@ struct YouziSimpleWorkspacesPage: View {
 struct YouziSimpleHelpersPage: View {
     @Environment(YouziI18nConfig.self) private var i18n
     @Environment(YouziProductModel.self) private var productModel
+    @Environment(ChatViewModel.self) private var chat
+    @Environment(MCPConfigStore.self) private var mcpConfig
     let helpers: [YouziHelper]
     var skills: [YouziSkill] = []
     var connectors: [YouziConnector] = []
     let onStartTask: (YouziHelper) -> Void
 
     @Environment(\.openURL) private var openURL
-    @State private var selectedTab: CapabilityTab = .experts
+    static let selectedTabKey = "youzi.helpers.selectedTab.v1"
+    @AppStorage(selectedTabKey) private var selectedTab: CapabilityTab = .experts
     @State private var showingAddExpertSheet = false
-    @State private var showingAddConnectorSheet = false
 
     // New expert form state
     @State private var newExpertName = ""
     @State private var newExpertSummary = ""
     @State private var newExpertInstructions = ""
 
-    // New connector form state
-    @State private var newConnectorName = ""
-    @State private var newConnectorServerName = ""
-    @State private var newConnectorSummary = ""
-
     enum CapabilityTab: String, CaseIterable, Identifiable {
         case experts = "experts"
         case skills = "skills"
+        case tools = "tools"
         case connectors = "connectors"
 
         var id: String { rawValue }
@@ -250,6 +248,7 @@ struct YouziSimpleHelpersPage: View {
             switch self {
             case .experts: isChinese ? "专家" : "Experts"
             case .skills: isChinese ? "技能" : "Skills"
+            case .tools: isChinese ? "内置工具" : "Built-in Tools"
             case .connectors: isChinese ? "连接" : "Connectors"
             }
         }
@@ -258,6 +257,7 @@ struct YouziSimpleHelpersPage: View {
             switch self {
             case .experts: "person.2.fill"
             case .skills: "bolt.fill"
+            case .tools: "wrench.and.screwdriver"
             case .connectors: "point.3.connected.trianglepath.dotted"
             }
         }
@@ -267,7 +267,8 @@ struct YouziSimpleHelpersPage: View {
         switch tab {
         case .experts: activeHelpers.count
         case .skills: skills.filter { $0.state == .active }.count
-        case .connectors: connectors.filter { $0.state == .active }.count
+        case .tools: chat.builtinDefinitions.count
+        case .connectors: mcpConfig.servers.count
         }
     }
 
@@ -286,6 +287,8 @@ struct YouziSimpleHelpersPage: View {
                     expertsSection
                 case .skills:
                     skillsSection
+                case .tools:
+                    SettingsToolsPanel(showsPageHeader: false, mode: .builtinTools)
                 case .connectors:
                     connectorsSection
                 }
@@ -298,10 +301,6 @@ struct YouziSimpleHelpersPage: View {
         .sheet(isPresented: $showingAddExpertSheet) {
             addExpertSheet
                 .frame(minWidth: 460, minHeight: 400)
-        }
-        .sheet(isPresented: $showingAddConnectorSheet) {
-            addConnectorSheet
-                .frame(minWidth: 460, minHeight: 380)
         }
     }
 
@@ -336,7 +335,7 @@ struct YouziSimpleHelpersPage: View {
                     .foregroundStyle(isSelected ? RapidTheme.brandPrimary : RapidTheme.textPrimary)
                 }
                 .buttonStyle(.plain)
-                    .accessibilityIdentifier("YouziSimpleDomainPages.Button.3bd0888abc")
+                    .accessibilityIdentifier("YouziSimple.Helpers.Tab.\(tab.rawValue)")
             }
         }
         .padding(4)
@@ -453,8 +452,8 @@ struct YouziSimpleHelpersPage: View {
                 Text(i18n.text(zh: "技能来源与使用频次", en: "Skill Sources & Frequency"))
                     .font(RapidFont.bodyEmphasis)
                 Text(i18n.text(
-                    zh: "技能来自系统内置扩展与能力插件。在聊天窗口上方提供常用技能快速呼出入口，系统会自动统计各技能的使用频次并优先呈现常用技能。",
-                    en: "Skills come from built-in system modules and extensions. Frequently used skills appear above the chat compose box."
+                    zh: "技能是一组处理任务的方法和指令，可从聊天输入区选择。搜索、浏览和生成等能力在“内置工具”中管理。",
+                    en: "Skills provide task methods and instructions, selected from the composer. Manage search, browsing and generation in Built-in Tools."
                 ))
                 .font(RapidFont.caption)
                 .foregroundStyle(RapidTheme.textSecondary)
@@ -515,47 +514,12 @@ struct YouziSimpleHelpersPage: View {
 
     @ViewBuilder
     private var connectorsSection: some View {
-        HStack(alignment: .top, spacing: RapidTheme.Space.md) {
-            Image(systemName: "info.circle.fill")
-                .font(.system(size: 18))
-                .foregroundStyle(RapidTheme.brandPrimary)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(i18n.text(zh: "连接器来源与 MCP 配置", en: "Connector Sources & MCP Setup"))
-                    .font(RapidFont.bodyEmphasis)
-                Text(i18n.text(
-                    zh: "连接器基于开源标准 Model Context Protocol (MCP)。可连接本地文件、数据库、GitHub 等外部工具服务，支持自由添加与扩展。",
-                    en: "Connectors adhere to the open-source Model Context Protocol (MCP). Connect local tools and APIs to enhance AI context."
-                ))
-                .font(RapidFont.caption)
-                .foregroundStyle(RapidTheme.textSecondary)
-            }
-            Spacer(minLength: 0)
-            Button {
-                newConnectorName = ""
-                newConnectorServerName = ""
-                newConnectorSummary = ""
-                showingAddConnectorSheet = true
-            } label: {
-                Text(i18n.text(zh: "+ 添加连接器", en: "+ Add Connector"))
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(RapidTheme.brandPrimary)
-                .accessibilityIdentifier("YouziSimpleDomainPages.Button.3d24689c87")
-        }
-        .padding(RapidTheme.Space.md)
-        .background(
-            RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                .fill(RapidTheme.surfaceRaised)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: RapidTheme.Radius.card, style: .continuous)
-                .strokeBorder(RapidTheme.hairline, lineWidth: 1)
-        )
+        SettingsConnectorsPanel()
 
         let activeConnectors = connectors.filter { $0.state == .active }
         if !activeConnectors.isEmpty {
             VStack(alignment: .leading, spacing: RapidTheme.Space.md) {
-                Text(i18n.text(zh: "已配置连接器", en: "Configured Connectors"))
+                Text(i18n.text(zh: "任务中的连接入口", en: "Task Connection Entries"))
                     .font(RapidFont.sectionTitle)
                     .foregroundStyle(RapidTheme.textPrimary)
 
@@ -687,71 +651,7 @@ struct YouziSimpleHelpersPage: View {
         .padding(RapidTheme.Space.xl)
     }
 
-    private var addConnectorSheet: some View {
-        VStack(alignment: .leading, spacing: RapidTheme.Space.lg) {
-            HStack {
-                Text(i18n.text(zh: "添加 MCP 连接器", en: "Add MCP Connector"))
-                    .font(RapidFont.pageTitle)
-                Spacer()
-                Button(i18n.text(zh: "取消", en: "Cancel")) {
-                    showingAddConnectorSheet = false
-                }
-                .buttonStyle(.plain)
-                    .accessibilityIdentifier("YouziSimpleDomainPages.Button.ea51619739")
-            }
 
-            Divider()
-
-            VStack(alignment: .leading, spacing: RapidTheme.Space.sm) {
-                Text(i18n.text(zh: "连接器名称", en: "Connector Name"))
-                    .font(RapidFont.bodyEmphasis)
-                TextField(i18n.text(zh: "例如：SQLite 本地数据库", en: "e.g., SQLite Database"), text: $newConnectorName)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityIdentifier("YouziSimpleDomainPages.TextField.f8529e28e6")
-
-                Text(i18n.text(zh: "MCP 服务标识", en: "MCP Server Name"))
-                    .font(RapidFont.bodyEmphasis)
-                TextField(i18n.text(zh: "例如：sqlite-local", en: "e.g., sqlite-local"), text: $newConnectorServerName)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityIdentifier("YouziSimpleDomainPages.TextField.6223390edc")
-
-                Text(i18n.text(zh: "连接器描述", en: "Description"))
-                    .font(RapidFont.bodyEmphasis)
-                TextField(i18n.text(zh: "简要说明该连接器提供的工具与数据能力", en: "Brief summary of tools"), text: $newConnectorSummary)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityIdentifier("YouziSimpleDomainPages.TextField.eb716c30ee")
-            }
-
-            Spacer()
-
-            HStack {
-                Spacer()
-                Button {
-                    let name = newConnectorName.trimmingCharacters(in: .whitespaces)
-                    guard !name.isEmpty else { return }
-                    let sName = newConnectorServerName.trimmingCharacters(in: .whitespaces).isEmpty
-                        ? name
-                        : newConnectorServerName.trimmingCharacters(in: .whitespaces)
-                    let connector = YouziConnector(
-                        name: name,
-                        summary: newConnectorSummary.trimmingCharacters(in: .whitespaces),
-                        adapter: .mcp,
-                        authentication: .none,
-                        source: YouziManifestSource(kind: .userCreated, identifier: UUID().uuidString, version: "1.0.0"),
-                        state: .active
-                    )
-                    productModel.save(connector)
-                    showingAddConnectorSheet = false
-                } label: {
-                    Text(i18n.text(zh: "保存连接器", en: "Save Connector"))
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(newConnectorName.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .accessibilityIdentifier("YouziSimpleDomainPages.Button.134e0f6169")
-            }
-        }
-        .padding(RapidTheme.Space.xl)
-    }
 }
 
 struct YouziSimpleKnowMePage: View {

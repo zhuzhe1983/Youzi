@@ -10,6 +10,7 @@ struct YouziSimpleShell: View {
     @Environment(ChatViewModel.self) private var chat
     @Environment(YouziSharingCenter.self) private var sharing
     @Environment(YouziProductModel.self) private var productModel
+    @Environment(SettingsRouter.self) private var settingsRouter: SettingsRouter?
     @Environment(YouziI18nConfig.self) private var i18n
 
     @Binding var assistantAlias: String
@@ -78,6 +79,15 @@ struct YouziSimpleShell: View {
                 .accessibilityIdentifier("YouziSimpleShell.Button.200f5ef060")
         }
         .onAppear(perform: seedBundledTemplates)
+        .onAppear(perform: consumeCapabilityRequest)
+        .onChange(of: settingsRouter?.requestedCapabilityTab) { _, _ in consumeCapabilityRequest() }
+    }
+
+    private func consumeCapabilityRequest() {
+        guard let tab = settingsRouter?.requestedCapabilityTab else { return }
+        UserDefaults.standard.set(tab.rawValue, forKey: YouziSimpleHelpersPage.selectedTabKey)
+        selection = .helpers
+        settingsRouter?.requestedCapabilityTab = nil
     }
 
     private var sidebar: some View {

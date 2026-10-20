@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings → Connectors. The whole user-facing surface for MCP (issue #1716).
+/// Capability hub → Connectors. The live MCP management surface (issue #1716).
 ///
 /// Before this, MCP was engine-complete and app-invisible: the only way to use
 /// it from the desktop was to hand-author `~/.config/rapid-mlx/mcp.json` and
@@ -57,8 +57,7 @@ struct SettingsConnectorsPanel: View {
         var id: String { original?.name ?? "" }
     }
 
-    /// The combined 智能体 page supplies the page title; demote this
-    /// header to a section when embedded.
+    /// Embedders may demote the page title to a section heading.
     var showsPageHeader: Bool = true
 
     var body: some View {

@@ -38,6 +38,7 @@ struct SettingsMemoryPanel: View {
                     ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .settingsExplanation()
                 }
             }
             .toggleStyle(.switch)

@@ -144,7 +144,7 @@ struct SettingsVisualFoundationTests {
         #expect(SettingsView.Category.appearance.title == "通用")
         #expect(SettingsView.Category.instructions.title == "个性化")
         #expect(SettingsView.Category.memory.title == "记忆")
-        #expect(SettingsView.Category.tools.title == "智能体")
+        #expect(SettingsView.Category.tools.title == "联网搜索")
         #expect(SettingsView.Category.modelManagement.title == "模型")
         #expect(SettingsView.Category.privacy.title == "安全中心")
         #expect(SettingsView.Category.app.title == "关于")

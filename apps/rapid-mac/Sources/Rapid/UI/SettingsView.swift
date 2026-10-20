@@ -36,6 +36,8 @@ struct SettingsView: View {
     @Environment(UpdateChecker.self) private var appUpdater
     @Environment(SparkleUpdateController.self) private var sparkleUpdater
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openWindow) private var openWindow
+    @Environment(YouziExperienceModeConfig.self) private var experienceMode: YouziExperienceModeConfig?
     /// #260: persisted "hide Dock icon on close" choice. Settings →
     /// App surfaces a toggle so the user can change their mind
     /// without re-triggering the one-time prompt, plus a "Reset
@@ -55,6 +57,7 @@ struct SettingsView: View {
     /// lookups on every click.
     @State private var categorySelection = CategorySelection()
     @AppStorage("youzi.settings.models.tab.v1") private var modelTab: ModelSettingsTab = .chat
+    @AppStorage("youzi.settings.showExplanations.v1") private var showsExplanations = false
     // v0.6.7's NavigationSplitView-with-locked-Binding shape kept the
     // sidebar visible but couldn't kill the title-bar sidebar-toggle
     // pictogram on macOS 14 — `.toolbar(removing: .sidebarToggle)`
@@ -76,8 +79,8 @@ struct SettingsView: View {
         case instructions
         /// Persistent memory entries learned from conversations.
         case memory
-        /// Built-in tools the model can call: on/off per tool, the
-        /// web-search backend + key, and the browse approval mode.
+        /// Search backend and API key. The legacy case name stays compatible
+        /// with recovery deep links; tool management lives in the main window.
         case tools
         /// Issue #1716 — MCP connectors: which servers the engine runs, the
         /// tools they expose, and the per-tool consent record. Separate from
@@ -119,7 +122,7 @@ struct SettingsView: View {
             case .modelService: return "模型服务"
             case .instructions: return "个性化"
             case .memory: return "记忆"
-            case .tools: return "智能体"
+            case .tools: return "联网搜索"
             case .connectors: return "连接器"
             case .performance: return "性能"
             case .experimentalFeatures: return "实验功能"
@@ -135,6 +138,7 @@ struct SettingsView: View {
 
         func localizedTitle(isChinese: Bool) -> String {
             switch self {
+            case .tools: return isChinese ? "联网搜索" : "Web Search"
             case .modelFiles: return isChinese ? "模型文件" : "Model files"
             case .modelLoading: return isChinese ? "模型加载" : "Model loading"
             case .modelService: return isChinese ? "模型服务" : "Model service"
@@ -183,7 +187,7 @@ struct SettingsView: View {
             case .modelService: return "server.rack"
             case .instructions: return "text.bubble.fill"
             case .memory: return "brain"
-            case .tools: return "wrench.and.screwdriver.fill"
+            case .tools: return "magnifyingglass"
             case .connectors: return "powerplug.fill"
             case .performance: return "speedometer"
             case .experimentalFeatures: return "flask.fill"
@@ -577,6 +581,19 @@ struct SettingsView: View {
             }
         }
         .frame(minWidth: Self.minWindowWidth, minHeight: Self.minWindowHeight)
+        .environment(\.settingsShowsExplanations, showsExplanations)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Toggle(isOn: $showsExplanations) {
+                    Label(i18n.text(zh: "显示说明", en: "Show explanations"), systemImage: "info.circle")
+                }
+                .toggleStyle(.button)
+                .labelStyle(.titleAndIcon)
+                .controlSize(.small)
+                .help(i18n.text(zh: "展开或收起各设置页的说明文字", en: "Show or hide explanatory text across Settings"))
+                .accessibilityIdentifier("Settings.ShowExplanations")
+            }
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
             if router.quickstartCatalogReturnPending {
                 VStack(spacing: 0) {
@@ -644,6 +661,14 @@ struct SettingsView: View {
     /// tab the user was last on.
     private func consumeRouterRequest() {
         if let target = router.requestedCategory {
+            if target == .connectors {
+                router.requestedCapabilityTab = .connectors
+                router.requestedCategory = nil
+                experienceMode?.mode = .simple
+                openWindow(id: "main")
+                dismissWindow(id: "settings")
+                return
+            }
             if let requestedTab = router.requestedModelTab {
                 modelTab = requestedTab
             } else if target == .performance {
@@ -673,7 +698,7 @@ struct SettingsView: View {
         case .memory:
             SettingsMemoryPanel()
         case .tools:
-            agentsPanel
+            searchPanel
         case .modelManagement, .connectors, .performance, .experimentalFeatures:
             EmptyView()
         case .appearance:
@@ -694,16 +719,8 @@ struct SettingsView: View {
         }
     }
 
-    private var agentsPanel: some View {
-        VStack(alignment: .leading, spacing: RapidTheme.Space.xl) {
-            SectionHeader(
-                Category.tools.title,
-                subtitle: "内置工具，以及助手可以调用的 MCP 连接器。",
-                emphasis: .page
-            )
-            SettingsToolsPanel(showsPageHeader: false)
-            SettingsConnectorsPanel(showsPageHeader: false)
-        }
+    private var searchPanel: some View {
+        SettingsToolsPanel(mode: .searchService)
     }
 
     private var modelsPanel: some View {

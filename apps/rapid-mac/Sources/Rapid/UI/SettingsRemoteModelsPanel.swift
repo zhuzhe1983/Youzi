@@ -50,6 +50,7 @@ struct RemoteModelEditor: View {
                         .accessibilityIdentifier("Settings.Remote.ReuseService")
                         Text(i18n.text(zh: "只沿用服务器地址、API Key 和连接选项；模型名称与参数单独设置。", en: "Copies the server URL, API key and connection options only. Choose the model and its parameters separately."))
                             .font(RapidFont.caption).foregroundStyle(.secondary)
+                            .settingsExplanation()
                     }
                     TextField("Base URL", text: $model.baseURL, prompt: Text("https://api.example.com/v1"))
                         .accessibilityIdentifier("Settings.Remote.BaseURL")
@@ -112,6 +113,7 @@ struct RemoteModelEditor: View {
                         .accessibilityIdentifier("Settings.Remote.DisplayName")
                     Text(i18n.text(zh: "默认沿用远程模型名称，可修改；保存后显示在对应场景的模型列表中。", en: "Defaults to the remote model name. Rename it here for the workflow model list."))
                         .font(RapidFont.caption).foregroundStyle(.secondary)
+                        .settingsExplanation()
                     if model.slot == .image || model.slot == .video {
                         Text(model.slot == .image
                              ? i18n.text(zh: "需要兼容 /images/generations；图片理解能力不等于图片生成。", en: "Requires /images/generations compatibility; image input alone is not image generation.")
@@ -144,6 +146,7 @@ struct RemoteModelEditor: View {
                 }.formStyle(.grouped)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(i18n.text(zh: "仅读取 /models，不生成内容。优先按服务声明筛选，名称匹配仅作候选；均不代表接口已验证。未识别的模型仍可手动添加，参数以服务商说明为准。", en: "Only reads /models, without generation. Filters use provider metadata first, then name hints; neither verifies API compatibility. Unknown models can still be added manually. Use provider-documented parameters."))
+                        .settingsExplanation()
                     Text(i18n.text(zh: "使用远程模型会发送本次请求内容，可能包含聊天上下文、记忆、附件和工具结果，并可能产生费用。", en: "Using a remote model sends request content, potentially including chat history, memory, attachments and tool results, and may incur charges."))
                     if let result { Text(result).foregroundStyle(.green) }
                     if let failure { Text(failure).foregroundStyle(.red) }

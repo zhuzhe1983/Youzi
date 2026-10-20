@@ -49,6 +49,8 @@ final class SettingsRouter {
     var requestedCategory: SettingsView.Category?
     var requestedModelTab: ModelSettingsTab?
     var requestedModelFileKind: ModelKind?
+    /// Management surfaces live in the main window, outside Settings.
+    var requestedCapabilityTab: YouziSimpleHelpersPage.CapabilityTab?
 
     /// One-shot handoff used by Quickstart's Browse all round trip. The
     /// onboarding sheet must be lowered before opening a separate Settings
