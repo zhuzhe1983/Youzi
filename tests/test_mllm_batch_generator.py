@@ -927,8 +927,8 @@ def test_step_heterogeneous_requests_use_per_row_loop(monkeypatch):
         {"temp": 0.3, "top_p": 0.80},
     ]
     # Both got their per-request cache populated for future reuse.
-    assert req_a._cached_sampler[0] == (0.7, 0.95)
-    assert req_b._cached_sampler[0] == (0.3, 0.80)
+    assert req_a._cached_sampler[0] == (0.7, 0.95, 0.0, 0, None, 4)
+    assert req_b._cached_sampler[0] == (0.3, 0.80, 0.0, 0, None, 4)
     # Shared batch sampler must NOT have been populated for the mixed batch
     # (homogeneous fast path is the only writer).
     assert gen._shared_batch_sampler is None
@@ -956,7 +956,7 @@ def test_step_b1_homogeneous_still_uses_shared_sampler(monkeypatch):
 
     assert len(make_sampler_calls) == 1
     assert gen._shared_batch_sampler is not None
-    assert gen._shared_batch_sampler[0] == (0.7, 0.95)
+    assert gen._shared_batch_sampler[0] == (0.7, 0.95, 0.0, 0, 4)
 
 
 def test_step_batch_uses_dataclass_defaults(monkeypatch):
@@ -1026,7 +1026,7 @@ def test_step_heterogeneous_then_homogeneous_populates_shared(monkeypatch):
         ],
     )
     assert gen._shared_batch_sampler is not None
-    assert gen._shared_batch_sampler[0] == (0.5, 0.85)
+    assert gen._shared_batch_sampler[0] == (0.5, 0.85, 0.0, 0, 4)
     # 3 total: 2 from the het batch + 1 fresh for the new homogeneous key.
     assert len(make_sampler_calls) == 3
 

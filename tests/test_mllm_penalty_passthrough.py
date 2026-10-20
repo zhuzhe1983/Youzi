@@ -60,7 +60,7 @@ def test_neutral_defaults_skip_processor_allocation():
     row = mx.ones((1, 8))
     out = _maybe_apply_penalty_processors(req, row)
     assert out is row, "neutral knobs must return the input row unchanged"
-    assert not hasattr(req, "_cached_penalty_processors"), (
+    assert req._cached_penalty_processors is None, (
         "neutral defaults must not allocate processor cache"
     )
 
@@ -262,6 +262,9 @@ async def test_engine_stream_generate_mllm_forwards_penalty_kwargs():
         prompt="hi",
         max_tokens=8,
         prefix_boundary=5,
+        top_k=12,
+        min_p=0.15,
+        seed=0,
         repetition_penalty=1.7,
         presence_penalty=0.3,
         frequency_penalty=0.4,
@@ -276,6 +279,9 @@ async def test_engine_stream_generate_mllm_forwards_penalty_kwargs():
     assert captured["frequency_penalty"] == 0.4
     assert captured["logits_processors"] == [grammar, budget, suppression]
     assert captured["prefix_boundary"] == 5
+    assert captured["top_k"] == 12
+    assert captured["min_p"] == 0.15
+    assert captured["seed"] == 0
 
     captured.clear()
     async for _ in engine.stream_generate(prompt="hi", max_tokens=8):
@@ -298,9 +304,15 @@ async def test_engine_stream_generate_mllm_forwards_penalty_kwargs():
         prompt="hi",
         max_tokens=8,
         prefix_boundary=5,
+        top_k=12,
+        min_p=0.15,
+        seed=0,
         grammar_logits_processor=grammar,
         reasoning_budget_logits_processor=budget,
         suppressed_tokens_logits_processor=suppression,
     )
     assert captured["logits_processors"] == [grammar, budget, suppression]
     assert captured["prefix_boundary"] == 5
+    assert captured["top_k"] == 12
+    assert captured["min_p"] == 0.15
+    assert captured["seed"] == 0

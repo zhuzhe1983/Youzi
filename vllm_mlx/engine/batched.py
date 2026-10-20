@@ -130,11 +130,13 @@ _HARMONY_NO_THINKING_SUFFIX_TOKENS = (
 # processors as an ordered list. A route or engine refactor must therefore
 # update one contract instead of four independent generate/stream branches.
 _LANE_PARITY_SAMPLING_KEYS = (
+    "top_k",
+    "min_p",
+    "seed",
     "repetition_penalty",
     "presence_penalty",
     "frequency_penalty",
 )
-_TEXT_ONLY_SAMPLING_KEYS = ("top_k", "min_p", "seed")
 _LANE_PARITY_PROCESSOR_KEYS = (
     "grammar_logits_processor",
     "reasoning_budget_logits_processor",
@@ -2412,14 +2414,9 @@ class BatchedEngine(BaseEngine):
             # fallback because the parser sees only the model
             # continuation, not the prefixed envelope).
             mllm_assistant_text_prefix = kwargs.pop("_assistant_text_prefix", "") or ""
-            # OpenAI-spec penalty passthrough (#512). Mirror the LLM
-            # branch below: pop the three penalty knobs out of kwargs
-            # and forward to the MLLM scheduler so the route-layer
-            # cascade (chat / completions / responses / anthropic) reaches
-            # the per-request logits processors inside the VLM batch
-            # generator. ``top_k`` / ``min_p`` / ``seed`` MLLM passthrough
-            # is intentionally NOT in scope here — see #512 follow-ups.
-            _mllm_penalty_kwargs = {
+            # Preserve the same sampling controls as the text lane, including
+            # seed=0 and per-request top-k/min-p filters (#3496).
+            _mllm_sampling_kwargs = {
                 key: kwargs.pop(key)
                 for key in _LANE_PARITY_SAMPLING_KEYS
                 if key in kwargs
@@ -2445,7 +2442,7 @@ class BatchedEngine(BaseEngine):
                     on_request_committed=request_committed,
                     logits_processors=_mllm_logits_processors,
                     prefix_boundary=prefix_boundary,
-                    **_mllm_penalty_kwargs,
+                    **_mllm_sampling_kwargs,
                 )
             except BaseException:
                 if owns_admission:
@@ -2478,9 +2475,7 @@ class BatchedEngine(BaseEngine):
         # sampler, repetition/presence/frequency_penalty via mlx-lm's
         # make_logits_processors().
         _sp_kwargs = {
-            key: kwargs.pop(key)
-            for key in (*_LANE_PARITY_SAMPLING_KEYS, *_TEXT_ONLY_SAMPLING_KEYS)
-            if key in kwargs
+            key: kwargs.pop(key) for key in _LANE_PARITY_SAMPLING_KEYS if key in kwargs
         }
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
@@ -2663,9 +2658,8 @@ class BatchedEngine(BaseEngine):
 
         if self._is_mllm and self._mllm_scheduler:
             # Use MLLM scheduler for all streaming when model is multimodal
-            # OpenAI-spec penalty passthrough (#512) — see ``generate()``
-            # MLLM branch above for the rationale.
-            _mllm_penalty_kwargs = {
+            # Same sampling contract as the non-streaming MLLM path.
+            _mllm_sampling_kwargs = {
                 key: kwargs.pop(key)
                 for key in _LANE_PARITY_SAMPLING_KEYS
                 if key in kwargs
@@ -2692,7 +2686,7 @@ class BatchedEngine(BaseEngine):
                     on_request_committed=commit_admission,
                     logits_processors=_mllm_logits_processors,
                     prefix_boundary=prefix_boundary,
-                    **_mllm_penalty_kwargs,
+                    **_mllm_sampling_kwargs,
                 )
             except BaseException:
                 release_uncommitted_admission()
@@ -2743,9 +2737,7 @@ class BatchedEngine(BaseEngine):
 
         # Extended sampling params (#355) — see generate() for rationale.
         _sp_kwargs = {
-            key: kwargs.pop(key)
-            for key in (*_LANE_PARITY_SAMPLING_KEYS, *_TEXT_ONLY_SAMPLING_KEYS)
-            if key in kwargs
+            key: kwargs.pop(key) for key in _LANE_PARITY_SAMPLING_KEYS if key in kwargs
         }
         try:
             sampling_params = SamplingParams(
@@ -3896,6 +3888,8 @@ class BatchedEngine(BaseEngine):
                 "total_completion_tokens",
                 "num_requests_cancelled",
                 "num_requests_cancelled_via_disconnect",
+                "num_repetition_loop_stops",
+                "num_repetition_loop_breaks",
                 "metal_active_memory_gb",
                 "metal_peak_memory_gb",
                 "metal_cache_memory_gb",
