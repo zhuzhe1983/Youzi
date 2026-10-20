@@ -1105,3 +1105,170 @@ def test_schnell_rejects_ineffective_guidance():
     with pytest.raises(ImageParameterError, match="guidance"):
         engine.generate(prompt="fox", guidance=4)
     assert engine._model is None
+
+
+@pytest.mark.parametrize(
+    "model,kwargs,message",
+    [
+        ("Qwen/Qwen-Image-2.1", {"image_paths": ["a", "b"]}, "one input image"),
+        ("Qwen/Qwen-Image-Edit-2509", {}, "requires at least one input image"),
+        ("Qwen/Qwen-Image", {"image_paths": ["a"]}, "text-to-image only"),
+        ("HiDream-O1-Image-Dev", {"prompt": "x" * 4097}, "4096 characters"),
+        ("HiDream-O1-Image-Dev", {"num_inference_steps": 13}, "28-step"),
+        ("HiDream-O1-Image-Dev", {"width": None}, "between 256 and 2048"),
+        ("HiDream-O1-Image-Dev", {"width": 1008}, "multiples of 32"),
+        ("HiDream-O1-Image-Dev", {"guidance": 4.0}, "omit the guidance"),
+        ("HiDream-O1-Image-Dev", {"negative_prompt": "blurry"}, "negative_prompt"),
+        ("sdxl-base", {"height": 2049}, "between 256 and 2048"),
+        ("sdxl-base", {"height": 1009}, "multiples of 8"),
+        ("bonsai-image", {"prompt": "x" * 4097}, "4096 characters"),
+        ("bonsai-image", {"num_inference_steps": 13}, "4-step"),
+        ("bonsai-image", {"width": 255}, "between 256 and 2048"),
+        ("bonsai-image", {"height": 1008}, "multiples of 32"),
+        ("bonsai-image", {"guidance": 4.0}, "guidance 1.0"),
+        ("bonsai-image", {"negative_prompt": "blurry"}, "negative_prompt"),
+        ("sd35-large", {"prompt": "x" * 4097}, "4096 characters"),
+        ("sd35-large", {"num_inference_steps": 13}, "28-step"),
+        ("sd35-large", {"width": 1537}, "between 256 and 1536"),
+        ("sd35-large", {"height": 1000}, "multiples of 16"),
+        ("sd35-large", {"guidance": float("nan")}, "finite value"),
+        ("sd35-large", {"guidance": 21.0}, "between 0 and 20"),
+        ("Qwen/Qwen-Image-2.1", {"guidance": 2}, "true CFG"),
+        ("filipstrand/Z-Image-Turbo-mflux-4bit", {"guidance": 7}, "guidance"),
+        ("black-forest-labs/FLUX.1-schnell", {"negative_prompt": "blur"}, "negative_prompt"),
+    ],
+)
+@pytest.mark.parametrize("path", ["backend", "adapter", "metadata"])
+def test_invalid_requests_precede_workers_and_cold_loading(
+    monkeypatch, model, kwargs, message, path
+):
+    from unittest.mock import Mock
+
+    from vllm_mlx.image.engine import ImageRequestError
+
+    adapter = ImageEngine(model)
+    backend = adapter._engine
+    load = Mock(side_effect=AssertionError("invalid request reached loader"))
+    assets = Mock(side_effect=AssertionError("invalid request reached assets"))
+    monkeypatch.setattr(backend, "_ensure_loaded", load)
+    monkeypatch.setattr(backend, "_ensure_runtime_assets", assets)
+    request = {"prompt": "fox", "num_inference_steps": backend.default_steps}
+    request.update(kwargs)
+    generate = (
+        backend.generate if path == "backend" else adapter.generate
+        if path == "adapter" else adapter.generate_with_metadata
+    )
+    with pytest.raises(ImageRequestError, match=message):
+        generate(**request)
+    load.assert_not_called()
+    assets.assert_not_called()
+    assert backend._active_seq == 0
+    assert adapter._worker is None
+
+
+@pytest.mark.parametrize("endpoint", ["generations", "edits"])
+@pytest.mark.parametrize("kind", ["request", "parameter", "runtime", "cancel"])
+def test_image_routes_distinguish_request_runtime_and_cancellation(
+    client, monkeypatch, endpoint, kind
+):
+    from unittest.mock import Mock
+
+    from vllm_mlx.image.engine import ImageRequestError
+
+    errors = {
+        "request": ImageRequestError("caller mistake"),
+        "parameter": ImageParameterError("unsupported control"),
+        "runtime": ImageRuntimeError("offline weights"),
+        "cancel": ImageGenerationCancelled("cancelled"),
+    }
+    engine = _FakeImageEngine(is_edit=endpoint == "edits")
+    engine.generate = Mock(side_effect=errors[kind])
+    _patch_engine(monkeypatch, engine)
+    if endpoint == "generations":
+        response = client.post("/v1/images/generations", json={"prompt": "fox"})
+    else:
+        response = client.post(
+            "/v1/images/edits",
+            data={"prompt": "fox"},
+            files={"image": ("source.png", _png_upload_bytes(), "image/png")},
+        )
+    if kind == "cancel":
+        assert response.status_code == 200
+        assert response.json()["cancelled"] is True
+        assert response.json()["data"] == []
+    else:
+        caller_error = kind in {"request", "parameter"}
+        assert response.status_code == (400 if caller_error else 500)
+        error = {
+            "message": str(errors[kind]),
+            "type": "invalid_request_error" if caller_error else "image_generation_error",
+            "code": "unsupported_image_parameters" if kind == "parameter"
+            else "invalid_image_request" if kind == "request" else "image_generation_failed",
+        }
+        if caller_error:
+            error["param"] = None
+        assert response.json() == {"error": error}
+
+
+@pytest.mark.parametrize("path", ["backend", "adapter", "metadata"])
+def test_hidream_token_limit_rejects_before_weights_for_all_paths(monkeypatch, path):
+    import asyncio
+    import sys
+    from unittest.mock import Mock
+
+    from vllm_mlx.image.engine import ImageRequestError
+
+    runtime = types.ModuleType("vllm_mlx.image.hidream_runtime.runtime")
+    runtime.MAX_PROMPT_TOKENS = 1024
+    runtime._encode_prompt_ids = lambda *_args: types.SimpleNamespace(shape=(1, 1025))
+    monkeypatch.setitem(sys.modules, runtime.__name__, runtime)
+    adapter = ImageEngine("HiDream-O1-Image-Dev")
+    backend = adapter._engine
+    backend._prompt_tokenizer = object()
+    load = Mock(side_effect=AssertionError("token limit reached weight loader"))
+    monkeypatch.setattr(backend, "_ensure_loaded", load)
+    generate = (
+        backend.generate if path == "backend" else adapter.generate
+        if path == "adapter" else adapter.generate_with_metadata
+    )
+    try:
+        with pytest.raises(ImageRequestError, match="limited to 1024 tokens"):
+            generate(prompt="fox", num_inference_steps=28)
+        load.assert_not_called()
+        assert not adapter.is_resident
+    finally:
+        asyncio.run(adapter.stop())
+
+
+def test_image_adapter_rejects_unknown_residency_mode_before_worker():
+    engine = ImageEngine("Qwen/Qwen-Image")
+    with pytest.raises(ValueError, match="unsupported image residency mode"):
+        engine.ensure_resident(mode="upscaling")
+    assert engine._worker is None
+
+
+async def test_edit_auth_rejects_before_receiving_multipart_body(monkeypatch):
+    from fastapi import HTTPException
+
+    from vllm_mlx.routes import images
+
+    def reject(_bearer):
+        raise HTTPException(401, "unauthorized")
+
+    monkeypatch.setattr(images, "allows_anonymous_inference", lambda _: False)
+    monkeypatch.setattr(images, "_verify_api_key_values", reject)
+
+    async def forbidden(*_args):
+        pytest.fail("unauthorized image request reached multipart body")
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    await images.ImageBodyLimitMiddleware(forbidden)(
+        {"type": "http", "method": "POST", "path": "/v1/images/edits",
+         "headers": [(b"content-type", b"multipart/form-data; boundary=x")]},
+        forbidden, send,
+    )
+    assert sent[0]["status"] == 401

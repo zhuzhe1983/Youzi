@@ -16,8 +16,8 @@ from vllm_mlx.runtime.image_lane import ImageEngine
 
 
 @pytest.fixture
-def lane(monkeypatch):
-    engine = ImageEngine("filipstrand/Z-Image-Turbo-mflux-4bit")
+def lane(monkeypatch, request):
+    engine = ImageEngine(getattr(request, "param", "filipstrand/Z-Image-Turbo-mflux-4bit"))
     events = []
 
     class ThreadBoundModel:
@@ -67,6 +67,7 @@ def test_preload_repeated_parallel_callers_and_release_share_one_owner(lane):
         engine.generate(prompt="no resurrection")
 
 
+@pytest.mark.parametrize("lane", ["Runpod/FLUX.2-klein-4B-mflux-4bit"], indirect=True)
 def test_mode_reload_stays_on_owner(lane):
     engine, events = lane
     # The real dual-mode adapter reuses this boundary for each variant.

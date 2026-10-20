@@ -261,6 +261,25 @@ def _generate_one(img_engine, request: ImageGenerationRequest, seed: int) -> tup
     return result if render else (result, None)
 
 
+def _invalid_image_request(exc: Exception) -> HTTPException:
+    from ..image.engine import ImageParameterError
+
+    return HTTPException(
+        status_code=400,
+        detail={
+            "error": {
+                "message": str(exc),
+                "type": "invalid_request_error",
+                # Preserve Youzi's existing generation-control error contract.
+                "code": "unsupported_image_parameters"
+                if isinstance(exc, ImageParameterError)
+                else "invalid_image_request",
+                "param": None,
+            }
+        },
+    )
+
+
 @router.post("/v1/images/generations")
 async def create_image(request: ImageGenerationRequest = Body(...)):
     """Generate one or more images from a text prompt.
@@ -269,7 +288,7 @@ async def create_image(request: ImageGenerationRequest = Body(...)):
     responses are not offered by the local lane (there is no object store to
     host the bytes) — callers must request ``b64_json``.
     """
-    from ..image.engine import ImageParameterError, ImageRuntimeError
+    from ..image.engine import ImageRequestError, ImageRuntimeError
 
     img_engine = _image_engine(request.model)
 
@@ -327,11 +346,8 @@ async def create_image(request: ImageGenerationRequest = Body(...)):
             # error, so a cancelled multi-image batch keeps its earlier images.
             cancelled = True
             break
-        except ImageParameterError as exc:
-            raise HTTPException(status_code=400, detail={"error": {
-                "message": str(exc), "type": "invalid_request_error",
-                "code": "unsupported_image_parameters",
-            }}) from exc
+        except ImageRequestError as exc:
+            raise _invalid_image_request(exc) from exc
         except ImageRuntimeError as exc:
             raise HTTPException(
                 status_code=500,
@@ -501,7 +517,11 @@ async def edit_image(
     drive a global instruction edit (no mask). Returns the same
     ``{created, data:[{b64_json}]}`` envelope as generations.
     """
-    from ..image.engine import ImageGenerationCancelled, ImageRuntimeError
+    from ..image.engine import (
+        ImageGenerationCancelled,
+        ImageRequestError,
+        ImageRuntimeError,
+    )
 
     img_engine = _image_engine(model)
 
@@ -668,6 +688,8 @@ async def edit_image(
                 # finished (matching the generations envelope), never an error.
                 cancelled = True
                 break
+            except ImageRequestError as exc:
+                raise _invalid_image_request(exc) from exc
             except ImageRuntimeError as exc:
                 raise HTTPException(
                     status_code=500,

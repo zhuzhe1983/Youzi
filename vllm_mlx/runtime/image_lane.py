@@ -18,6 +18,7 @@ import threading
 from ..image.engine import (
     ImageGenerationCancelled,
     ImageGenerationEngine,
+    ImageRequestError,
     ImageRuntimeError,
     _detect_family,
 )
@@ -25,6 +26,7 @@ from ..image.engine import (
 __all__ = [
     "ImageEngine",
     "ImageGenerationCancelled",
+    "ImageRequestError",
     "ImageRuntimeError",
     "require_image_runtime_or_exit",
 ]
@@ -107,13 +109,21 @@ class ImageEngine:
 
     def ensure_resident(self, *, mode: str | None = None) -> None:
         """Eagerly materialize lazy image weights for budgeted residency."""
-        if mode not in (None, "generation", "editing"):
-            raise ValueError(f"unsupported image residency mode: {mode!r}")
+        self.validate_residency_mode(mode)
         # ``None`` preserves the engine's family-aware default. In particular,
         # edit-only checkpoints must not be forced through the generation
         # loader when an older client omits the newly optional mode field.
         for_edit = None if mode is None else mode == "editing"
         self._execute(self._engine._ensure_loaded, for_edit=for_edit)  # noqa: SLF001
+
+    def validate_residency_mode(self, mode: str | None) -> None:
+        """Reject unsupported explicit modes without touching model assets."""
+        if mode not in (None, "generation", "editing"):
+            raise ValueError(f"unsupported image residency mode: {mode!r}")
+        if mode == "generation" and not self.supports_generation:
+            raise ImageRequestError(f"{self.family} does not support image generation.")
+        if mode == "editing" and not self.supports_editing:
+            raise ImageRequestError(f"{self.family} does not support image editing.")
 
     def get_stats(self) -> dict:
         """Route-facing engine surface (mirrors ``BaseEngine.get_stats``).
@@ -175,6 +185,16 @@ class ImageEngine:
         image_paths: list[str] | None = None,
     ) -> bytes:
         """Generate one image; returns PNG bytes. Raises ``ImageRuntimeError``."""
+        self._engine.validate_request(
+            prompt=prompt,
+            width=width,
+            height=height,
+            num_inference_steps=num_inference_steps,
+            seed=seed,
+            guidance=guidance,
+            negative_prompt=negative_prompt,
+            image_paths=image_paths,
+        )
         return self._execute(
             self._engine.generate,
             prompt=prompt,
@@ -189,6 +209,7 @@ class ImageEngine:
 
     def generate_with_metadata(self, **kwargs) -> tuple[bytes, dict]:
         """Keep the receipt and PNG on the same owner thread and invocation."""
+        self._engine.validate_request(**kwargs)
         return self._execute(self._engine.generate_with_metadata, **kwargs)
 
     def generate_warmup(self) -> None:

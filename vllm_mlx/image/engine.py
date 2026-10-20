@@ -92,7 +92,11 @@ class ImageRuntimeError(RuntimeError):
     """Safe, actionable generation error suitable for the public API."""
 
 
-class ImageParameterError(ImageRuntimeError):
+class ImageRequestError(ImageRuntimeError):
+    """The request is invalid for this model; retrying unchanged cannot succeed."""
+
+
+class ImageParameterError(ImageRequestError):
     """Unsupported generation controls; fail before loading or rendering."""
 
 
@@ -574,7 +578,7 @@ class ImageGenerationEngine:
                 f"Could not tokenize the HiDream prompt: {exc}"
             ) from exc
         if token_count > MAX_PROMPT_TOKENS:
-            raise ImageRuntimeError(
+            raise ImageRequestError(
                 f"HiDream-O1 prompts are limited to {MAX_PROMPT_TOKENS} tokens."
             )
 
@@ -594,7 +598,7 @@ class ImageGenerationEngine:
                 model_path=model_path,
                 model_config=ModelConfig.flux2_klein_4b(),
             )
-        raise ImageRuntimeError(f"{self.family} does not support image editing.")
+        raise ImageRequestError(f"{self.family} does not support image editing.")
 
     def _verify_weights_complete(self) -> None:
         """Refuse to build a model out of a half-downloaded checkpoint.
@@ -998,7 +1002,7 @@ class ImageGenerationEngine:
         png = self.generate(**kwargs, _metadata=metadata)
         return png, metadata
 
-    def generate(
+    def validate_request(
         self,
         *,
         prompt: str,
@@ -1009,14 +1013,8 @@ class ImageGenerationEngine:
         guidance: float | None = None,
         negative_prompt: str | None = None,
         image_paths: list[str] | None = None,
-        _metadata: dict | None = None,
-    ) -> bytes:
-        """Generate one image and return it as PNG bytes.
-
-        ``image_paths`` selects editing for dual-capability models and is
-        required by edit-only checkpoints. Unsupported combinations fail loud
-        instead of silently ignoring the conditioning image.
-        """
+    ) -> None:
+        """Validate asset-independent controls without starting a worker or loading."""
         input_paths = image_paths or []
         editing = bool(input_paths)
         if num_inference_steps is None:
@@ -1149,6 +1147,40 @@ class ImageGenerationEngine:
                     "Qwen-Image 2.1 true CFG requires guidance >1 and a nonempty "
                     "negative_prompt together; omit both for guidance 1.0."
                 )
+
+    def generate(
+        self,
+        *,
+        prompt: str,
+        width: int | None = 1024,
+        height: int | None = 1024,
+        num_inference_steps: int | None = None,
+        seed: int = 0,
+        guidance: float | None = None,
+        negative_prompt: str | None = None,
+        image_paths: list[str] | None = None,
+        _metadata: dict | None = None,
+    ) -> bytes:
+        """Generate one image and return it as PNG bytes.
+
+        ``image_paths`` selects editing for dual-capability models and is
+        required by edit-only checkpoints. Unsupported combinations fail loud
+        instead of silently ignoring the conditioning image.
+        """
+        self.validate_request(
+            prompt=prompt,
+            width=width,
+            height=height,
+            num_inference_steps=num_inference_steps,
+            seed=seed,
+            guidance=guidance,
+            negative_prompt=negative_prompt,
+            image_paths=image_paths,
+        )
+        input_paths = image_paths or []
+        editing = bool(input_paths)
+        if num_inference_steps is None:
+            num_inference_steps = self.default_edit_steps if editing else self.default_steps
         started = time.monotonic()
 
         with self._lock:

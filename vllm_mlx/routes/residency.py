@@ -21,7 +21,7 @@ from ..middleware.exception_handlers import (
     register_request_model,
     register_request_path,
 )
-from ..model_aliases import resolve_profile
+from ..model_aliases import resolve_model, resolve_profile
 from ..runtime.model_loading_policy import Scene, validate_pools
 from ..runtime.resident_models import (
     ResidentModelBusyError,
@@ -212,6 +212,22 @@ def _resolved_group_for_profile(modality: str) -> str:
     return "assistant" if modality in {"text", "vision", "text-diffusion"} else modality
 
 
+def _image_request_failure(exc: Exception) -> HTTPException | None:
+    """Preserve actionable image validation through loader wrappers."""
+    from ..image.engine import ImageRequestError
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    for _ in range(32):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        if isinstance(current, ImageRequestError):
+            return HTTPException(status_code=400, detail=str(current))
+        current = current.__cause__
+    return None
+
+
 @router.post("/v1/models/load")
 async def load_resident_model(request: ModelLoadRequest):
     """Load a model into the current process, evicting idle LRU entries first."""
@@ -230,6 +246,18 @@ async def load_resident_model(request: ModelLoadRequest):
         path_profile = (
             resolve_profile(request.model_path) if request.model_path else None
         )
+        loader_profile = model_profile or path_profile
+        if (
+            request.image_mode is not None
+            and loader_profile is not None
+            and loader_profile.modality == "image-gen"
+        ):
+            from ..runtime.image_lane import ImageEngine
+
+            # Match the dynamic loader's checkpoint resolution before manager
+            # admission can evict or pause any currently running model.
+            load_ref = resolve_model(request.model_path or loader_profile.hf_path)
+            ImageEngine(load_ref).validate_residency_mode(request.image_mode)
         # The loader consumes model_path when supplied, so only that
         # checkpoint's metadata may authorize destructive admission. An
         # unknown override falls back to keep-then-commit rather than trusting
@@ -299,6 +327,9 @@ async def load_resident_model(request: ModelLoadRequest):
     except Exception as exc:
         from ..runtime.video_lane import VideoRuntimeError
 
+        image_failure = _image_request_failure(exc)
+        if image_failure is not None:
+            raise image_failure from exc
         if isinstance(exc, VideoRuntimeError):
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         raise HTTPException(

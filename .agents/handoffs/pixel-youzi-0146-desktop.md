@@ -1,4 +1,4 @@
-# Youzi 0.1.46 desktop backports
+# Youzi 0.14.6 desktop backports
 
 - Owner: Pixel; receiving role: Atlas.
 - Branch: `fix/youzi-0146-desktop`; base: `7992b761`.
