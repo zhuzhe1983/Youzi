@@ -4,28 +4,6 @@ import AppKit
 import SwiftUI
 @testable import Rapid
 
-private struct RemoteKeychainFixture: KeychainItemAccessing {
-    let result: KeychainReadResult
-    var writesSucceed = false
-    func query(account: String, service: String) -> KeychainReadResult { result }
-    func upsert(account: String, service: String, secret: String) -> Bool { writesSucceed }
-    func remove(account: String, service: String) -> Bool { writesSucceed }
-}
-
-@Suite("Remote credential availability")
-struct RemoteCredentialAvailabilityTests {
-    @Test("Unavailable credentials fail closed instead of becoming an unauthenticated request")
-    func unavailableIsNotMissing() throws {
-        let id = UUID()
-        let blocked = RemoteModelKeychain(items: RemoteKeychainFixture(result: .unavailable))
-        #expect(throws: (any Error).self) { try blocked.read(id) }
-        #expect(throws: (any Error).self) { try blocked.write("fixture", for: id) }
-        #expect(throws: (any Error).self) { try blocked.write(nil, for: id) }
-        #expect(try RemoteModelKeychain(items: RemoteKeychainFixture(result: .missing)).read(id) == nil)
-        #expect(try RemoteModelKeychain(items: RemoteKeychainFixture(result: .found("fixture"))).read(id) == "fixture")
-    }
-}
-
 /// Fake credentials and isolated defaults only: never inspect the user's Keychain.
 private final class RemoteTestSecrets: RemoteModelSecrets, @unchecked Sendable {
     private let lock = NSLock()
@@ -34,7 +12,7 @@ private final class RemoteTestSecrets: RemoteModelSecrets, @unchecked Sendable {
     func read(_ id: UUID) throws -> String? { lock.withLock { values[id] } }
     func write(_ value: String?, for id: UUID) throws {
         try lock.withLock {
-            if failWrites { throw RemoteModelError.keychain(-1) }
+            if failWrites { throw RemoteModelError.corruptSettings }
             values[id] = value?.isEmpty == false ? value : nil
         }
     }

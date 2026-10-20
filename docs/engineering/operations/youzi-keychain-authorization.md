@@ -1,5 +1,7 @@
 # Remote model Keychain authorization recovery
 
+Superseded on 2026-10-20 at the user's request: remote model credentials now belong to [Youzi settings](../decisions/2026-10-20-youzi-remote-settings-keys.md). The interactive authorization flow below is historical and has been removed.
+
 Owner: Atlas (credential architecture/integration), Pixel (editor/recovery UI), local Mac. Role files are absent. This follow-up repairs the 0.14.5 regression without changing model protocols, credentials, Keychain ACLs, or published release assets.
 
 ## Failure and fix

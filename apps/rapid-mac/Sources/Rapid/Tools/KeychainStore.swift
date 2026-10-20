@@ -33,88 +33,35 @@ extension KeychainStoring {
 
 protocol KeychainItemAccessing: Sendable {
     func query(account: String, service: String) -> KeychainReadResult
-    func queryAuthorizing(account: String, service: String) async -> KeychainReadResult
     func upsert(account: String, service: String, secret: String) -> Bool
     func remove(account: String, service: String) -> Bool
 }
 
-extension KeychainItemAccessing {
-    // In-memory stores and test doubles have no system authorization UI.
-    func queryAuthorizing(account: String, service: String) async -> KeychainReadResult {
-        query(account: account, service: service)
-    }
-}
-
-/// The legacy login-keychain interaction flag is process-wide. All app-owned
-/// SecItem calls must pass this gate. Background callers fail fast while a
-/// user-requested authorization is pending; none wait for a system dialog.
-final class KeychainInteractionGate: @unchecked Sendable {
-    static let shared = KeychainInteractionGate { SecKeychainSetUserInteractionAllowed($0) }
-    private let lock = NSLock()
-    private let setInteraction: @Sendable (Bool) -> OSStatus
-    private var disabled = false
-
-    init(setInteraction: @escaping @Sendable (Bool) -> OSStatus) {
-        self.setInteraction = setInteraction
-    }
-
-    func perform<T>(interactive: Bool = false, unavailable: T, _ operation: () -> T) -> T {
-        guard lock.try() else { return unavailable }
-        defer { lock.unlock() }
-        guard !disabled else { return unavailable }
-        guard setInteraction(interactive) == errSecSuccess else {
-            disabled = setInteraction(false) != errSecSuccess
-            return unavailable
-        }
-        let result = operation()
-        // Never leave prompts enabled, even after denial/cancellation. If the
-        // OS refuses to restore the gate, stop issuing further SecItem calls.
-        guard setInteraction(false) == errSecSuccess else {
-            disabled = true
-            return unavailable
-        }
-        return result
-    }
-}
-
-/// Background operations never present authentication UI. The one explicit
-/// authorization method runs off the main actor and takes the same global gate.
+/// Security.framework adapter. Every lookup/update explicitly suppresses
+/// authentication UI; an authorization failure is state for the app to
+/// explain, never permission for SecurityAgent to interrupt the user.
 struct SecurityKeychainItems: KeychainItemAccessing {
+    // These items live in the legacy file-based login keychain, not the
+    // Data Protection keychain. On macOS 26 a locked keychain / changed
+    // ad-hoc signature can ignore LAContext.interactionNotAllowed and block
+    // SecItemCopyMatching in SecurityAgent indefinitely (including launch).
+    // Keep the legacy process-wide gate disabled for this non-interactive
+    // adapter too. Never toggle it back: concurrent reads must not open a
+    // prompt window. This denies unavailable access; it does not unlock the
+    // keychain, change ACLs, or replace existing credentials.
+    private static let nonInteractiveLegacyStatus = SecKeychainSetUserInteractionAllowed(false)
+
     func query(account: String, service: String) -> KeychainReadResult {
-        KeychainInteractionGate.shared.perform(unavailable: .unavailable) {
-            Self.query(account: account, service: service, interactive: false)
-        }
-    }
-
-    func queryAuthorizing(account: String, service: String) async -> KeychainReadResult {
-        guard !Task.isCancelled else { return .unavailable }
-        let job = Task.detached(priority: .userInitiated) {
-            guard !Task.isCancelled else { return KeychainReadResult.unavailable }
-            return KeychainInteractionGate.shared.perform(interactive: true, unavailable: .unavailable) {
-                Self.query(account: account, service: service, interactive: true)
-            }
-        }
-        return await withTaskCancellationHandler {
-            let result = await job.value
-            return Task.isCancelled ? .unavailable : result
-        } onCancel: {
-            // Legacy SecurityAgent dialogs cannot reliably be interrupted by
-            // LAContext.invalidate(). Discard cancelled results; the user can
-            // dismiss the system dialog while the app remains responsive.
-            job.cancel()
-        }
-    }
-
-    private static func query(account: String, service: String, interactive: Bool,
-                              context: LAContext = LAContext()) -> KeychainReadResult {
-        context.interactionNotAllowed = !interactive
+        guard Self.nonInteractiveLegacyStatus == errSecSuccess else { return .unavailable }
+        let authenticationContext = LAContext()
+        authenticationContext.interactionNotAllowed = true
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationContext as String: context,
+            kSecUseAuthenticationContext as String: authenticationContext,
         ]
         var item: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
@@ -132,12 +79,7 @@ struct SecurityKeychainItems: KeychainItemAccessing {
     }
 
     func upsert(account: String, service: String, secret: String) -> Bool {
-        KeychainInteractionGate.shared.perform(unavailable: false) {
-            upsertWithoutInteraction(account: account, service: service, secret: secret)
-        }
-    }
-
-    private func upsertWithoutInteraction(account: String, service: String, secret: String) -> Bool {
+        guard Self.nonInteractiveLegacyStatus == errSecSuccess else { return false }
         guard let data = secret.data(using: .utf8) else { return false }
         let baseQuery: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -166,12 +108,7 @@ struct SecurityKeychainItems: KeychainItemAccessing {
     }
 
     func remove(account: String, service: String) -> Bool {
-        KeychainInteractionGate.shared.perform(unavailable: false) {
-            removeWithoutInteraction(account: account, service: service)
-        }
-    }
-
-    private func removeWithoutInteraction(account: String, service: String) -> Bool {
+        guard Self.nonInteractiveLegacyStatus == errSecSuccess else { return false }
         let authenticationContext = LAContext()
         authenticationContext.interactionNotAllowed = true
         let query: [String: Any] = [

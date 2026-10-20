@@ -1,5 +1,4 @@
 import Foundation
-import Security
 import Observation
 
 /// Application-side supplements, never sidecar residency or downloadable files.
@@ -127,7 +126,7 @@ struct RemoteModelDocument: Codable, Equatable, Sendable {
 }
 
 enum RemoteModelError: Error, LocalizedError {
-    case invalidURL, insecureHTTP, invalidModel, invalidVoice, invalidVideo, unsupportedVideoAPI, unavailable, corruptSettings, changedEndpointKey, invalidKey, keychain(OSStatus), http(Int), invalidResponse, transport
+    case invalidURL, insecureHTTP, invalidModel, invalidVoice, invalidVideo, unsupportedVideoAPI, unavailable, corruptSettings, changedEndpointKey, invalidKey, credentialMigrationRequired, http(Int), invalidResponse, transport
     var errorDescription: String? {
         switch self {
         case .unsupportedVideoAPI: "CLIProxyAPI 视频模式需使用以 /v1 结尾的常规地址，模型限 grok-imagine-video、1.5 或 1.5-preview。 / CLIProxyAPI video requires the regular /v1 base and a supported Grok Imagine Video model."
@@ -140,7 +139,7 @@ enum RemoteModelError: Error, LocalizedError {
         case .corruptSettings: "远程模型配置无法读取，未覆盖原始配置。 / Remote settings could not be read; the original data was preserved."
         case .changedEndpointKey: "地址已更改，请明确替换或清空密钥。 / The endpoint changed; explicitly replace or clear its key."
         case .invalidKey: "API Key 不能包含控制字符。 / API keys cannot contain control characters."
-        case .keychain(let status): "无法访问远程模型钥匙串（\(status)）。 / Cannot access remote model Keychain (\(status))."
+        case .credentialMigrationRequired: "旧 API Key 未能自动迁移，请在远程模型设置中替换 API Key 并保存。 / The old API key could not be migrated. Replace the API key in remote model settings and save."
         case .http(let status): "远程服务返回 HTTP \(status)，请检查地址、权限、模型 ID 或配额。 / Remote HTTP \(status); check URL, access, model ID and quota."
         case .transport: "远程连接失败，请检查网络和地址。 / Remote connection failed; check network and URL."
         case .invalidResponse: "远程服务返回了不兼容的数据。 / The remote service returned an incompatible response."
@@ -150,85 +149,28 @@ enum RemoteModelError: Error, LocalizedError {
 
 protocol RemoteModelSecrets: Sendable {
     func read(_ id: UUID) throws -> String?
-    func readAuthorizing(_ id: UUID) async throws -> String?
     func write(_ value: String?, for id: UUID) throws
+    func migrateLegacy(_ ids: [UUID]) throws
 }
 extension RemoteModelSecrets {
-    func readAuthorizing(_ id: UUID) async throws -> String? { try read(id) }
+    func migrateLegacy(_ ids: [UUID]) throws {}
 }
 
-/// Only explicitly authorized reads live here, in memory for this app run.
-/// A concurrent replacement/deletion wins over an older authorization result.
-final class RemoteModelAuthorizedKeys: @unchecked Sendable {
-    static let shared = RemoteModelAuthorizedKeys()
-    private let lock = NSLock()
-    private var values: [UUID: String] = [:]
-    private var revisions: [UUID: Int] = [:]
-    func value(_ id: UUID) -> String? { lock.withLock { values[id] } }
-    func revision(_ id: UUID) -> Int { lock.withLock { revisions[id, default: 0] } }
-    func accept(_ value: String?, for id: UUID, revision: Int) -> Bool {
-        lock.withLock {
-            guard revisions[id, default: 0] == revision else { return false }
-            values[id] = value
-            return true
-        }
-    }
-    func invalidate(_ id: UUID) {
-        lock.withLock { values[id] = nil; revisions[id, default: 0] += 1 }
-    }
-}
-
-struct RemoteModelKeychain: RemoteModelSecrets {
-    private let service = "com.youzi.remote-models.api-key.v1"
-    var items: any KeychainItemAccessing = SecurityKeychainItems()
-    var authorizedKeys: RemoteModelAuthorizedKeys = .shared
-
-    // Availability discovery runs during launch. Reuse the application's
-    // non-interactive adapter: a locked/inaccessible credential is an error,
-    // never a SecurityAgent prompt that can block the main thread indefinitely.
-    func read(_ id: UUID) throws -> String? {
-        if let value = authorizedKeys.value(id) { return value }
-        switch items.query(account: id.uuidString, service: service) {
-        case .found(let value): return value
-        case .missing: return nil
-        case .unavailable: throw RemoteModelError.keychain(errSecInteractionNotAllowed)
-        }
-    }
-    func readAuthorizing(_ id: UUID) async throws -> String? {
-        try Task.checkCancellation()
-        let revision = authorizedKeys.revision(id)
-        let result = await items.queryAuthorizing(account: id.uuidString, service: service)
-        try Task.checkCancellation()
-        let value: String?
-        switch result {
-        case .found(let key): value = key
-        case .missing: value = nil
-        case .unavailable: throw RemoteModelError.keychain(errSecInteractionNotAllowed)
-        }
-        guard authorizedKeys.accept(value, for: id, revision: revision) else { throw CancellationError() }
-        return value
-    }
-
-    func write(_ value: String?, for id: UUID) throws {
-        let success: Bool
-        if let value, !value.isEmpty {
-            success = items.upsert(account: id.uuidString, service: service, secret: value)
-        } else {
-            success = items.remove(account: id.uuidString, service: service)
-        }
-        guard success else { throw RemoteModelError.keychain(errSecInteractionNotAllowed) }
-        authorizedKeys.invalidate(id)
-    }
-}
-/// Immutable references only; UserDefaults and Keychain serialize their storage.
+/// Metadata and credentials share the app's settings domain. Credentials are
+/// separate from the model document so model lists/exports cannot include them.
 struct RemoteModelRepository: @unchecked Sendable {
     static let key = "youzi.models.remote.v1"
     var defaults: UserDefaults = .standard
-    var secrets: any RemoteModelSecrets = RemoteModelKeychain()
+    var secrets: any RemoteModelSecrets
+    init(defaults: UserDefaults = .standard, secrets: (any RemoteModelSecrets)? = nil) {
+        self.defaults = defaults
+        self.secrets = secrets ?? RemoteModelSettingsSecrets(defaults: defaults)
+    }
     func load() throws -> RemoteModelDocument {
         guard let data = defaults.data(forKey: Self.key) else { return .init() }
         guard let doc = try? JSONDecoder().decode(RemoteModelDocument.self, from: data), doc.version == 1,
               Set(doc.models.map(\.id)).count == doc.models.count else { throw RemoteModelError.corruptSettings }
+        try secrets.migrateLegacy(doc.models.map(\.id))
         return doc
     }
     func save(_ doc: RemoteModelDocument) throws { defaults.set(try JSONEncoder().encode(doc), forKey: Self.key) }
@@ -288,6 +230,9 @@ final class RemoteModelSettings {
         if let key {
             guard !key.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { throw RemoteModelError.invalidKey }
             try repository.secrets.write(key.trimmingCharacters(in: .whitespacesAndNewlines), for: model.id)
+        } else if !document.models.contains(where: { $0.id == model.id }) {
+            // New keyless models are explicit; never probe the legacy store later.
+            try repository.secrets.write(nil, for: model.id)
         }
         repository.defaults.set(data, forKey: RemoteModelRepository.key)
         document = next; revision += 1
@@ -315,37 +260,8 @@ final class RemoteModelSettings {
         let credential = try key ?? repository.secrets.read(draft.id)
         return try RemoteModelEndpoint(configuration: probe, apiKey: credential)
     }
-    /// Only called by the editor's explicit authorization button. Validate the
-    /// exact source URL before a Keychain prompt, and recheck after suspension.
-    func authorizedDiscoveryEndpoint(_ draft: RemoteModelConfiguration, key: String?,
-                                     inheritingFrom sourceID: UUID? = nil) async throws -> RemoteModelEndpoint {
-        guard loadError == nil else { throw RemoteModelError.corruptSettings }
-        guard key == nil else { throw RemoteModelError.changedEndpointKey }
-        let url = try RemoteModelEndpoint.normalizedBaseURL(draft.baseURL, allowHTTP: draft.allowInsecureHTTP)
-        let account: UUID
-        if let sourceID {
-            guard !document.models.contains(where: { $0.id == draft.id }),
-                  let source = document.models.first(where: { $0.id == sourceID }),
-                  source.baseURL == url.absoluteString else { throw RemoteModelError.changedEndpointKey }
-            account = sourceID
-        } else {
-            guard let old = document.models.first(where: { $0.id == draft.id }),
-                  old.baseURL == url.absoluteString else { throw RemoteModelError.changedEndpointKey }
-            account = draft.id
-        }
-        let before = revision
-        let credential = try await repository.secrets.readAuthorizing(account)
-        try Task.checkCancellation()
-        guard revision == before else { throw RemoteModelError.changedEndpointKey }
-        var probe = draft
-        probe.slot = .chat; probe.modelID = "discovery-only"; probe.imageResponseFormat = "auto"
-        let endpoint = try RemoteModelEndpoint(configuration: probe, apiKey: credential)
-        revision += 1 // Refresh availability after this credential becomes readable.
-        return endpoint
-    }
-
     /// Reuse is explicit, only for new configurations at the exact same API base.
-    /// Save copies the key to a separate Keychain item; later source removal is safe.
+    /// Save copies the key to a separate settings entry; later source removal is safe.
     private func resolvedDraftKey(_ draft: RemoteModelConfiguration, key: String?, sourceID: UUID?) throws -> String? {
         guard let sourceID else { return key }
         guard key == nil, !document.models.contains(where: { $0.id == draft.id }),

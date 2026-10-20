@@ -1,5 +1,7 @@
 # Optional remote model supplements
 
+Credential storage was superseded on 2026-10-20: [remote API keys now live in Youzi settings](2026-10-20-youzi-remote-settings-keys.md), with a one-time silent migration from legacy Keychain entries. The original decision below is retained as historical context.
+
 Date: 2026-09-09. Owner: Atlas, UI cross-cutting with Pixel. Host: local Mac.
 Task: `atlas/youzi-remote-models`, based on `9de4666f` to retain the delivered
 model-menu/sidebar UI. No backend, public API, release or memory-graph migration.
