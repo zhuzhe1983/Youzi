@@ -17,6 +17,8 @@ struct RemoteModelEditor: View {
     @State private var discoveryRevision = UUID()
     @State private var result: String?
     @State private var failure: String?
+    @State private var needsKeychainAuthorization = false
+    @State private var authorizingKey = false
     private var existing: Bool { settings.document.models.contains { $0.id == model.id } }
     private var inheritedSource: UUID? { !existing && !replaceKey ? sourceID : nil }
     private var draftKey: String? { inheritedSource != nil || (existing && !replaceKey) ? nil : key }
@@ -66,6 +68,19 @@ struct RemoteModelEditor: View {
                     HStack {
                         Button(i18n.text(zh: "读取模型列表 / 测试连接", en: "Discover models / Test connection")) { discover() }.disabled(checking || model.baseURL.isEmpty)
                         if checking { ProgressView().controlSize(.small) }
+                    }
+                    if needsKeychainAuthorization {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(i18n.text(zh: "已保存的 API Key 需要 macOS 钥匙串授权。授权后可继续复用，无需重新填写。", en: "The saved API key needs macOS Keychain authorization. Authorize to reuse it without entering it again."))
+                                .font(RapidFont.caption).foregroundStyle(.secondary)
+                            Button(i18n.text(zh: "授权读取密钥并重试", en: "Authorize key access and retry")) { discover(authorize: true) }
+                                .disabled(checking)
+                                .accessibilityIdentifier("Settings.Remote.AuthorizeKey")
+                        }
+                    }
+                    if authorizingKey {
+                        Text(i18n.text(zh: "正在等待 macOS 钥匙串授权，请在系统对话框中操作。", en: "Waiting for macOS Keychain authorization. Respond to the system dialog."))
+                            .font(RapidFont.caption).foregroundStyle(.secondary)
                     }
                     TextField(i18n.text(zh: "远程模型名称 / ID", en: "Remote model name / ID"), text: modelIDBinding)
                         .accessibilityIdentifier("Settings.Remote.ModelID")
@@ -139,7 +154,7 @@ struct RemoteModelEditor: View {
                 Button(i18n.text(zh: "取消", en: "Cancel")) { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(i18n.text(zh: "保存", en: "Save")) {
                     do { try settings.save(model, key: draftKey, inheritingFrom: inheritedSource); dismiss() }
-                    catch { failure = error.localizedDescription }
+                    catch { showFailure(error) }
                 }.buttonStyle(.borderedProminent).disabled(checking).keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("Settings.Remote.Save")
             }
@@ -147,7 +162,7 @@ struct RemoteModelEditor: View {
         .onChange(of: key) { _, _ in invalidateDiscovery() }
         .onChange(of: replaceKey) { _, _ in invalidateDiscovery() }
         .onChange(of: model.allowInsecureHTTP) { _, _ in invalidateDiscovery() }
-        .onDisappear { checkTask?.cancel() }
+        .onDisappear { checkTask?.cancel(); discoveryRevision = UUID() }
     }
     private var modelIDBinding: Binding<String> {
         Binding(get: { model.modelID }, set: { model.selectModelID($0) })
@@ -193,9 +208,18 @@ struct RemoteModelEditor: View {
     private func invalidateDiscovery() {
         checkTask?.cancel(); discoveryRevision = UUID(); checking = false
         discovered = []; result = nil; failure = nil; showsDiscoveredModels = false
+        needsKeychainAuthorization = false; authorizingKey = false
     }
-    private func discover() {
-        checking = true; failure = nil; result = nil
+    private func showFailure(_ error: Error) {
+        if case RemoteModelError.keychain = error, draftKey == nil {
+            needsKeychainAuthorization = true
+            failure = i18n.text(zh: "未能读取已保存的 API Key，请授权后重试，或选择替换 API Key。", en: "Could not read the saved API key. Authorize access and retry, or replace the API key.")
+        } else {
+            failure = error.localizedDescription
+        }
+    }
+    private func discover(authorize: Bool = false) {
+        checking = true; failure = nil; result = nil; authorizingKey = authorize
         // Capture the draft. A later edit must not present stale discovery as a new host's result.
         var snapshot = model
         if snapshot.modelID.isEmpty { snapshot.modelID = "discovery-only" }
@@ -203,9 +227,16 @@ struct RemoteModelEditor: View {
         let credential = draftKey
         let source = inheritedSource
         checkTask = Task {
-            defer { if discoveryRevision == revision { checking = false } }
+            defer { if discoveryRevision == revision { checking = false; authorizingKey = false } }
             do {
-                let endpoint = try settings.discoveryEndpoint(snapshot, key: credential, inheritingFrom: source)
+                let endpoint: RemoteModelEndpoint
+                if authorize {
+                    endpoint = try await settings.authorizedDiscoveryEndpoint(snapshot, key: credential, inheritingFrom: source)
+                } else {
+                    endpoint = try settings.discoveryEndpoint(snapshot, key: credential, inheritingFrom: source)
+                }
+                guard !Task.isCancelled, discoveryRevision == revision else { return }
+                authorizingKey = false; needsKeychainAuthorization = false
                 let models = try await endpoint.discoverModels()
                 guard !Task.isCancelled, discoveryRevision == revision else { return }
                 discovered = models
@@ -213,7 +244,7 @@ struct RemoteModelEditor: View {
                 showAll = !models.contains { $0.slots.contains(model.slot) }
                 showsDiscoveredModels = !models.isEmpty
                 result = i18n.text(zh: "连接成功，读取到 \(models.count) 个模型。场景能力尚未验证。", en: "Connected: \(models.count) models. Workflow capabilities are not verified by discovery.")
-            } catch { if !Task.isCancelled, discoveryRevision == revision { failure = error.localizedDescription } }
+            } catch { if !Task.isCancelled, discoveryRevision == revision { showFailure(error) } }
         }
     }
 }
