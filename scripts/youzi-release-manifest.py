@@ -2,6 +2,7 @@
 """Emit a stable-channel manifest from the final, versioned app payload."""
 
 import hashlib
+import importlib.util
 import json
 import plistlib
 import sys
@@ -36,7 +37,22 @@ def release_notes(root: Path, version: str) -> str:
 def build_manifest(root: Path, out: Path) -> dict:
     app = root / "apps/rapid-mac/build/Rapid-MLX Desktop.app/Contents"
     with (app / "Info.plist").open("rb") as stream:
-        version = plistlib.load(stream)["CFBundleShortVersionString"]
+        info = plistlib.load(stream)
+    version = info["CFBundleShortVersionString"]
+    if info.get("SURequireSignedFeed") is True:
+        # Fail closed when an updater-enabled build omits the new channel.
+        # Structural consistency only; the signing tool must already have
+        # cryptographically verified both this feed and the exact ZIP.
+        feed = out / "appcast.xml"
+        archive = out / "Youzi-macos-arm64.zip"
+        if not feed.is_file() or not archive.is_file():
+            raise ValueError("Signed-update build requires appcast.xml and the final ZIP; run youzi-update-appcast.py first")
+        spec = importlib.util.spec_from_file_location(
+            "youzi_update_appcast", Path(__file__).with_name("youzi-update-appcast.py")
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.validate_feed(feed, archive, info)
     engine_version = (app / "Resources/rapid-mlx/VERSION").read_text().strip()
     if engine_version != version:
         raise ValueError("App and bundled runtime versions differ")

@@ -1,5 +1,6 @@
 """Hosted packaging must use the final versioned payload, never stale staging."""
 
+import base64
 import importlib.util
 import io
 import plistlib
@@ -101,4 +102,56 @@ def test_empty_versioned_notes_are_rejected(tmp_path):
     notes_dir.joinpath("youzi-v0.14.6.md").write_text("\n ")
 
     with pytest.raises(ValueError, match="Release notes are empty"):
+        module.build_manifest(tmp_path, out)
+
+
+def signed_fixture(tmp_path, *, version="0.14.6", build="176"):
+    out = fixture(tmp_path, "0.14.6\n")
+    info_path = tmp_path / "apps/rapid-mac/build/Rapid-MLX Desktop.app/Contents/Info.plist"
+    info = plistlib.loads(info_path.read_bytes())
+    info["SURequireSignedFeed"] = True
+    info_path.write_bytes(plistlib.dumps(info))
+    archive = out / "Youzi-macos-arm64.zip"
+    archive.write_bytes(b"fixture update archive")
+    signature = base64.b64encode(b"x" * 64).decode()
+    # Deliberately not cryptographic: the manifest checks required structure;
+    # test_youzi_update_appcast exercises official signature verification.
+    xml = f'''<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>
+    <sparkle:version>{build}</sparkle:version><sparkle:shortVersionString>{version}</sparkle:shortVersionString>
+    <enclosure url="https://github.com/zhuzhe1983/Youzi/releases/download/youzi-v{version}/Youzi-macos-arm64.zip"
+    length="{archive.stat().st_size}" sparkle:edSignature="{signature}" />
+    </item></channel></rss>'''.encode()
+    (out / "appcast.xml").write_bytes(xml + (
+        f"<!-- sparkle-signatures:\nedSignature: {signature}\nlength: {len(xml)}\n-->\n"
+    ).encode())
+    return out
+
+
+def test_signed_release_requires_appcast_and_zip(tmp_path):
+    out = signed_fixture(tmp_path)
+    module.build_manifest(tmp_path, out)
+    (out / "appcast.xml").unlink()
+    with pytest.raises(ValueError, match="run youzi-update-appcast.py first"):
+        module.build_manifest(tmp_path, out)
+
+
+def test_signed_release_rejects_missing_zip(tmp_path):
+    out = signed_fixture(tmp_path)
+    (out / "Youzi-macos-arm64.zip").unlink()
+    with pytest.raises(ValueError, match="final ZIP"):
+        module.build_manifest(tmp_path, out)
+
+
+@pytest.mark.parametrize(("version", "build"), [("0.14.5", "176"), ("0.14.6", "175")])
+def test_signed_release_rejects_stale_appcast(tmp_path, version, build):
+    out = signed_fixture(tmp_path, version=version, build=build)
+    with pytest.raises(ValueError, match="does not match|exact versioned"):
+        module.build_manifest(tmp_path, out)
+
+
+def test_signed_release_rejects_unsigned_feed(tmp_path):
+    out = signed_fixture(tmp_path)
+    feed = out / "appcast.xml"
+    feed.write_bytes(feed.read_bytes().split(b"<!-- sparkle-signatures:")[0])
+    with pytest.raises(ValueError, match="no signed-feed trailer"):
         module.build_manifest(tmp_path, out)

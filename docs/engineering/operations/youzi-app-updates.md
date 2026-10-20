@@ -10,6 +10,8 @@ Youzi 使用 Sparkle 下载完整 ZIP、验证签名、替换应用并重新启�
 `generate_appcast` 和 `sign_update`，只接受显式提供的外部私钥文件。
 缺少密钥、签名失败或包不一致时，必须停止发布；不能省略 appcast 后继续发布。
 
+0.14.6 及更早的 Youzi 安装包没有内置此更新公钥，需手动安装一次包含新配置的版本；之后才可使用应用内升级。本次代码改动没有发布新版本，也没有修改已有 release 附件。
+
 ## 密钥与应用配置
 
 私钥是 base64 编码的 32 字节 Ed25519 seed，放在仓库、应用包及发布目录之外，
@@ -21,14 +23,14 @@ Youzi 使用 Sparkle 下载完整 ZIP、验证签名、替换应用并重新启�
 
 ```bash
 swift scripts/youzi-update-key.swift generate \
-  --private-key-file "$HOME/.config/youzi/update-signing/ed25519.seed"
+  --private-key-file "$HOME/Library/Application Support/Youzi Release/signing/ed25519.seed"
 ```
 
 查看已有密钥对应的公钥：
 
 ```bash
 swift scripts/youzi-update-key.swift public-key \
-  --private-key-file "$HOME/.config/youzi/update-signing/ed25519.seed"
+  --private-key-file "$HOME/Library/Application Support/Youzi Release/signing/ed25519.seed"
 ```
 
 发布应用的 `Contents/Info.plist` 必须包含与该密钥对应的 `SUPublicEDKey`、
@@ -57,7 +59,7 @@ release notes 签名后再修改，需要重新签名。本工具把更新说明
 ```bash
 APP='apps/rapid-mac/build/Rapid-MLX Desktop.app'
 OUT="$PWD/dist-youzi"
-KEY="$HOME/.config/youzi/update-signing/ed25519.seed"
+KEY="$HOME/Library/Application Support/Youzi Release/signing/ed25519.seed"
 SPARKLE_BIN="$PWD/apps/rapid-mac/.build/artifacts/sparkle/Sparkle/bin"
 
 mkdir -p "$OUT"
