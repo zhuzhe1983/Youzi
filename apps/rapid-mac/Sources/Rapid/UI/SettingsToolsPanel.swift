@@ -281,7 +281,7 @@ struct SettingsToolsPanel: View {
     private var webSearchSection: some View {
         @Bindable var config = webSearch
         return SettingsSection(
-            "Web search",
+            mode == .searchService ? nil : "Web search",
             subtitle: "Which backend `web_search` queries. Keenable works with no account; add a free key (Parallel recommended) for the best results. Keys stay in your Keychain."
         ) {
                 VStack(alignment: .leading, spacing: RapidTheme.Space.md) {

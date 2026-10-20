@@ -37,8 +37,10 @@ struct SettingsSecurityPanel: View {
                 .toggleStyle(TrailingSettingsToggleStyle())
                 .accessibilityIdentifier("Settings.Security.ProxyCompatibility")
                 SettingsRowDivider()
+                    .settingsExplanation()
                 SettingsRowLabel(title: t("网络边界", "Network Boundaries"),
                                  description: t("内置浏览工具检查目标地址；代理兼容模式的实际转发由代理负责。网页搜索会将查询发送给配置的搜索服务。MCP 服务可能有独立网络能力。", "The built-in browse tool checks destination addresses; in compatibility mode, the proxy controls actual forwarding. Web search sends queries to your configured provider. MCP services may access the network independently."))
+                    .settingsExplanation()
             }
             SettingsSection(t("连接器与命令安全", "Connector & Command Safety")) {
                 Toggle(isOn: Binding(get: { mcp.mode == .ask }, set: {
@@ -97,7 +99,9 @@ struct SettingsSecurityPanel: View {
             SettingsSection(t("数据安全", "Data Safety")) {
                 SettingsRowLabel(title: t("分享与数据流转", "Sharing & Data Transfers"),
                                  description: t("只有主动选择 macOS 分享服务才会发送副本。删除本地分享记录不会撤回已交付内容。使用远程模型、搜索或连接器时，相关数据可能离开本机。", "Copies are sent only when you choose a macOS sharing service. Removing history does not recall delivered content. Remote models, search, and connectors may send relevant data off this Mac."))
+                    .settingsExplanation()
                 SettingsRowDivider()
+                    .settingsExplanation()
                 SettingsRowLabel(title: t("沙箱与自动备份：尚未提供", "Process Sandbox & Automatic Backups: Not Available"),
                                  description: t("当前没有覆盖所有 AI 操作的隔离沙箱、命令前缀规则或文件修改前自动备份。请不要将工具审批当作这些保护；重要文件仍需自行备份。", "There is no all-agent process sandbox, command-prefix policy, or automatic pre-edit file backup. Tool approvals are not a substitute; keep independent backups of important files."))
             }

@@ -852,11 +852,13 @@ struct SettingsView: View {
             }
 
             SettingsRowDivider()
+                .settingsExplanation()
 
             SettingsRowLabel(
                 title: "Where the data goes",
                 description: "telemetry.rapidmlx.com — a Cloudflare Worker that strips client IPs before writing to storage. Source is open at github.com/raullenchai/rapidmlx.com under telemetry-worker/."
             )
+                .settingsExplanation()
             }
 
             // All three point at documents that exist in the repository. Two
