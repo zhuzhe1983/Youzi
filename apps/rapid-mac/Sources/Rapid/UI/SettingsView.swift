@@ -990,8 +990,8 @@ struct SettingsView: View {
                 .accessibilityIdentifier("Settings.App.AutomaticUpdatesToggle")
                     .disabled(!sparkleUpdater.isEnabled)
                     .help(sparkleUpdater.isEnabled
-                          ? "Downloaded updates are installed when Youzi quits."
-                          : "Automatic updates are enabled in signed release builds.")
+                          ? i18n.text(zh: "后台下载新版本，退出柚子时安装。", en: "Download updates in the background and install when Youzi quits.")
+                          : i18n.text(zh: "此版本未启用应用内更新。", en: "In-app updates are not enabled in this build."))
                 SettingsRowDivider()
                 appUpdateActionRow
                 if let release = appUpdater.availableUpdate,

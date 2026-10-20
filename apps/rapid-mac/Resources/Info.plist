@@ -67,17 +67,23 @@
 	<key>SentryDSN</key>
 	<string></string>
 	<!--
-	Sparkle's public key is injected by scripts/build.sh from
-	SPARKLE_PUBLIC_ED_KEY. Keeping it out of the source plist lets local and
-	unsigned builds fall back to the legacy updater instead of starting a
-	misconfigured Sparkle session.
+	Youzi's update identity is independent of Apple code signing. Only the
+	public Ed25519 key belongs in this bundle. The private seed is kept on the
+	release machine, outside the repository and outside Keychain.
+	Release packaging must publish a signed appcast and signed full-app ZIP.
 	-->
+	<key>SUPublicEDKey</key>
+	<string>JXsr8Vj/p6kNotQ3aBXSzzgo2pkh89kNzaJuBGZvFic=</string>
 	<key>SUFeedURL</key>
 	<string>https://github.com/zhuzhe1983/Youzi/releases/latest/download/appcast.xml</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUAutomaticallyUpdate</key>
-	<true/>
+	<false/>
 	<key>SUScheduledCheckInterval</key>
 	<integer>21600</integer>
 	<key>SUSendsSystemProfile</key>

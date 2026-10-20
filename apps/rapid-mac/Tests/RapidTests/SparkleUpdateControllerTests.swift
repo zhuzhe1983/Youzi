@@ -20,18 +20,67 @@ struct SparkleUpdateControllerTests {
         let controller = SparkleUpdateController(infoDictionary: [
             "SUFeedURL": "https://dl.rapidmlx.com/appcast.xml",
             "SUPublicEDKey": publicKey,
-        ])
+        ], checksEnabled: true)
 
         #expect(controller.isEnabled)
         #expect(!controller.isStarted)
         #expect(controller.canCheckForUpdates)
     }
 
-    @Test("local build without injected public key keeps Sparkle disabled")
+    @Test("build without a public key keeps Sparkle disabled")
     func missingPublicKey() {
         #expect(!SparkleUpdateController.hasValidConfiguration([
             "SUFeedURL": "https://dl.rapidmlx.com/appcast.xml",
         ]))
+    }
+
+    @MainActor
+    @Test("Youzi bundle configuration enables authenticated in-app updates without automatic downloads")
+    func productionConfiguration() throws {
+        let plistURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Resources/Info.plist")
+        let data = try Data(contentsOf: plistURL)
+        let info = try #require(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
+        let suite = "Youzi.Updater.Tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let controller = SparkleUpdateController(
+            infoDictionary: info, checksEnabled: true, defaults: defaults
+        )
+        #expect(controller.isEnabled)
+        #expect(controller.canCheckForUpdates)
+        #expect(!controller.isStarted)
+        #expect(!controller.automaticallyDownloadsUpdates)
+        #expect(info["SUFeedURL"] as? String ==
+            "https://github.com/zhuzhe1983/Youzi/releases/latest/download/appcast.xml")
+        #expect(info["SURequireSignedFeed"] as? Bool == true)
+        #expect(info["SUVerifyUpdateBeforeExtraction"] as? Bool == true)
+    }
+
+    @MainActor
+    @Test("saved automatic-download choice overrides bundle default")
+    func automaticDownloadPreference() throws {
+        let suite = "Youzi.Updater.Tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let info: [String: Any] = [
+            "SUFeedURL": "https://example.test/appcast.xml",
+            "SUPublicEDKey": publicKey,
+            "SUAutomaticallyUpdate": false,
+        ]
+        defaults.set(true, forKey: "SUAutomaticallyUpdate")
+        #expect(SparkleUpdateController(
+            infoDictionary: info, checksEnabled: true, defaults: defaults
+        ).automaticallyDownloadsUpdates)
+        defaults.set(false, forKey: "SUAutomaticallyUpdate")
+        var autoInfo = info
+        autoInfo["SUAutomaticallyUpdate"] = true
+        #expect(!SparkleUpdateController(
+            infoDictionary: autoInfo, checksEnabled: true, defaults: defaults
+        ).automaticallyDownloadsUpdates)
     }
 
     @Test("configuration rejects insecure feeds and malformed public keys")

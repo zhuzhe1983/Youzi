@@ -2,15 +2,12 @@ import Foundation
 import Observation
 import Sparkle
 
-/// Owns Sparkle's updater lifecycle for signed production builds.
+/// Owns Sparkle's authenticated download, installation and relaunch flow.
 ///
-/// The source Info.plist deliberately has no `SUPublicEDKey`; build.sh injects
-/// it for release builds. When the key is absent (normal local development)
-/// this controller stays disabled and every method here is a silent no-op —
-/// there is no in-app fallback installer to hand off to any more. Callers must
-/// therefore offer something else in the disabled state (Settings → App falls
-/// back to a link to the release page) rather than a control that does
-/// nothing.
+/// Youzi embeds its public update key; this is separate from Apple Developer ID
+/// signing. Sparkle verifies the signed feed and archive, then owns replacement.
+/// A build with an absent/invalid key, or an explicit update-check opt-out, stays
+/// disabled. UI callers retain the release-page fallback for those builds.
 @MainActor
 @Observable
 final class SparkleUpdateController {
@@ -34,6 +31,7 @@ final class SparkleUpdateController {
     init(
         infoDictionary: [String: Any]? = Bundle.main.infoDictionary,
         checksEnabled: Bool = UpdateChecker.updateChecksEnabled(),
+        defaults: UserDefaults = .standard,
         fixtureState: FixtureState? = nil
     ) {
         self.fixtureState = fixtureState
@@ -47,13 +45,15 @@ final class SparkleUpdateController {
             canCheckForUpdates = isEnabled
         }
         automaticallyDownloadsUpdates = isEnabled
-            ? (UserDefaults.standard.object(forKey: "SUAutomaticallyUpdate") as? Bool ?? true)
+            ? (defaults.object(forKey: "SUAutomaticallyUpdate") as? Bool
+               ?? infoDictionary?["SUAutomaticallyUpdate"] as? Bool ?? false)
             : false
     }
 
     /// Start after AppKit has finished constructing the application. Sparkle
-    /// owns its six-hour schedule and automatically downloads updates; a
-    /// downloaded update is installed when Rapid next quits normally.
+    /// owns its six-hour check schedule. Downloads start after user acceptance,
+    /// unless the user enabled automatic downloads in Settings. Sparkle offers
+    /// installation/relaunch or defers installation until a normal quit.
     func start() {
         guard isEnabled, !isStarted else { return }
         if fixtureState != nil {

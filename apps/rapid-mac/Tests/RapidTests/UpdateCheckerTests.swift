@@ -26,7 +26,7 @@ struct UpdateCheckerTests {
     @Test("Newer remote version surfaces an availableUpdate")
     func newerRemote() async {
         let release = release("0.3.1")
-        let checker = UpdateChecker(currentVersion: "0.3.0") { release }
+        let checker = UpdateChecker(currentVersion: "0.3.0", fetcher: { release }, checksEnabled: { true })
         _ = await checker.check()
         #expect(checker.availableUpdate?.version == "0.3.1")
     }
@@ -34,7 +34,7 @@ struct UpdateCheckerTests {
     @Test("Same remote version does not surface an update")
     func sameVersion() async {
         let release = release("0.3.1")
-        let checker = UpdateChecker(currentVersion: "0.3.1") { release }
+        let checker = UpdateChecker(currentVersion: "0.3.1", fetcher: { release }, checksEnabled: { true })
         _ = await checker.check()
         #expect(checker.availableUpdate == nil)
     }
@@ -42,7 +42,7 @@ struct UpdateCheckerTests {
     @Test("Older remote version does not offer a downgrade-nag")
     func olderRemote() async {
         let release = release("0.2.9")
-        let checker = UpdateChecker(currentVersion: "0.3.1") { release }
+        let checker = UpdateChecker(currentVersion: "0.3.1", fetcher: { release }, checksEnabled: { true })
         _ = await checker.check()
         #expect(checker.availableUpdate == nil)
     }
@@ -58,12 +58,12 @@ struct UpdateCheckerTests {
         }
         let flag = Flag()
         let success = release("0.3.2")
-        let checker = UpdateChecker(currentVersion: "0.3.0") {
+        let checker = UpdateChecker(currentVersion: "0.3.0", fetcher: {
             if await flag.current() {
                 throw UpdateError.transport("simulated outage")
             }
             return success
-        }
+        }, checksEnabled: { true })
         _ = await checker.check()
         #expect(checker.availableUpdate?.version == "0.3.2")
         // Now simulate the upstream being briefly 5xx.

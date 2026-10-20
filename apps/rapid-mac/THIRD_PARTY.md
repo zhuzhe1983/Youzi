@@ -117,8 +117,9 @@ third-party package.
 
 The in-tree `UpdateChecker.swift` is the read-only release-status source behind
 the version pill and the Settings panel. It does not download or install
-anything: Sparkle owns archive verification and installation, and builds without
-an injected Sparkle public key have no in-app update path at all.
+anything: Sparkle owns archive verification and installation. Youzi embeds only
+its public update key; the private signing seed stays outside the app and repository.
+Builds with missing or disabled update configuration use the manual release-page fallback.
 
 ## Assets
 

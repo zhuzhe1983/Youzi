@@ -69,10 +69,10 @@ if ! otool -l "$CONTENTS/MacOS/Rapid" | grep -Fq '@executable_path/../Frameworks
     install_name_tool -add_rpath '@executable_path/../Frameworks' "$CONTENTS/MacOS/Rapid"
 fi
 
-# The EdDSA public key is release configuration, injected from an Actions
-# variable. A local build without it deliberately omits SUPublicEDKey and the
-# app keeps using the legacy updater fallback. Fail closed on a malformed key
-# instead of shipping a Sparkle client that can never validate an update.
+# Youzi's stable public update key is tracked in Info.plist. An explicit
+# override is useful for isolated update rehearsals; production packaging
+# verifies the signing seed against the final bundle before publishing.
+# Never inject a private key or infer updater support from Developer ID signing.
 if [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
     if ! printf '%s' "$SPARKLE_PUBLIC_ED_KEY" \
         | openssl base64 -d -A 2>/dev/null \
